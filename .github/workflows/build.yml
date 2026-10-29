@@ -1,0 +1,112 @@
+name: Build and Release Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Generate Signing Keystore (Fallback if Secret Not Provided)
+        run: |
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > "${GITHUB_WORKSPACE}/my-upload-key.jks"
+          elif [ ! -f "${GITHUB_WORKSPACE}/my-upload-key.jks" ]; then
+            keytool -genkeypair -v \
+              -keystore "${GITHUB_WORKSPACE}/my-upload-key.jks" \
+              -alias upload \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass "${STORE_PASSWORD}" \
+              -keypass "${KEY_PASSWORD}" \
+              -dname "CN=AudioEQ, OU=Mobile, O=AudioEQ, L=SanFrancisco, S=CA, C=US"
+          fi
+          if [ ! -f "${GITHUB_WORKSPACE}/debug.keystore" ]; then
+            keytool -genkeypair -v \
+              -keystore "${GITHUB_WORKSPACE}/debug.keystore" \
+              -alias androiddebugkey \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass android \
+              -keypass android \
+              -dname "CN=Android Debug, O=Android, C=US"
+          fi
+        env:
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
+
+      - name: Ensure Gradle Wrapper or Gradle CLI is Ready
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+          else
+            gradle wrapper --gradle-version 8.11.1
+            chmod +x ./gradlew
+          fi
+
+      - name: Build Signed Release APK
+        run: ./gradlew assembleRelease --no-daemon
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
+
+      - name: Prepare Release APK File
+        id: prepare_apk
+        run: |
+          APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "Error: Release APK not found!"
+            exit 1
+          fi
+          RELEASE_APK_NAME="AudioEQ-v1.0-${GITHUB_SHA::7}-release.apk"
+          cp "$APK_PATH" "${GITHUB_WORKSPACE}/${RELEASE_APK_NAME}"
+          echo "apk_path=${GITHUB_WORKSPACE}/${RELEASE_APK_NAME}" >> "$GITHUB_OUTPUT"
+          echo "apk_name=${RELEASE_APK_NAME}" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "tag_name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_name=v1.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish APK directly to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.prepare_apk.outputs.tag_name }}
+          name: "Audio EQ ${{ steps.prepare_apk.outputs.tag_name }}"
+          body: |
+            ### Audio EQ Android Release (${{ steps.prepare_apk.outputs.tag_name }})
+            - **10-Band Master Equalizer** across Bass (20–250 Hz), Mids (250 Hz–4 kHz), Treble (4–12 kHz), and Air (12–20 kHz).
+            - **Mid/Side Stereo Width** per section with Linkwitz-Riley 4th-order crossovers and sub-60 Hz mono fold-down.
+            - **Presets**: Flat, Balanced Deep, Bass Boost, Vocal Clarity, Percussion Clarity (Tabla tuned), and Custom.
+            - **4 Engine Modes**: Legacy, Global, ADB/Shizuku, and Root DSP.
+          files: ${{ steps.prepare_apk.outputs.apk_path }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

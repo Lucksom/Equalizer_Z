@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Audio EQ · Material 3</title>
+<style>
+  /* ===== Monet / M3 color roles (replace with wallpaper-derived palette) ===== */
+  :root {
+    --primary: #6750A4;
+    --on-primary: #FFFFFF;
+    --primary-container: #EADDFF;
+    --on-primary-container: #21005D;
+    --secondary-container: #E8DEF8;
+    --on-secondary-container: #1D192B;
+    --tertiary-container: #FFD8E4;
+    --on-tertiary-container: #31111D;
+    --surface: #FEF7FF;
+    --surface-container-low: #F7F2FA;
+    --surface-container: #F3EDF7;
+    --surface-container-high: #ECE6F0;
+    --surface-container-highest: #E6E0E9;
+    --on-surface: #1D1B20;
+    --on-surface-variant: #49454F;
+    --outline: #79747E;
+    --outline-variant: #CAC4D0;
+    --track: #E6E0E9;
+    --shadow: rgba(29, 27, 32, .14);
+    --ease: cubic-bezier(.2, 0, 0, 1);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --primary: #D0BCFF;
+      --on-primary: #381E72;
+      --primary-container: #4F378B;
+      --on-primary-container: #EADDFF;
+      --secondary-container: #4A4458;
+      --on-secondary-container: #E8DEF8;
+      --tertiary-container: #633B48;
+      --on-tertiary-container: #FFD8E4;
+      --surface: #141218;
+      --surface-container-low: #1D1B20;
+      --surface-container: #211F26;
+      --surface-container-high: #2B2930;
+      --surface-container-highest: #36343B;
+      --on-surface: #E6E0E9;
+      --on-surface-variant: #CAC4D0;
+      --outline: #938F99;
+      --outline-variant: #49454F;
+      --track: #49454F;
+      --shadow: rgba(0, 0, 0, .45);
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Roboto", system-ui, -apple-system, sans-serif;
+    background: var(--surface);
+    color: var(--on-surface);
+    min-height: 100vh;
+    padding: 16px 16px 104px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .app { max-width: 460px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+
+  /* ----- Top bar ----- */
+  .top-bar { display: flex; align-items: center; justify-content: space-between; padding: 8px 4px 4px; }
+  .brand h1 { font-size: 26px; font-weight: 400; letter-spacing: -.2px; }
+  .brand p { font-size: 13px; color: var(--on-surface-variant); margin-top: 2px; }
+  .icon-btn {
+    width: 44px; height: 44px; border-radius: 50%; border: none;
+    background: var(--surface-container-high); color: var(--on-surface);
+    cursor: pointer; font-size: 18px; transition: background .2s var(--ease);
+  }
+  .icon-btn:hover { background: var(--secondary-container); }
+
+  /* ----- Surfaces ----- */
+  .card { background: var(--surface-container); border-radius: 28px; padding: 18px; }
+  .card-title { font-size: 12px; font-weight: 600; color: var(--on-surface-variant); letter-spacing: .8px; margin-bottom: 12px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .label-lg { font-size: 16px; font-weight: 500; }
+  .label-sm { font-size: 12px; color: var(--on-surface-variant); }
+
+  .hero { background: var(--primary-container); color: var(--on-primary-container); padding: 20px; }
+  .hero .label-lg { font-size: 18px; }
+  .hero .label-sm { color: var(--on-primary-container); opacity: .75; }
+
+  /* M3 switch */
+  .switch {
+    position: relative; width: 52px; height: 32px; border-radius: 16px;
+    background: var(--surface-container-highest); border: 2px solid var(--outline);
+    cursor: pointer; flex-shrink: 0; transition: background .25s var(--ease), border-color .25s var(--ease);
+  }
+  .switch::after {
+    content: ""; position: absolute; top: 6px; left: 6px;
+    width: 16px; height: 16px; border-radius: 50%; background: var(--outline);
+    transition: all .25s var(--ease);
+  }
+  .switch.on { background: var(--primary); border-color: var(--primary); }
+  .switch.on::after { left: 26px; width: 24px; height: 24px; top: 2px; background: var(--on-primary); }
+
+  /* ----- Mode selector ----- */
+  .mode-list { display: flex; flex-direction: column; gap: 8px; }
+  .mode {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    padding: 12px 14px; border-radius: 18px; border: 1px solid transparent;
+    background: var(--surface-container-low); color: var(--on-surface);
+    cursor: pointer; text-align: left; font: inherit; transition: background .2s var(--ease);
+  }
+  .mode:hover { background: var(--surface-container-high); }
+  .mode .ico {
+    width: 36px; height: 36px; border-radius: 12px; flex-shrink: 0;
+    display: grid; place-items: center; background: var(--surface-container-high); font-size: 16px;
+  }
+  .mode .text { flex: 1; display: flex; flex-direction: column; }
+  .mode .name { font-size: 15px; font-weight: 500; }
+  .mode .desc { font-size: 12px; color: var(--on-surface-variant); margin-top: 2px; }
+  .mode .radio {
+    width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--outline);
+    display: grid; place-items: center; flex-shrink: 0;
+  }
+  .mode.active { background: var(--secondary-container); color: var(--on-secondary-container); }
+  .mode.active .ico { background: var(--surface-container-low); }
+  .mode.active .radio { border-color: var(--primary); }
+  .mode.active .radio::after { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--primary); }
+  .mode.active .desc { color: var(--on-secondary-container); opacity: .8; }
+
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 6px; margin-top: 12px;
+    padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 500;
+    background: var(--tertiary-container); color: var(--on-tertiary-container);
+  }
+  .status-pill.ok { background: var(--primary-container); color: var(--on-primary-container); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+  /* ----- Presets ----- */
+  .chips { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 6px; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip {
+    flex-shrink: 0; padding: 9px 16px; border-radius: 12px;
+    border: 1px solid var(--outline); background: transparent;
+    color: var(--on-surface); font: inherit; font-size: 14px; cursor: pointer;
+    transition: background .2s var(--ease);
+  }
+  .chip.selected { background: var(--secondary-container); color: var(--on-secondary-container); border-color: transparent; }
+
+  /* ----- Frequency curve ----- */
+  .graph-wrap { background: var(--surface-container-high); border-radius: 20px; padding: 12px 12px 6px; overflow: hidden; }
+  .graph-wrap svg { width: 100%; height: 140px; display: block; }
+  .graph-axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--on-surface-variant); padding: 4px 4px 2px; }
+
+  /* ----- Section cards ----- */
+  .section { border-radius: 28px; padding: 18px; color: var(--on-primary-container); }
+  .section.primary { background: var(--primary-container); color: var(--on-primary-container); }
+  .section.secondary { background: var(--secondary-container); color: var(--on-secondary-container); }
+  .section.tertiary { background: var(--tertiary-container); color: var(--on-tertiary-container); }
+  .section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .section-title { font-size: 18px; font-weight: 500; }
+  .section-range {
+    font-size: 12px; padding: 4px 10px; border-radius: 999px;
+    background: rgba(255,255,255,.4); font-weight: 500;
+  }
+  .section .hint { font-size: 12px; opacity: .8; margin-bottom: 14px; }
+
+  /* ===== M3-style sliders ===== */
+  /* Each slider exposes --p (0%–100%) so the filled part follows the thumb. */
+  input[type=range] {
+    -webkit-appearance: none; appearance: none; background: transparent; cursor: pointer;
+    --accent: var(--primary);
+    --p: 50%;
+  }
+  input[type=range]::-webkit-slider-runnable-track {
+    height: 6px; border-radius: 3px;
+    background: linear-gradient(to right, var(--accent) var(--p), var(--track) var(--p));
+  }
+  input[type=range]::-moz-range-track {
+    height: 6px; border-radius: 3px; background: var(--track);
+  }
+  input[type=range]::-moz-range-progress { height: 6px; border-radius: 3px; background: var(--accent); }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--accent); border: 3px solid var(--surface-container);
+    box-shadow: 0 1px 4px var(--shadow); margin-top: -7px;
+    transition: transform .15s var(--ease), box-shadow .15s var(--ease);
+  }
+  input[type=range]::-moz-range-thumb {
+    width: 16px; height: 16px; border-radius: 50%; background: var(--accent);
+    border: 3px solid var(--surface-container); box-shadow: 0 1px 4px var(--shadow);
+  }
+  input[type=range]:hover::-webkit-slider-thumb,
+  input[type=range]:focus-visible::-webkit-slider-thumb { transform: scale(1.15); box-shadow: 0 2px 8px var(--shadow); }
+  input[type=range]:focus-visible { outline: none; }
+
+  /* Band sliders: vertical, fixed track height */
+  .bands { display: flex; justify-content: space-between; gap: 6px; margin-bottom: 16px; }
+  .band { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+  .band .gain {
+    font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+    background: rgba(255,255,255,.4); border-radius: 8px; padding: 2px 6px; min-width: 34px; text-align: center;
+  }
+  .band input[type=range] {
+    writing-mode: vertical-lr; direction: rtl;
+    width: 28px; height: 130px; --accent: currentColor;
+  }
+  .band input[type=range]::-webkit-slider-runnable-track {
+    width: 6px; height: 130px; border-radius: 3px;
+    background: linear-gradient(to top, currentColor var(--p), rgba(255,255,255,.45) var(--p));
+  }
+  .band input[type=range]::-webkit-slider-thumb { margin-top: 0; margin-left: -7px; }
+  .band input[type=range]::-moz-range-track { width: 6px; }
+  .band .freq { font-size: 11px; font-weight: 500; opacity: .85; }
+
+  /* Width control */
+  .width-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px; border-radius: 16px; background: rgba(255,255,255,.35);
+  }
+  .width-row .label-sm { color: inherit; opacity: .9; min-width: 40px; font-weight: 500; }
+  .width-row input[type=range] { flex: 1; --accent: currentColor; }
+  .width-val {
+    font-size: 13px; font-weight: 600; min-width: 48px; text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ----- FAB ----- */
+  .fab {
+    position: fixed; right: 20px; bottom: 20px; height: 56px; padding: 0 22px;
+    border-radius: 18px; border: none; background: var(--tertiary-container);
+    color: var(--on-tertiary-container); font: inherit; font-size: 15px; font-weight: 500;
+    box-shadow: 0 6px 16px var(--shadow); cursor: pointer;
+    display: flex; align-items: center; gap: 8px; transition: transform .2s var(--ease);
+  }
+  .fab:active { transform: scale(.97); }
+  .fab-icon { font-size: 18px; }
+
+  .sections { display: flex; flex-direction: column; gap: 14px; transition: opacity .25s var(--ease); }
+  .sections.off { opacity: .45; pointer-events: none; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="top-bar">
+    <div class="brand">
+      <h1>Audio EQ</h1>
+      <p>System-wide sound tuning</p>
+    </div>
+    <button class="icon-btn" aria-label="Settings">⚙</button>
+  </header>
+
+  <!-- Power -->
+  <section class="card hero row">
+    <div>
+      <div class="label-lg">Equalizer</div>
+      <div class="label-sm" id="powerText">On · applied to all apps</div>
+    </div>
+    <div class="switch on" id="power" role="switch" aria-checked="true" tabindex="0"></div>
+  </section>
+
+  <!-- Engine mode -->
+  <section class="card">
+    <div class="card-title">ENGINE MODE</div>
+    <div class="mode-list" id="modes">
+      <button class="mode active" data-mode="global">
+        <span class="ico">🌐</span>
+        <span class="text">
+          <span class="name">Legacy / Global</span>
+          <span class="desc">Standard Android AudioEffect on the global mix. Works system-wide.</span>
+        </span>
+        <span class="radio"></span>
+      </button>
+      <button class="mode" data-mode="adb">
+        <span class="ico">🔧</span>
+        <span class="text">
+          <span class="name">ADB / Shizuku</span>
+          <span class="desc">No root. Needs Shizuku or one-time ADB permission grant.</span>
+        </span>
+        <span class="radio"></span>
+      </button>
+      <button class="mode" data-mode="root">
+        <span class="ico">🛡</span>
+        <span class="text">
+          <span class="name">Root</span>
+          <span class="desc">Deep optimization and per-app session capture. Advanced.</span>
+        </span>
+        <span class="radio"></span>
+      </button>
+    </div>
+    <span class="status-pill ok" id="statusPill"><span class="dot"></span><span id="statusText">Legacy / Global available</span></span>
+  </section>
+
+  <!-- Presets -->
+  <div class="chips" id="presets">
+    <button class="chip">Flat</button>
+    <button class="chip">Bass Boost</button>
+    <button class="chip">Vocal Clarity</button>
+    <button class="chip selected">Percussion Clarity</button>
+    <button class="chip">Custom</button>
+  </div>
+
+  <!-- Frequency response -->
+  <section class="card">
+    <div class="card-title">FREQUENCY RESPONSE</div>
+    <div class="graph-wrap">
+      <svg viewBox="0 0 300 140" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--primary)" stop-opacity=".35"/>
+            <stop offset="100%" stop-color="var(--primary)" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <line x1="0" y1="70" x2="300" y2="70" stroke="var(--outline-variant)" stroke-dasharray="4 4"/>
+        <path id="fillPath" fill="url(#fill)" d=""/>
+        <path id="curve" fill="none" stroke="var(--primary)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d=""/>
+      </svg>
+      <div class="graph-axis"><span>20</span><span>100</span><span>1k</span><span>5k</span><span>20k</span></div>
+    </div>
+  </section>
+
+  <div class="sections" id="sections">
+
+    <!-- Bass -->
+    <section class="section primary">
+      <div class="section-head">
+        <span class="section-title">Bass</span>
+        <span class="section-range">20–250 Hz</span>
+      </div>
+      <div class="hint">Punch and low end. Keep width near mono.</div>
+      <div class="bands">
+        <div class="band"><span class="gain">+3</span><input type="range" min="-12" max="12" value="3"><span class="freq">31</span></div>
+        <div class="band"><span class="gain">+2</span><input type="range" min="-12" max="12" value="2"><span class="freq">62</span></div>
+        <div class="band"><span class="gain">0</span><input type="range" min="-12" max="12" value="0"><span class="freq">125</span></div>
+        <div class="band"><span class="gain">-3</span><input type="range" min="-12" max="12" value="-3"><span class="freq">250</span></div>
+      </div>
+      <div class="width-row">
+        <span class="label-sm">Width</span>
+        <input type="range" min="0" max="200" value="10">
+        <span class="width-val">10%</span>
+      </div>
+    </section>
+
+    <!-- Mids -->
+    <section class="section secondary">
+      <div class="section-head">
+        <span class="section-title">Mids</span>
+        <span class="section-range">250 Hz–4 kHz</span>
+      </div>
+      <div class="hint">Vocals, guitars, and clarity.</div>
+      <div class="bands">
+        <div class="band"><span class="gain">-3</span><input type="range" min="-12" max="12" value="-3"><span class="freq">250</span></div>
+        <div class="band"><span class="gain">0</span><input type="range" min="-12" max="12" value="0"><span class="freq">500</span></div>
+        <div class="band"><span class="gain">+1</span><input type="range" min="-12" max="12" value="1"><span class="freq">1k</span></div>
+        <div class="band"><span class="gain">+2</span><input type="range" min="-12" max="12" value="2"><span class="freq">2k</span></div>
+        <div class="band"><span class="gain">+2</span><input type="range" min="-12" max="12" value="2"><span class="freq">4k</span></div>
+      </div>
+      <div class="width-row">
+        <span class="label-sm">Width</span>
+        <input type="range" min="0" max="200" value="100">
+        <span class="width-val">100%</span>
+      </div>
+    </section>
+
+    <!-- Treble -->
+    <section class="section tertiary">
+      <div class="section-head">
+        <span class="section-title">Treble</span>
+        <span class="section-range">4–12 kHz</span>
+      </div>
+      <div class="hint">Definition, cymbals, and percussion strikes.</div>
+      <div class="bands">
+        <div class="band"><span class="gain">+2</span><input type="range" min="-12" max="12" value="2"><span class="freq">4k</span></div>
+        <div class="band"><span class="gain">+1</span><input type="range" min="-12" max="12" value="1"><span class="freq">8k</span></div>
+      </div>
+      <div class="width-row">
+        <span class="label-sm">Width</span>
+        <input type="range" min="0" max="200" value="115">
+        <span class="width-val">115%</span>
+      </div>
+    </section>
+
+    <!-- Air -->
+    <section class="section secondary">
+      <div class="section-head">
+        <span class="section-title">Air</span>
+        <span class="section-range">12–20 kHz</span>
+      </div>
+      <div class="hint">Openness and sparkle.</div>
+      <div class="bands">
+        <div class="band"><span class="gain">0</span><input type="range" min="-12" max="12" value="0"><span class="freq">16k</span></div>
+      </div>
+      <div class="width-row">
+        <span class="label-sm">Width</span>
+        <input type="range" min="0" max="200" value="130">
+        <span class="width-val">130%</span>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<button class="fab"><span class="fab-icon">＋</span>Save preset</button>
+
+<script>
+  // Power toggle
+  const power = document.getElementById('power');
+  const powerText = document.getElementById('powerText');
+  const sections = document.getElementById('sections');
+  function setPower(on) {
+    power.classList.toggle('on', on);
+    power.setAttribute('aria-checked', on);
+    powerText.textContent = on ? 'On · applied to all apps' : 'Off · bypassed';
+    sections.classList.toggle('off', !on);
+  }
+  power.addEventListener('click', () => setPower(!power.classList.contains('on')));
+  power.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPower(!power.classList.contains('on')); } });
+
+  // Engine mode
+  const modeStatus = {
+    global: ['Legacy / Global available', true],
+    adb: ['Requires Shizuku or ADB permission', false],
+    root: ['Requires root access', false]
+  };
+  document.querySelectorAll('.mode').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.mode').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const [text, ok] = modeStatus[btn.dataset.mode];
+      document.getElementById('statusText').textContent = text;
+      document.getElementById('statusPill').classList.toggle('ok', ok);
+    });
+  });
+
+  // Presets
+  document.querySelectorAll('.chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('.chip').forEach(c => c.classList.remove('selected'));
+      chip.classList.add('selected');
+    });
+  });
+
+  // Fill progress so the colored part of each track follows the thumb
+  function paintFill(input) {
+    const min = +input.min, max = +input.max, v = +input.value;
+    input.style.setProperty('--p', ((v - min) / (max - min) * 100) + '%');
+  }
+
+  // Band sliders: gain readout + curve update
+  const bandInputs = document.querySelectorAll('.band input[type=range]');
+  bandInputs.forEach(input => {
+    paintFill(input);
+    const gain = input.parentElement.querySelector('.gain');
+    input.addEventListener('input', () => {
+      const v = +input.value;
+      gain.textContent = v > 0 ? '+' + v : v;
+      paintFill(input);
+      updateCurve();
+    });
+  });
+
+  // Width sliders: percent readout
+  document.querySelectorAll('.width-row input[type=range]').forEach(input => {
+    paintFill(input);
+    const out = input.parentElement.querySelector('.width-val');
+    input.addEventListener('input', () => { out.textContent = input.value + '%'; paintFill(input); });
+  });
+
+  // Live frequency curve on a log scale
+  const bandFreqs = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+  const minF = Math.log10(20), maxF = Math.log10(20000);
+  const xFor = f => ((Math.log10(f) - minF) / (maxF - minF)) * 300;
+  const yFor = db => 70 - (db / 12) * 60;
+
+  function updateCurve() {
+    const gains = Array.from(bandInputs).map(i => +i.value);
+    const pts = bandFreqs.map((f, i) => ({ x: xFor(f), y: yFor(gains[i] ?? 0) }));
+    const all = [{ x: 0, y: pts[0].y }, ...pts, { x: 300, y: pts[pts.length - 1].y }];
+    let d = `M${all[0].x},${all[0].y}`;
+    for (let i = 1; i < all.length; i++) {
+      const p0 = all[i - 1], p1 = all[i], cx = (p0.x + p1.x) / 2;
+      d += ` C${cx},${p0.y} ${cx},${p1.y} ${p1.x},${p1.y}`;
+    }
+    document.getElementById('curve').setAttribute('d', d);
+    document.getElementById('fillPath').setAttribute('d', d + ' L300,140 L0,140 Z');
+  }
+  updateCurve();
+  setPower(true);
+</script>
+</body>
+</html>

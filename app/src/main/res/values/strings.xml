@@ -1,0 +1,34 @@
+<resources>
+    <string name="app_name">Audio EQ</string>
+    <string name="app_subtitle">System-wide sound tuning</string>
+    <string name="equalizer_title">Equalizer</string>
+    <string name="power_on_all_apps">On · applied to all apps</string>
+    <string name="power_off_bypassed">Off · bypassed</string>
+    <string name="engine_mode_header">ENGINE MODE</string>
+    <string name="frequency_response_header">FREQUENCY RESPONSE</string>
+    <string name="save_preset">Save preset</string>
+    <string name="width_label">Width</string>
+    <string name="spatial_label">Spatial (Virtualizer)</string>
+    <string name="section_bass_title">Bass</string>
+    <string name="section_bass_range">20–250 Hz</string>
+    <string name="section_bass_hint">Punch and low end. Keep width near mono.</string>
+    <string name="section_mids_title">Mids</string>
+    <string name="section_mids_range">250 Hz–4 kHz</string>
+    <string name="section_mids_hint">Vocals, guitars, and clarity.</string>
+    <string name="section_treble_title">Treble</string>
+    <string name="section_treble_range">4–12 kHz</string>
+    <string name="section_treble_hint">Definition, cymbals, and percussion strikes.</string>
+    <string name="section_air_title">Air</string>
+    <string name="section_air_range">12–20 kHz</string>
+    <string name="section_air_hint">Openness and sparkle.</string>
+    <string name="mode_legacy_name">Legacy Mode</string>
+    <string name="mode_legacy_desc">Standard Android AudioEffect (Equalizer, BassBoost, Virtualizer) for compatibility.</string>
+    <string name="mode_global_name">Global Mode</string>
+    <string name="mode_global_desc">System-wide output mix (Session 0 + broadcast sessions) across apps.</string>
+    <string name="mode_adb_name">ADB / Shizuku</string>
+    <string name="mode_adb_desc">No root. Attaches DynamicsProcessing 10-band EQ to all app sessions.</string>
+    <string name="mode_root_name">Root Mode</string>
+    <string name="mode_root_desc">Deep Biquad DSP, Linkwitz-Riley Mid/Side width, and system Magisk module.</string>
+    <string name="test_tone_title">DSP Reference Monitor</string>
+    <string name="settings_title">Settings &amp; Diagnostics</string>
+</resources>

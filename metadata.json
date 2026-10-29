@@ -1,0 +1,6 @@
+{
+  "name": "Audio EQ",
+  "description": "System-wide Material 3 audio equalizer with four frequency sections, stereo width Mid/Side DSP, Percussion Clarity preset, and multi-mode engine support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
