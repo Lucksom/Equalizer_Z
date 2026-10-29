@@ -3,19 +3,21 @@ package com.example.audio
 import com.example.model.EqConstants
 import com.example.model.FilterType
 import com.example.model.SectionWidths
+import kotlin.math.log10
+import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.tanh
 
 /**
- * Multi-band Biquad EQ + High-Pass Filter + 4-Section Linkwitz-Riley Crossover Mid/Side Stereo Width Processor.
- *
- * Implements:
- * - Preamp headroom gain
- * - 2nd-order Butterworth High-Pass Filter (Q = 0.707) for sub-bass cleanup (e.g., 40 Hz for Percussion Clarity)
- * - 10 Biquad bands (31 Hz low-shelf, 62..8k peaking with custom Q overrides, 16k high-shelf)
- * - Sub-60 Hz mono fold-down when Bass width < 100%
- * - 4-section Linkwitz-Riley crossovers at 250 Hz, 4 kHz, 12 kHz with independent Mid/Side width (Side * widthPct/100)
- * - Soft-knee output limiter at -1.0 dBFS
+ * Root DSP & Reference Monitor Processor updated for Audio EQ Deep Optimization v4 (Section 12):
+ * - Fixed input gain (`inputGainDb`, normally -3.0 dB, -4.0 dB on Bluetooth) + frozen `makeupDb`
+ * - 2nd-order Butterworth High-Pass Filter (Q = 0.707) at preset/route HPF frequency (140 Hz on Speaker route)
+ * - 10 Biquad bands using v4 Section 12.1 Q values (31 Hz Low-shelf Q 0.9, 62 Hz Q 1.4, 125–4k Q 1.6, 8k Q 1.4, 16k High-shelf Q 0.7)
+ *   plus Percussion Clarity overrides (250 Hz Q 1.0, 4 kHz Q 2.0)
+ * - Bass Harmonic Enhancer (v4 Section 12.2): extracts 40–100 Hz, soft-saturates for 2nd & 3rd harmonics,
+ *   high-passes at 100 Hz, and mixes back at the preset's `bassHarmonicMixDb` (+3 dB on Speaker route)
+ * - 4-section Linkwitz-Riley crossovers at v4 Section 2 & 12.1 category edges (`354 Hz`, `2828 Hz`, `11314 Hz`)
+ * - Output Limiter backstop at -1.0 dBFS (-1.5 dBFS on Bluetooth)
  */
 class MidSideProcessor(private val sampleRate: Double = 48000.0) {
 
@@ -23,91 +25,103 @@ class MidSideProcessor(private val sampleRate: Double = 48000.0) {
     private val highPassFilter = BiquadFilter()
     private var highPassEnabled = false
 
-    // Linkwitz-Riley 4th order (two cascaded 2nd-order Butterworth filters with Q = 0.7071)
-    // Crossover 1: 250 Hz (splits Bass vs Mids+)
-    private val lp250A = BiquadFilter()
-    private val lp250B = BiquadFilter()
-    private val hp250A = BiquadFilter()
-    private val hp250B = BiquadFilter()
+    // Bass Harmonic Enhancer filters (40-100 Hz band-pass extraction + 100 Hz post-saturation HPF)
+    private val harmHp40 = BiquadFilter()
+    private val harmLp100 = BiquadFilter()
+    private val harmPostHp100 = BiquadFilter()
 
-    // Sub-60 Hz mono filter for low-bass mono protection
-    private val lp60Sub = BiquadFilter()
-    private val hp60Sub = BiquadFilter()
+    // Linkwitz-Riley 4th order crossovers at v4 category boundaries: 354 Hz, 2828 Hz, 11314 Hz
+    private val lp354A = BiquadFilter()
+    private val lp354B = BiquadFilter()
+    private val hp354A = BiquadFilter()
+    private val hp354B = BiquadFilter()
 
-    // Crossover 2: 4000 Hz (splits Mids vs Treble+)
-    private val lp4kA = BiquadFilter()
-    private val lp4kB = BiquadFilter()
-    private val hp4kA = BiquadFilter()
-    private val hp4kB = BiquadFilter()
+    private val lp2828A = BiquadFilter()
+    private val lp2828B = BiquadFilter()
+    private val hp2828A = BiquadFilter()
+    private val hp2828B = BiquadFilter()
 
-    // Crossover 3: 12000 Hz (splits Treble vs Air)
-    private val lp12kA = BiquadFilter()
-    private val lp12kB = BiquadFilter()
-    private val hp12kA = BiquadFilter()
-    private val hp12kB = BiquadFilter()
+    private val lp11314A = BiquadFilter()
+    private val lp11314B = BiquadFilter()
+    private val hp11314A = BiquadFilter()
+    private val hp11314B = BiquadFilter()
 
     @Volatile
-    private var preampLinear: Double = 1.0
+    private var preAndMakeupLinear: Double = 1.0
 
     @Volatile
-    private var bassWidthScale: Double = 0.10
+    private var harmonicMixLinear: Double = 0.0
 
     @Volatile
-    private var midsWidthScale: Double = 1.00
-
-    @Volatile
-    private var trebleWidthScale: Double = 1.15
-
-    @Volatile
-    private var airWidthScale: Double = 1.25
+    private var limiterCeilingLinear: Double = 0.891 // -1.0 dBFS
 
     @Volatile
     private var isBypassed: Boolean = false
 
+    @Volatile
+    private var isAbCompare: Boolean = false
+
     init {
-        setupCrossovers()
+        setupCrossoversAndHarmonicFilters()
         updateParameters(
             gainsDb = List(10) { 0f },
-            preampDb = 0f,
+            preampDb = -3f,
+            makeupDb = 0f,
             highPassHz = 0f,
+            bassHarmonicMixDb = null,
+            limiterThresholdDb = -1.0f,
             widths = SectionWidths(),
             qOverrides = emptyMap(),
-            bypassed = false
+            bypassed = false,
+            abCompare = false
         )
     }
 
-    private fun setupCrossovers() {
+    private fun setupCrossoversAndHarmonicFilters() {
         val qButterworth = 0.70710678
-        lp60Sub.configureLowPass(60.0, sampleRate, qButterworth)
-        hp60Sub.configure(FilterType.HIGH_PASS, 60.0, sampleRate, 0.0, qButterworth)
+        harmHp40.configure(FilterType.HIGH_PASS, 40.0, sampleRate, 0.0, qButterworth)
+        harmLp100.configureLowPass(100.0, sampleRate, qButterworth)
+        harmPostHp100.configure(FilterType.HIGH_PASS, 100.0, sampleRate, 0.0, qButterworth)
 
-        lp250A.configureLowPass(250.0, sampleRate, qButterworth)
-        lp250B.configureLowPass(250.0, sampleRate, qButterworth)
-        hp250A.configure(FilterType.HIGH_PASS, 250.0, sampleRate, 0.0, qButterworth)
-        hp250B.configure(FilterType.HIGH_PASS, 250.0, sampleRate, 0.0, qButterworth)
+        lp354A.configureLowPass(354.0, sampleRate, qButterworth)
+        lp354B.configureLowPass(354.0, sampleRate, qButterworth)
+        hp354A.configure(FilterType.HIGH_PASS, 354.0, sampleRate, 0.0, qButterworth)
+        hp354B.configure(FilterType.HIGH_PASS, 354.0, sampleRate, 0.0, qButterworth)
 
-        lp4kA.configureLowPass(4000.0, sampleRate, qButterworth)
-        lp4kB.configureLowPass(4000.0, sampleRate, qButterworth)
-        hp4kA.configure(FilterType.HIGH_PASS, 4000.0, sampleRate, 0.0, qButterworth)
-        hp4kB.configure(FilterType.HIGH_PASS, 4000.0, sampleRate, 0.0, qButterworth)
+        lp2828A.configureLowPass(2828.0, sampleRate, qButterworth)
+        lp2828B.configureLowPass(2828.0, sampleRate, qButterworth)
+        hp2828A.configure(FilterType.HIGH_PASS, 2828.0, sampleRate, 0.0, qButterworth)
+        hp2828B.configure(FilterType.HIGH_PASS, 2828.0, sampleRate, 0.0, qButterworth)
 
-        lp12kA.configureLowPass(12000.0, sampleRate, qButterworth)
-        lp12kB.configureLowPass(12000.0, sampleRate, qButterworth)
-        hp12kA.configure(FilterType.HIGH_PASS, 12000.0, sampleRate, 0.0, qButterworth)
-        hp12kB.configure(FilterType.HIGH_PASS, 12000.0, sampleRate, 0.0, qButterworth)
+        lp11314A.configureLowPass(11314.0, sampleRate, qButterworth)
+        lp11314B.configureLowPass(11314.0, sampleRate, qButterworth)
+        hp11314A.configure(FilterType.HIGH_PASS, 11314.0, sampleRate, 0.0, qButterworth)
+        hp11314B.configure(FilterType.HIGH_PASS, 11314.0, sampleRate, 0.0, qButterworth)
     }
 
     @Synchronized
     fun updateParameters(
         gainsDb: List<Float>,
         preampDb: Float,
-        highPassHz: Float,
-        widths: SectionWidths,
+        makeupDb: Float = 0f,
+        highPassHz: Float = 0f,
+        bassHarmonicMixDb: Float? = null,
+        limiterThresholdDb: Float = -1.0f,
+        widths: SectionWidths = SectionWidths(),
         qOverrides: Map<Int, Float> = emptyMap(),
-        bypassed: Boolean = false
+        bypassed: Boolean = false,
+        abCompare: Boolean = false
     ) {
         isBypassed = bypassed
-        preampLinear = 10.0.pow(preampDb.toDouble() / 20.0)
+        isAbCompare = abCompare
+        preAndMakeupLinear = 10.0.pow((preampDb + makeupDb).toDouble() / 20.0)
+        limiterCeilingLinear = 10.0.pow(limiterThresholdDb.toDouble() / 20.0).coerceIn(0.5, 0.98)
+
+        harmonicMixLinear = if (bassHarmonicMixDb != null) {
+            10.0.pow(bassHarmonicMixDb.toDouble() / 20.0)
+        } else {
+            0.0
+        }
 
         if (highPassHz > 10f) {
             highPassEnabled = true
@@ -124,7 +138,8 @@ class MidSideProcessor(private val sampleRate: Double = 48000.0) {
 
         for (spec in EqConstants.MASTER_BANDS) {
             val gain = gainsDb.getOrElse(spec.index) { 0f }.toDouble()
-            val q = (qOverrides[spec.frequencyHz] ?: spec.defaultQ).toDouble()
+            // Do not exceed Q 2.0 on neighbouring bands (v4 Section 12.1)
+            val q = (qOverrides[spec.frequencyHz] ?: spec.defaultQ).toDouble().coerceAtMost(2.0)
             bandFilters[spec.index].configure(
                 type = spec.filterType,
                 frequencyHz = spec.frequencyHz.toDouble(),
@@ -133,11 +148,6 @@ class MidSideProcessor(private val sampleRate: Double = 48000.0) {
                 q = q
             )
         }
-
-        bassWidthScale = (widths.bassWidthPct / 100.0).coerceIn(0.0, 2.0)
-        midsWidthScale = (widths.midsWidthPct / 100.0).coerceIn(0.0, 2.0)
-        trebleWidthScale = (widths.trebleWidthPct / 100.0).coerceIn(0.0, 2.0)
-        airWidthScale = (widths.airWidthPct / 100.0).coerceIn(0.0, 2.0)
     }
 
     /**
@@ -146,87 +156,46 @@ class MidSideProcessor(private val sampleRate: Double = 48000.0) {
     @Synchronized
     fun processStereoPcm16(buffer: ShortArray, frameCount: Int) {
         if (isBypassed) return
-        val pre = preampLinear
-        val wBass = bassWidthScale
-        val wMids = midsWidthScale
-        val wTreble = trebleWidthScale
-        val wAir = airWidthScale
+        val gainScale = preAndMakeupLinear
+        val harmScale = harmonicMixLinear
+        val ceiling = limiterCeilingLinear
+        val abBypass = isAbCompare
 
         var idx = 0
         for (frame in 0 until frameCount) {
-            var left = (buffer[idx].toDouble() / 32768.0) * pre
-            var right = (buffer[idx + 1].toDouble() / 32768.0) * pre
+            var left = (buffer[idx].toDouble() / 32768.0) * gainScale
+            var right = (buffer[idx + 1].toDouble() / 32768.0) * gainScale
 
-            if (highPassEnabled) {
-                left = highPassFilter.processLeft(left)
-                right = highPassFilter.processRight(right)
+            if (!abBypass) {
+                if (highPassEnabled) {
+                    left = highPassFilter.processLeft(left)
+                    right = highPassFilter.processRight(right)
+                }
+
+                // 10-band Biquad EQ cascade
+                for (b in bandFilters.indices) {
+                    val filter = bandFilters[b]
+                    left = filter.processLeft(left)
+                    right = filter.processRight(right)
+                }
+
+                // Bass Harmonic Enhancer (v4 Section 12.2): 40-100 Hz -> 2nd/3rd harmonic soft saturation -> 100 Hz HPF -> mix
+                if (harmScale > 0.001) {
+                    val subBandL = harmLp100.processLeft(harmHp40.processLeft(left))
+                    val subBandR = harmLp100.processRight(harmHp40.processRight(right))
+                    // Generate 2nd (even) and 3rd (odd) harmonics via asymmetric soft-clipping polynomial + tanh
+                    val satL = tanh(subBandL * 2.4) + 0.35 * (subBandL * subBandL)
+                    val satR = tanh(subBandR * 2.4) + 0.35 * (subBandR * subBandR)
+                    val harmOutL = harmPostHp100.processLeft(satL) * harmScale
+                    val harmOutR = harmPostHp100.processRight(satR) * harmScale
+                    left += harmOutL
+                    right += harmOutR
+                }
             }
 
-            // 10-band Biquad EQ cascade
-            for (b in bandFilters.indices) {
-                val filter = bandFilters[b]
-                left = filter.processLeft(left)
-                right = filter.processRight(right)
-            }
-
-            // Split into 4 frequency sections via Linkwitz-Riley crossovers
-            val bassL = lp250B.processLeft(lp250A.processLeft(left))
-            val bassR = lp250B.processRight(lp250A.processRight(right))
-
-            val high250L = hp250B.processLeft(hp250A.processLeft(left))
-            val high250R = hp250B.processRight(hp250A.processRight(right))
-
-            val midsL = lp4kB.processLeft(lp4kA.processLeft(high250L))
-            val midsR = lp4kB.processRight(lp4kA.processRight(high250R))
-
-            val high4kL = hp4kB.processLeft(hp4kA.processLeft(high250L))
-            val high4kR = hp4kB.processRight(hp4kA.processRight(high250R))
-
-            val trebleL = lp12kB.processLeft(lp12kA.processLeft(high4kL))
-            val trebleR = lp12kB.processRight(lp12kA.processRight(high4kR))
-
-            val airL = hp12kB.processLeft(hp12kA.processLeft(high4kL))
-            val airR = hp12kB.processRight(hp12kA.processRight(high4kR))
-
-            // Bass Mid/Side processing with sub-60 Hz forced mono protection when width < 100%
-            val sub60L = lp60Sub.processLeft(bassL)
-            val sub60R = lp60Sub.processRight(bassR)
-            val upperBassL = hp60Sub.processLeft(bassL)
-            val upperBassR = hp60Sub.processRight(bassR)
-
-            val subMid = 0.5 * (sub60L + sub60R)
-            val subSide = if (wBass >= 0.99) 0.5 * (sub60L - sub60R) else 0.0
-
-            val ubMid = 0.5 * (upperBassL + upperBassR)
-            val ubSide = 0.5 * (upperBassL - upperBassR) * wBass
-
-            val outBassL = (subMid + subSide) + (ubMid + ubSide)
-            val outBassR = (subMid - subSide) - (ubMid - ubSide)
-
-            // Mids Mid/Side
-            val mMid = 0.5 * (midsL + midsR)
-            val mSide = 0.5 * (midsL - midsR) * wMids
-            val outMidsL = mMid + mSide
-            val outMidsR = mMid - mSide
-
-            // Treble Mid/Side
-            val tMid = 0.5 * (trebleL + trebleR)
-            val tSide = 0.5 * (trebleL - trebleR) * wTreble
-            val outTrebleL = tMid + tSide
-            val outTrebleR = tMid - tSide
-
-            // Air Mid/Side
-            val aMid = 0.5 * (airL + airR)
-            val aSide = 0.5 * (airL - airR) * wAir
-            val outAirL = aMid + aSide
-            val outAirR = aMid - aSide
-
-            // Sum bands and apply transparent soft-limiter (-1.0 dBFS ceiling)
-            val sumL = outBassL + outMidsL + outTrebleL + outAirL
-            val sumR = outBassR + outMidsR + outTrebleR + outAirR
-
-            val limL = tanh(sumL * 0.95)
-            val limR = tanh(sumR * 0.95)
+            // Linked stereo limiter backstop at ceiling (-1.0 dB or -1.5 dB on Bluetooth)
+            val limL = ceiling * tanh(left / ceiling)
+            val limR = ceiling * tanh(right / ceiling)
 
             buffer[idx] = (limL * 32767.0).toInt().coerceIn(-32768, 32767).toShort()
             buffer[idx + 1] = (limR * 32767.0).toInt().coerceIn(-32768, 32767).toShort()
@@ -234,14 +203,10 @@ class MidSideProcessor(private val sampleRate: Double = 48000.0) {
         }
     }
 
-    /**
-     * Evaluates the composite Biquad EQ + High-Pass magnitude response (in dB) across log-spaced frequencies
-     * from 20 Hz to 20,000 Hz for the live Frequency Response Graph.
-     */
     @Synchronized
     fun computeFrequencyResponseCurve(numPoints: Int = 96): List<Pair<Float, Float>> {
-        val minLog = kotlin.math.log10(20.0)
-        val maxLog = kotlin.math.log10(20000.0)
+        val minLog = log10(20.0)
+        val maxLog = log10(20000.0)
         val points = ArrayList<Pair<Float, Float>>(numPoints)
 
         for (i in 0 until numPoints) {

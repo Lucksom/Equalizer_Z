@@ -19,15 +19,20 @@ private val Context.eqDataStore by preferencesDataStore(name = "audio_eq_prefere
 
 data class PersistedEqPreferences(
     val isEnabled: Boolean = true,
-    val selectedModeId: String = EngineMode.GLOBAL.id,
+    val selectedModeId: String = EngineMode.LEGACY.id,
     val selectedPresetId: String = "percussion_clarity",
     val gainsDb: List<Float> = EqConstants.BUILT_IN_PRESETS.first { it.id == "percussion_clarity" }.gainsDb,
-    val preampDb: Float = -2f,
     val highPassHz: Float = 40f,
-    val widths: SectionWidths = SectionWidths(10, 100, 115, 125),
-    val spatialStrength: Int = 200,
-    val bassBoostStrength: Int = 100,
-    val alwaysShowSectionWidths: Boolean = true,
+    val intensity: Float = 1.0f,
+    val volumeContourEnabled: Boolean = true,
+    val selectedHeadphoneProfileId: String = "none",
+    val headphoneStrength: Float = 0.8f,
+    val speakerCalEnabled: Boolean = false,
+    val speakerCalStrength: Float = 0.7f,
+    val speakerMeas31Csv: String = "",
+    val speakerValid31Csv: String = "",
+    val compatibility10Band: Boolean = false,
+    val transientMode: Boolean = false,
     val rootWarningAccepted: Boolean = false
 )
 
@@ -48,15 +53,17 @@ class EqRepository(private val context: Context) {
         val MODE_ID = stringPreferencesKey("mode_id")
         val PRESET_ID = stringPreferencesKey("preset_id")
         val GAINS_CSV = stringPreferencesKey("gains_csv")
-        val PREAMP_DB = floatPreferencesKey("preamp_db")
         val HIGH_PASS_HZ = floatPreferencesKey("high_pass_hz")
-        val WIDTH_BASS = intPreferencesKey("width_bass")
-        val WIDTH_MIDS = intPreferencesKey("width_mids")
-        val WIDTH_TREBLE = intPreferencesKey("width_treble")
-        val WIDTH_AIR = intPreferencesKey("width_air")
-        val SPATIAL_STRENGTH = intPreferencesKey("spatial_strength")
-        val BASS_BOOST_STRENGTH = intPreferencesKey("bass_boost_strength")
-        val ALWAYS_SHOW_SECTION_WIDTHS = booleanPreferencesKey("always_show_section_widths")
+        val INTENSITY = floatPreferencesKey("intensity")
+        val VOLUME_CONTOUR = booleanPreferencesKey("volume_contour_enabled")
+        val HEADPHONE_PROFILE_ID = stringPreferencesKey("headphone_profile_id")
+        val HEADPHONE_STRENGTH = floatPreferencesKey("headphone_strength")
+        val SPEAKER_CAL_ENABLED = booleanPreferencesKey("speaker_cal_enabled")
+        val SPEAKER_CAL_STRENGTH = floatPreferencesKey("speaker_cal_strength")
+        val SPEAKER_MEAS_CSV = stringPreferencesKey("speaker_meas_31_csv")
+        val SPEAKER_VALID_CSV = stringPreferencesKey("speaker_valid_31_csv")
+        val COMPAT_10_BAND = booleanPreferencesKey("compatibility_10_band")
+        val TRANSIENT_MODE = booleanPreferencesKey("transient_mode")
         val ROOT_WARNING_ACCEPTED = booleanPreferencesKey("root_warning_accepted")
     }
 
@@ -70,20 +77,20 @@ class EqRepository(private val context: Context) {
 
         PersistedEqPreferences(
             isEnabled = prefs[Keys.IS_ENABLED] ?: true,
-            selectedModeId = prefs[Keys.MODE_ID] ?: EngineMode.GLOBAL.id,
+            selectedModeId = prefs[Keys.MODE_ID] ?: EngineMode.LEGACY.id,
             selectedPresetId = prefs[Keys.PRESET_ID] ?: defaultPreset.id,
             gainsDb = gains,
-            preampDb = prefs[Keys.PREAMP_DB] ?: defaultPreset.preampDb,
             highPassHz = prefs[Keys.HIGH_PASS_HZ] ?: defaultPreset.highPassHz,
-            widths = SectionWidths(
-                bassWidthPct = prefs[Keys.WIDTH_BASS] ?: defaultPreset.widths.bassWidthPct,
-                midsWidthPct = prefs[Keys.WIDTH_MIDS] ?: defaultPreset.widths.midsWidthPct,
-                trebleWidthPct = prefs[Keys.WIDTH_TREBLE] ?: defaultPreset.widths.trebleWidthPct,
-                airWidthPct = prefs[Keys.WIDTH_AIR] ?: defaultPreset.widths.airWidthPct
-            ),
-            spatialStrength = prefs[Keys.SPATIAL_STRENGTH] ?: defaultPreset.virtualizerStrength,
-            bassBoostStrength = prefs[Keys.BASS_BOOST_STRENGTH] ?: defaultPreset.bassBoostStrength,
-            alwaysShowSectionWidths = prefs[Keys.ALWAYS_SHOW_SECTION_WIDTHS] ?: true,
+            intensity = (prefs[Keys.INTENSITY] ?: 1.0f).coerceIn(0.5f, 1.5f),
+            volumeContourEnabled = prefs[Keys.VOLUME_CONTOUR] ?: true,
+            selectedHeadphoneProfileId = prefs[Keys.HEADPHONE_PROFILE_ID] ?: "none",
+            headphoneStrength = (prefs[Keys.HEADPHONE_STRENGTH] ?: 0.8f).coerceIn(0.0f, 1.0f),
+            speakerCalEnabled = prefs[Keys.SPEAKER_CAL_ENABLED] ?: false,
+            speakerCalStrength = (prefs[Keys.SPEAKER_CAL_STRENGTH] ?: 0.7f).coerceIn(0.0f, 1.0f),
+            speakerMeas31Csv = prefs[Keys.SPEAKER_MEAS_CSV] ?: "",
+            speakerValid31Csv = prefs[Keys.SPEAKER_VALID_CSV] ?: "",
+            compatibility10Band = prefs[Keys.COMPAT_10_BAND] ?: false,
+            transientMode = prefs[Keys.TRANSIENT_MODE] ?: false,
             rootWarningAccepted = prefs[Keys.ROOT_WARNING_ACCEPTED] ?: false
         )
     }
@@ -93,19 +100,16 @@ class EqRepository(private val context: Context) {
             val gains = entity.gainsCsv.split(",")
                 .mapNotNull { it.toFloatOrNull() }
                 .let { if (it.size == 10) it else List(10) { 0f } }
+            val maxBoost = (gains.maxOrNull() ?: 0f).coerceAtLeast(0f)
             PresetConfig(
                 id = "user_${entity.id}",
                 name = entity.name,
-                description = "Saved user preset · Preamp ${entity.preampDb} dB · HPF ${entity.highPassHz.toInt()} Hz",
+                description = "Saved user preset · HPF ${entity.highPassHz.toInt()} Hz",
                 gainsDb = gains,
-                preampDb = entity.preampDb,
+                largestBoostDb = maxBoost,
                 highPassHz = entity.highPassHz,
-                widths = SectionWidths(
-                    bassWidthPct = entity.bassWidthPct,
-                    midsWidthPct = entity.midsWidthPct,
-                    trebleWidthPct = entity.trebleWidthPct,
-                    airWidthPct = entity.airWidthPct
-                ),
+                bassHarmonicMixDb = if (maxBoost >= 2f) -12f else null,
+                widths = SectionWidths(),
                 legacyNativeDb = EqConstants.convert10BandTo5BandNative(gains),
                 bassBoostStrength = entity.bassBoostStrength,
                 virtualizerStrength = entity.virtualizerStrength,
@@ -119,31 +123,44 @@ class EqRepository(private val context: Context) {
         modeId: String,
         presetId: String,
         gainsDb: List<Float>,
-        preampDb: Float,
         highPassHz: Float,
-        widths: SectionWidths,
-        spatialStrength: Int,
-        bassBoostStrength: Int
+        intensity: Float,
+        volumeContourEnabled: Boolean,
+        headphoneProfileId: String,
+        headphoneStrength: Float,
+        speakerCalEnabled: Boolean,
+        speakerCalStrength: Float,
+        compatibility10Band: Boolean,
+        transientMode: Boolean
     ) {
         context.eqDataStore.edit { prefs ->
             prefs[Keys.IS_ENABLED] = isEnabled
             prefs[Keys.MODE_ID] = modeId
             prefs[Keys.PRESET_ID] = presetId
             prefs[Keys.GAINS_CSV] = gainsDb.joinToString(",")
-            prefs[Keys.PREAMP_DB] = preampDb
             prefs[Keys.HIGH_PASS_HZ] = highPassHz
-            prefs[Keys.WIDTH_BASS] = widths.bassWidthPct
-            prefs[Keys.WIDTH_MIDS] = widths.midsWidthPct
-            prefs[Keys.WIDTH_TREBLE] = widths.trebleWidthPct
-            prefs[Keys.WIDTH_AIR] = widths.airWidthPct
-            prefs[Keys.SPATIAL_STRENGTH] = spatialStrength
-            prefs[Keys.BASS_BOOST_STRENGTH] = bassBoostStrength
+            prefs[Keys.INTENSITY] = intensity
+            prefs[Keys.VOLUME_CONTOUR] = volumeContourEnabled
+            prefs[Keys.HEADPHONE_PROFILE_ID] = headphoneProfileId
+            prefs[Keys.HEADPHONE_STRENGTH] = headphoneStrength
+            prefs[Keys.SPEAKER_CAL_ENABLED] = speakerCalEnabled
+            prefs[Keys.SPEAKER_CAL_STRENGTH] = speakerCalStrength
+            prefs[Keys.COMPAT_10_BAND] = compatibility10Band
+            prefs[Keys.TRANSIENT_MODE] = transientMode
         }
     }
 
-    suspend fun setAlwaysShowSectionWidths(alwaysShow: Boolean) {
+    suspend fun saveSpeakerCalibrationData(
+        enabled: Boolean,
+        measDb: DoubleArray,
+        valid: BooleanArray,
+        strength: Float
+    ) {
         context.eqDataStore.edit { prefs ->
-            prefs[Keys.ALWAYS_SHOW_SECTION_WIDTHS] = alwaysShow
+            prefs[Keys.SPEAKER_CAL_ENABLED] = enabled
+            prefs[Keys.SPEAKER_CAL_STRENGTH] = strength
+            prefs[Keys.SPEAKER_MEAS_CSV] = measDb.joinToString(",") { "%.2f".format(java.util.Locale.US, it) }
+            prefs[Keys.SPEAKER_VALID_CSV] = valid.joinToString(",") { if (it) "1" else "0" }
         }
     }
 

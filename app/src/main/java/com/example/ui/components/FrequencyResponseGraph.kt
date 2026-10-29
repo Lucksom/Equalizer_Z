@@ -4,288 +4,224 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
-import com.example.R
+import androidx.compose.ui.unit.sp
 import com.example.model.EqConstants
+import kotlin.math.exp
+import kotlin.math.ln
 import kotlin.math.log10
+import kotlin.math.pow
 
 /**
- * Live Frequency Response Graph rendered on a logarithmic 20 Hz – 20 kHz axis.
- * Matches the HTML v3 mockup card (`--surface-container-high`, 20dp radius, 140dp SVG curve with gradient fill)
- * while plotting the true composite 10-band Biquad + High-Pass Filter transfer function and band anchor dots.
+ * High-precision Live Frequency Response Graph matching `equalizer.html`:
+ * - Rounded 20.dp surface container (`MaterialTheme.colorScheme.surface`)
+ * - Left dB axis labels (`+12`, `+6`, `0`, `-6`, `-12`) and horizontal grid lines
+ * - Bottom log-frequency ticks (`100`, `1k`, `10k`)
+ * - Emphasized `0 dB` reference line
+ * - 220-point Gaussian octave response curve (`BW = 0.9` octaves) with smooth quadratic midpoint spline
+ * - Translucent primary fill between curve and `0 dB` baseline (`alpha = 0.18f`)
+ * - 10 Band circular nodes (`radius = 5.dp`) with `2.dp` surface ring stroke
  */
 @Composable
 fun FrequencyResponseGraph(
-    responsePoints: List<Pair<Float, Float>>,
-    gainsDb: List<Float>,
-    preampDb: Float,
-    highPassHz: Float,
+    displayGainsDb: List<Float>,
     isEnabled: Boolean,
     modifier: Modifier = Modifier
 ) {
     val primaryColor = MaterialTheme.colorScheme.primary
-    val outlineVariant = MaterialTheme.colorScheme.outlineVariant
-    val tertiaryColor = MaterialTheme.colorScheme.tertiary
+    val surfaceColor = MaterialTheme.colorScheme.surface
+    val outlineColor = MaterialTheme.colorScheme.outline
+    val onSurfaceVariantColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val textMeasurer = rememberTextMeasurer()
 
-    val animatedAlpha by animateFloatAsState(
+    val enabledAlpha by animateFloatAsState(
         targetValue = if (isEnabled) 1f else 0.4f,
         animationSpec = tween(250),
-        label = "graphAlpha"
+        label = "graphEnabledAlpha"
     )
 
-    Card(
+    val labelTextStyle = TextStyle(
+        color = onSurfaceVariantColor,
+        fontSize = 11.sp
+    )
+
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .testTag("frequency_response_card"),
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer
-        )
+            .height(176.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(surfaceColor)
+            .testTag("frequency_response_card")
     ) {
-        Column(
+        Canvas(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp)
+                .fillMaxSize()
+                .testTag("frequency_response_canvas")
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = stringResource(R.string.frequency_response_header),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (highPassHz > 10f) {
-                        Surface(
-                            shape = RoundedCornerShape(999.dp),
-                            color = MaterialTheme.colorScheme.tertiaryContainer
-                        ) {
-                            Text(
-                                text = "HPF ${highPassHz.toInt()} Hz",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(999.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer
-                    ) {
-                        val preSign = if (preampDb > 0f) "+$preampDb" else "$preampDb"
-                        Text(
-                            text = "Preamp $preSign dB",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                        )
-                    }
-                }
+            val w = size.width
+            val h = size.height
+            if (w <= 0f || h <= 0f) return@Canvas
+
+            val padL = 36.dp.toPx()
+            val padR = 14.dp.toPx()
+            val padT = 14.dp.toPx()
+            val padB = 22.dp.toPx()
+
+            val plotW = (w - padL - padR).coerceAtLeast(1f)
+            val plotH = (h - padT - padB).coerceAtLeast(1f)
+
+            val minF = 20f
+            val maxF = 20000f
+            val minLog10 = log10(minF)
+            val maxLog10 = log10(maxF)
+            val minDb = -12f
+            val maxDb = 12f
+            val bwOctaves = 0.9f
+            val invLn2 = (1.0 / ln(2.0)).toFloat()
+
+            fun log2(x: Float): Float = ln(x) * invLn2
+
+            fun xOf(f: Float): Float {
+                val clamped = f.coerceIn(minF, maxF)
+                return padL + ((log10(clamped) - minLog10) / (maxLog10 - minLog10)) * plotW
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            fun yOf(db: Float): Float {
+                val clamped = db.coerceIn(minDb, maxDb)
+                return padT + ((maxDb - clamped) / (maxDb - minDb)) * plotH
+            }
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 6.dp)
-            ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Canvas(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(140.dp)
-                            .testTag("frequency_response_canvas")
-                    ) {
-                        val w = size.width
-                        val h = size.height
-                        val midY = h * 0.5f
-                        val minLog = log10(20f)
-                        val maxLog = log10(20000f)
+            val bandFreqs = EqConstants.MASTER_BANDS.map { it.frequencyHz.toFloat() }
+            val bandLog2 = FloatArray(bandFreqs.size) { i -> log2(bandFreqs[i]) }
 
-                        fun xForFreq(f: Float): Float {
-                            val clamped = f.coerceIn(20f, 20000f)
-                            return ((log10(clamped) - minLog) / (maxLog - minLog)) * w
-                        }
-
-                        fun yForDb(db: Float): Float {
-                            val clamped = db.coerceIn(-13.5f, 13.5f)
-                            return midY - (clamped / 13.5f) * (h * 0.45f)
-                        }
-
-                        // Subtle horizontal grid lines (+6 dB, 0 dB dashed, -6 dB)
-                        val dashEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f)
-                        drawLine(
-                            color = outlineVariant.copy(alpha = 0.35f),
-                            start = Offset(0f, yForDb(6f)),
-                            end = Offset(w, yForDb(6f)),
-                            strokeWidth = 1.dp.toPx()
-                        )
-                        drawLine(
-                            color = outlineVariant,
-                            start = Offset(0f, midY),
-                            end = Offset(w, midY),
-                            strokeWidth = 1.5.dp.toPx(),
-                            pathEffect = dashEffect
-                        )
-                        drawLine(
-                            color = outlineVariant.copy(alpha = 0.35f),
-                            start = Offset(0f, yForDb(-6f)),
-                            end = Offset(w, yForDb(-6f)),
-                            strokeWidth = 1.dp.toPx()
-                        )
-
-                        // Section boundary vertical guides at 250 Hz, 4 kHz, 12 kHz
-                        listOf(250f, 4000f, 12000f).forEach { crossoverHz ->
-                            val cx = xForFreq(crossoverHz)
-                            drawLine(
-                                color = outlineVariant.copy(alpha = 0.25f),
-                                start = Offset(cx, 0f),
-                                end = Offset(cx, h),
-                                strokeWidth = 1.dp.toPx()
-                            )
-                        }
-
-                        // Build smooth cubic Bezier curve from 10 band control points (matching HTML v3 curve)
-                        // merged with Biquad high-pass roll-off below 60 Hz when HPF is active
-                        val bandFreqs = EqConstants.MASTER_BANDS.map { it.frequencyHz.toFloat() }
-                        val pts = bandFreqs.mapIndexed { idx, freq ->
-                            val gain = gainsDb.getOrElse(idx) { 0f }
-                            Offset(xForFreq(freq), yForDb(gain))
-                        }
-
-                        val startDb = if (highPassHz > 10f && responsePoints.isNotEmpty()) {
-                            responsePoints.first().second
-                        } else {
-                            gainsDb.firstOrNull() ?: 0f
-                        }
-
-                        val allPts = buildList {
-                            add(Offset(0f, yForDb(startDb)))
-                            addAll(pts)
-                            add(Offset(w, pts.lastOrNull()?.y ?: midY))
-                        }
-
-                        val strokePath = Path()
-                        val fillPath = Path()
-
-                        if (allPts.isNotEmpty()) {
-                            strokePath.moveTo(allPts[0].x, allPts[0].y)
-                            fillPath.moveTo(allPts[0].x, allPts[0].y)
-
-                            for (i in 1 until allPts.size) {
-                                val p0 = allPts[i - 1]
-                                val p1 = allPts[i]
-                                val cx = (p0.x + p1.x) * 0.5f
-                                strokePath.cubicTo(cx, p0.y, cx, p1.y, p1.x, p1.y)
-                                fillPath.cubicTo(cx, p0.y, cx, p1.y, p1.x, p1.y)
-                            }
-
-                            fillPath.lineTo(w, h)
-                            fillPath.lineTo(0f, h)
-                            fillPath.close()
-
-                            drawPath(
-                                path = fillPath,
-                                brush = Brush.verticalGradient(
-                                    colors = listOf(
-                                        primaryColor.copy(alpha = 0.35f * animatedAlpha),
-                                        Color.Transparent
-                                    ),
-                                    startY = 0f,
-                                    endY = h
-                                )
-                            )
-
-                            // Optional true Biquad composite overlay (subtle secondary line)
-                            if (responsePoints.size > 2) {
-                                val biquadPath = Path()
-                                responsePoints.forEachIndexed { idx, (f, db) ->
-                                    val px = xForFreq(f)
-                                    val py = yForDb(db)
-                                    if (idx == 0) biquadPath.moveTo(px, py)
-                                    else biquadPath.lineTo(px, py)
-                                }
-                                drawPath(
-                                    path = biquadPath,
-                                    color = tertiaryColor.copy(alpha = 0.45f * animatedAlpha),
-                                    style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
-                                )
-                            }
-
-                            drawPath(
-                                path = strokePath,
-                                color = primaryColor.copy(alpha = animatedAlpha),
-                                style = Stroke(
-                                    width = 3.dp.toPx(),
-                                    cap = StrokeCap.Round,
-                                    join = StrokeJoin.Round
-                                )
-                            )
-
-                            // Draw band anchor dots
-                            pts.forEach { pt ->
-                                drawCircle(
-                                    color = primaryColor.copy(alpha = animatedAlpha),
-                                    radius = 3.5.dp.toPx(),
-                                    center = pt
-                                )
-                            }
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        listOf("20", "100", "1k", "5k", "20k").forEach { label ->
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
+            fun responseAt(f: Float): Float {
+                val lf = log2(f)
+                var sumDb = 0f
+                for (i in bandFreqs.indices) {
+                    val g = displayGainsDb.getOrElse(i) { 0f }
+                    val d = (lf - bandLog2[i]) / bwOctaves
+                    sumDb += g * exp(-0.5f * d * d)
                 }
+                return sumDb.coerceIn(minDb, maxDb)
+            }
+
+            // 1. Horizontal dB grid lines & left axis labels (-12, -6, 0, +6, +12)
+            val dbSteps = listOf(-12, -6, 0, 6, 12)
+            for (dbInt in dbSteps) {
+                val y = yOf(dbInt.toFloat())
+                val isZero = dbInt == 0
+                drawLine(
+                    color = outlineColor.copy(alpha = if (isZero) 0.6f else 0.25f),
+                    start = Offset(padL, y),
+                    end = Offset(w - padR, y),
+                    strokeWidth = if (isZero) 1.4.dp.toPx() else 1.dp.toPx()
+                )
+
+                val label = if (dbInt > 0) "+$dbInt" else dbInt.toString()
+                val measured = textMeasurer.measure(label, style = labelTextStyle)
+                drawText(
+                    textLayoutResult = measured,
+                    topLeft = Offset(
+                        x = (padL - 6.dp.toPx() - measured.size.width).coerceAtLeast(2f),
+                        y = y - measured.size.height / 2f
+                    )
+                )
+            }
+
+            // 2. Bottom frequency tick labels (100, 1k, 10k)
+            val freqTicks = listOf(100f to "100", 1000f to "1k", 10000f to "10k")
+            for ((fVal, fText) in freqTicks) {
+                val x = xOf(fVal)
+                val measured = textMeasurer.measure(fText, style = labelTextStyle)
+                drawText(
+                    textLayoutResult = measured,
+                    topLeft = Offset(
+                        x = x - measured.size.width / 2f,
+                        y = (h - padB + 4.dp.toPx()).coerceAtMost(h - measured.size.height)
+                    )
+                )
+            }
+
+            // 3. Build 220 curve points across log-frequency axis
+            val numSamples = 200
+            val pts = Array(numSamples + 1) { n ->
+                val ratio = n.toFloat() / numSamples.toFloat()
+                val f = minF * (maxF / minF).pow(ratio)
+                Offset(xOf(f), yOf(responseAt(f)))
+            }
+
+            val zeroY = yOf(0f)
+
+            // 4. Filled area between curve and 0 dB line
+            val fillPath = Path().apply {
+                moveTo(pts.first().x, zeroY)
+                for (pt in pts) {
+                    lineTo(pt.x, pt.y)
+                }
+                lineTo(pts.last().x, zeroY)
+                close()
+            }
+            drawPath(
+                path = fillPath,
+                color = primaryColor.copy(alpha = 0.18f * enabledAlpha)
+            )
+
+            // 5. Smooth quadratic midpoint curve stroke
+            val strokePath = Path().apply {
+                moveTo(pts[0].x, pts[0].y)
+                for (n in 1 until pts.size - 1) {
+                    val mx = (pts[n].x + pts[n + 1].x) * 0.5f
+                    val my = (pts[n].y + pts[n + 1].y) * 0.5f
+                    quadraticTo(pts[n].x, pts[n].y, mx, my)
+                }
+                lineTo(pts.last().x, pts.last().y)
+            }
+            drawPath(
+                path = strokePath,
+                color = primaryColor.copy(alpha = enabledAlpha),
+                style = Stroke(
+                    width = 3.dp.toPx(),
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round
+                )
+            )
+
+            // 6. 10 Band circular nodes with surface border ring
+            val nodeRadius = 5.dp.toPx()
+            val nodeBorder = 2.dp.toPx()
+            for (i in bandFreqs.indices) {
+                val cx = xOf(bandFreqs[i])
+                val cy = yOf(displayGainsDb.getOrElse(i) { 0f })
+                drawCircle(
+                    color = primaryColor.copy(alpha = enabledAlpha),
+                    radius = nodeRadius,
+                    center = Offset(cx, cy)
+                )
+                drawCircle(
+                    color = surfaceColor,
+                    radius = nodeRadius,
+                    center = Offset(cx, cy),
+                    style = Stroke(width = nodeBorder)
+                )
             }
         }
     }

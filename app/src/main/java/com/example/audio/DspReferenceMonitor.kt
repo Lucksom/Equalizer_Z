@@ -15,15 +15,10 @@ import kotlin.random.Random
 
 enum class ReferenceSignalType(val label: String, val description: String) {
     TABLA_LOOP("Tabla Groove", "Synthesized Bayan (62–125 Hz) + Dayan (250 Hz & 4–8 kHz stroke) stereo pattern"),
-    PINK_NOISE("Pink Noise", "Equal-energy-per-octave stereo noise for hearing EQ & stereo width balance"),
+    PINK_NOISE("Pink Noise", "Equal-energy-per-octave reference noise (-20 dBFS) for loudness parity & tone testing"),
     SINE_SWEEP("Log Sweep", "20 Hz – 16 kHz logarithmic frequency sweep across left/right field")
 }
 
-/**
- * Low-latency real-time PCM audio generator and DSP reference monitor.
- * Runs user-selected reference signals through [MidSideProcessor] (10-band Biquad EQ + High-pass + 4-band Mid/Side width)
- * and outputs via Android [AudioTrack] so the user can audition every slider, preset, and stereo width adjustment immediately.
- */
 class DspReferenceMonitor(
     private val scope: CoroutineScope
 ) {
@@ -44,18 +39,26 @@ class DspReferenceMonitor(
     fun updateDspState(
         gainsDb: List<Float>,
         preampDb: Float,
-        highPassHz: Float,
-        widths: SectionWidths,
-        qOverrides: Map<Int, Float>,
-        bypassed: Boolean
+        makeupDb: Float = 0f,
+        highPassHz: Float = 0f,
+        bassHarmonicMixDb: Float? = null,
+        limiterThresholdDb: Float = -1.0f,
+        widths: SectionWidths = SectionWidths(),
+        qOverrides: Map<Int, Float> = emptyMap(),
+        bypassed: Boolean = false,
+        abCompare: Boolean = false
     ) {
         processor.updateParameters(
             gainsDb = gainsDb,
             preampDb = preampDb,
+            makeupDb = makeupDb,
             highPassHz = highPassHz,
+            bassHarmonicMixDb = bassHarmonicMixDb,
+            limiterThresholdDb = limiterThresholdDb,
             widths = widths,
             qOverrides = qOverrides,
-            bypassed = bypassed
+            bypassed = bypassed,
+            abCompare = abCompare
         )
     }
 
@@ -110,7 +113,6 @@ class DspReferenceMonitor(
                 val pcmBuffer = ShortArray(framesPerBlock * 2)
                 var sampleCounter = 0L
 
-                // Pink noise filter state (Paul Kellet's Voss-McCartney approximation)
                 var b0L = 0.0; var b1L = 0.0; var b2L = 0.0; var b3L = 0.0; var b4L = 0.0; var b5L = 0.0; var b6L = 0.0
                 var b0R = 0.0; var b1R = 0.0; var b2R = 0.0; var b3R = 0.0; var b4R = 0.0; var b5R = 0.0; var b6R = 0.0
                 val rng = Random(42)
@@ -151,7 +153,7 @@ class DspReferenceMonitor(
                                 val freq = 25.0 * Math.pow(640.0, cycle)
                                 val phase = 2.0 * PI * freq * t
                                 val sigL = sin(phase) * 0.35
-                                val sigR = sin(phase + 0.55) * 0.35 // stereo phase offset to showcase Mid/Side width
+                                val sigR = sin(phase + 0.55) * 0.35
                                 sigL to sigR
                             }
                         }
@@ -161,7 +163,6 @@ class DspReferenceMonitor(
                         idx += 2
                     }
 
-                    // Run real-time Biquad + Mid/Side DSP
                     processor.processStereoPcm16(pcmBuffer, framesPerBlock)
                     track.write(pcmBuffer, 0, pcmBuffer.size)
                 }
@@ -184,18 +185,11 @@ class DspReferenceMonitor(
         playbackJob = null
     }
 
-    /**
-     * Synthesizes a 4-beat Tin-Taal-inspired tabla pattern with:
-     * - Bayan low pitch-bend resonance (68 Hz -> 95 Hz + 136 Hz harmonic)
-     * - Dayan resonant woody body (250 Hz) + sharp skin transient (4 kHz & 8 kHz sizzle)
-     * Panned slightly across L/R so Mid/Side stereo width controls are clearly audible.
-     */
     private fun synthesizeTablaStep(t: Double): Pair<Double, Double> {
-        val stepDuration = 0.32 // ~187 BPM eighth notes
+        val stepDuration = 0.32
         val stepIndex = (t / stepDuration).toLong() % 8L
         val localT = t % stepDuration
 
-        // Bayan triggers on beats 0, 2, 3, 6
         val hasBayan = stepIndex == 0L || stepIndex == 2L || stepIndex == 3L || stepIndex == 6L
         val bayanEnv = if (hasBayan) kotlin.math.exp(-localT * 9.5) else 0.0
         val pitchMod = if (stepIndex == 2L) 88.0 + 18.0 * sin(localT * 14.0) else 72.0
@@ -204,23 +198,21 @@ class DspReferenceMonitor(
                 0.22 * sin(2.0 * PI * (pitchMod * 1.98) * localT)
             )
 
-        // Dayan Na/Tin stroke triggers on beats 0, 1, 4, 5, 7
         val hasDayan = stepIndex == 0L || stepIndex == 1L || stepIndex == 4L || stepIndex == 5L || stepIndex == 7L
         val bodyEnv = if (hasDayan) kotlin.math.exp(-localT * 18.0) else 0.0
         val attackEnv = if (hasDayan) kotlin.math.exp(-localT * 65.0) else 0.0
 
         val dayanBody = bodyEnv * (
-            0.28 * sin(2.0 * PI * 255.0 * localT) + // 250 Hz woody resonance
+            0.28 * sin(2.0 * PI * 255.0 * localT) +
                 0.24 * sin(2.0 * PI * 540.0 * localT) +
                 0.15 * sin(2.0 * PI * 1080.0 * localT)
             )
         val dayanStroke = attackEnv * (
-            0.22 * sin(2.0 * PI * 4050.0 * localT) + // 4 kHz stroke definition
-                0.15 * sin(2.0 * PI * 8100.0 * localT) + // 8 kHz sizzle
-                0.08 * sin(2.0 * PI * 14800.0 * localT)  // Air sparkle
+            0.22 * sin(2.0 * PI * 4050.0 * localT) +
+                0.15 * sin(2.0 * PI * 8100.0 * localT) +
+                0.08 * sin(2.0 * PI * 14800.0 * localT)
             )
 
-        // Pan Bayan slightly left-of-center and Dayan slightly right-of-center for rich Mid/Side separation
         val left = 0.72 * bayanSig + 0.38 * (dayanBody + dayanStroke)
         val right = 0.42 * bayanSig + 0.76 * (dayanBody + dayanStroke)
         return (left * 0.75) to (right * 0.75)

@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,12 +20,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -33,7 +32,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -44,36 +42,33 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.audio.DeviceDiagnostics
 import com.example.model.CapabilityLevel
 import com.example.model.EngineMode
 import com.example.model.ModeStatusInfo
-import kotlin.math.roundToInt
 
 /**
- * Engine Mode Selector & Capability Status Panel.
- * Implements all four modes required by the specification:
- * 1. Legacy Mode (Standard Equalizer, BassBoost, Virtualizer)
- * 2. Global Mode (System-wide Session 0 + Broadcast sessions)
- * 3. ADB / Shizuku Mode (Session discovery via DUMP / Shizuku without root + setup instructions)
- * 4. Root Mode (Deep Biquad + Linkwitz-Riley Mid/Side crossovers + backup/restore Stock config)
+ * Top Horizontal Engine Mode Selector Bar with 3 profiles:
+ * 1. Legacy (Works globally without ADB, Shizuku, or Root)
+ * 2. ADB / Shizuku
+ * 3. Root
  */
 @Composable
 fun ModeSelectorCard(
     selectedMode: EngineMode,
     activeStatus: ModeStatusInfo,
     diagnostics: DeviceDiagnostics,
-    spatialStrength: Int,
-    alwaysShowSectionWidths: Boolean,
     onSelectMode: (EngineMode) -> Unit,
-    onSpatialStrengthChange: (Int) -> Unit,
     onBackupRootConfig: () -> Unit,
     onRestoreRootConfig: () -> Unit,
     modifier: Modifier = Modifier
@@ -86,7 +81,7 @@ fun ModeSelectorCard(
         modifier = modifier
             .fillMaxWidth()
             .testTag("engine_mode_card"),
-        shape = RoundedCornerShape(28.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer
         )
@@ -94,7 +89,7 @@ fun ModeSelectorCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(18.dp)
+                .padding(horizontal = 16.dp, vertical = 14.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -107,30 +102,38 @@ fun ModeSelectorCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = if (diagnostics.dynamicsProcessingSupported) "10-Band DP Ready" else "${diagnostics.nativeEqBandCount}-Band Native",
+                    text = if (diagnostics.dynamicsProcessingSupported) "10-Band Global Ready" else "${diagnostics.nativeEqBandCount}-Band Native",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            Column(
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            // Horizontal 3-Profile Segmented Selector Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 EngineMode.entries.forEach { mode ->
                     val isSelected = mode == selectedMode
-                    ModeRowItem(
+                    HorizontalModePill(
                         mode = mode,
                         isSelected = isSelected,
-                        onClick = { onSelectMode(mode) }
+                        onClick = { onSelectMode(mode) },
+                        modifier = Modifier.weight(1f)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // Status Pill + Expandable Setup / Fallback Details
+            // Compact Status & Subtitle Row
             val isAvailable = activeStatus.level == CapabilityLevel.AVAILABLE
             val pillContainer = if (isAvailable) {
                 MaterialTheme.colorScheme.primaryContainer
@@ -153,6 +156,7 @@ fun ModeSelectorCard(
                     color = pillContainer,
                     contentColor = pillContent,
                     modifier = Modifier
+                        .weight(1f, fill = false)
                         .clip(RoundedCornerShape(999.dp))
                         .clickable { showSetupDetails = !showSetupDetails }
                         .testTag("capability_status_pill")
@@ -170,81 +174,40 @@ fun ModeSelectorCard(
                         )
                         Text(
                             text = activeStatus.summaryText,
-                            style = MaterialTheme.typography.labelMedium
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
 
                 IconButton(
                     onClick = { showSetupDetails = !showSetupDetails },
-                    modifier = Modifier.testTag("toggle_mode_details_button")
+                    modifier = Modifier
+                        .size(36.dp)
+                        .testTag("toggle_mode_details_button")
                 ) {
                     Icon(
                         imageVector = Icons.Default.Info,
                         contentDescription = "Mode capability and setup details",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
 
-            // Broadband Spatial (Virtualizer) slider when in Legacy / Global / ADB modes
-            if (selectedMode != EngineMode.ROOT) {
-                Spacer(modifier = Modifier.height(10.dp))
+            AnimatedVisibility(visible = showSetupDetails || activeStatus.level != CapabilityLevel.AVAILABLE) {
                 Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
                     shape = RoundedCornerShape(16.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerHigh
                 ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 10.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = stringResource(R.string.spatial_label),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "${(spatialStrength / 10f).roundToInt()}%",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        Slider(
-                            value = spatialStrength.toFloat(),
-                            onValueChange = { onSpatialStrengthChange(it.roundToInt()) },
-                            valueRange = 0f..1000f,
-                            modifier = Modifier.testTag("spatial_virtualizer_slider")
-                        )
-                        if (alwaysShowSectionWidths) {
-                            Text(
-                                text = "Per-section Mid/Side width sliders below apply to Root DSP & the built-in Reference Monitor.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Expandable capability details, ADB commands, or Root backup/restore controls
-            AnimatedVisibility(visible = showSetupDetails || activeStatus.level != CapabilityLevel.AVAILABLE) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 10.dp),
-                    shape = RoundedCornerShape(18.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
+                            .padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
@@ -330,98 +293,81 @@ fun ModeSelectorCard(
 }
 
 @Composable
-private fun ModeRowItem(
+private fun HorizontalModePill(
     mode: EngineMode,
     isSelected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    val bg = if (isSelected) {
-        MaterialTheme.colorScheme.secondaryContainer
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerLow
-    }
-    val contentColor = if (isSelected) {
-        MaterialTheme.colorScheme.onSecondaryContainer
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }
-    val subtitleColor = if (isSelected) {
-        MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    val iconBoxBg = if (isSelected) {
-        MaterialTheme.colorScheme.surfaceContainerLow
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerHigh
-    }
+    val bgColor by animateColorAsState(
+        targetValue = if (isSelected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            Color.Transparent
+        },
+        label = "modePillBg"
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (isSelected) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        label = "modePillContent"
+    )
 
     val iconVector = when (mode) {
-        EngineMode.LEGACY -> Icons.Default.GraphicEq
-        EngineMode.GLOBAL -> Icons.Default.Public
+        EngineMode.LEGACY -> Icons.Default.Public
         EngineMode.ADB_SHIZUKU -> Icons.Default.Build
         EngineMode.ROOT -> Icons.Default.Security
     }
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(bg)
+    val subLabel = when (mode) {
+        EngineMode.LEGACY -> "Global · No ADB/Root"
+        EngineMode.ADB_SHIZUKU -> "All Sessions"
+        EngineMode.ROOT -> "Deep DSP"
+    }
+
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(bgColor)
+            .border(
+                width = if (isSelected) 1.dp else 0.dp,
+                color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f) else Color.Transparent,
+                shape = RoundedCornerShape(14.dp)
+            )
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .padding(horizontal = 8.dp, vertical = 10.dp)
             .testTag("mode_option_${mode.id}"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(iconBoxBg),
-            contentAlignment = Alignment.Center
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             Icon(
                 imageVector = iconVector,
                 contentDescription = mode.title,
-                tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = mode.title,
-                style = MaterialTheme.typography.bodyLarge,
-                color = contentColor
+                tint = contentColor,
+                modifier = Modifier.size(16.dp)
             )
             Text(
-                text = mode.subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = subtitleColor
+                text = mode.shortTitle,
+                style = MaterialTheme.typography.labelLarge,
+                color = contentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
-
-        // Custom M3 Radio indicator matching HTML v3 .radio
-        Box(
-            modifier = Modifier
-                .size(20.dp)
-                .clip(CircleShape)
-                .border(
-                    width = 2.dp,
-                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                    shape = CircleShape
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            if (isSelected) {
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary)
-                )
-            }
-        }
+        Text(
+            text = subLabel,
+            style = MaterialTheme.typography.labelSmall,
+            color = contentColor.copy(alpha = 0.78f),
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }

@@ -5,43 +5,56 @@ on:
     branches:
       - main
       - master
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      - name: Set up JDK 21
+      - name: Set up JDK 21 with Dependency Cache
         uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Configure Android SDK and Licenses
+      - name: Configure Android SDK and Build-Tools Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/android/sdk/platforms/android-36*
+            /usr/local/lib/android/sdk/build-tools/36*
+          key: android-sdk-36-${{ runner.os }}
+
+      - name: Accept Android SDK Licenses
         run: |
           export ANDROID_SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
-          CMDLINE_BIN=$(find "${ANDROID_SDK_ROOT}/cmdline-tools" -name "sdkmanager" | sort -V | tail -n 1)
-          if [ -n "$CMDLINE_BIN" ]; then
-            yes | "$CMDLINE_BIN" --licenses > /dev/null || true
-          fi
+          mkdir -p "${ANDROID_SDK_ROOT}/licenses"
+          printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "${ANDROID_SDK_ROOT}/licenses/android-sdk-license"
+          printf "\n84831b9409646a918e30573bab4c9c91346d8abd" > "${ANDROID_SDK_ROOT}/licenses/android-sdk-preview-license"
 
-      - name: Set up Gradle
+      - name: Set up Gradle with Full Build & Configuration Cache
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
+          cache-read-only: false
 
-      - name: Generate Signing Keystore (Fallback if Secret Not Provided)
+      - name: Generate Signing Keystore
         run: |
           if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
             echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > "${GITHUB_WORKSPACE}/my-upload-key.jks"
@@ -71,20 +84,33 @@ jobs:
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
 
-      - name: Build Signed Release APK
+      - name: Build Signed Release APK (Max Free Runner Performance)
         run: |
+          GRADLE_CMD="gradle"
           if [ -f "./gradlew" ]; then
             chmod +x ./gradlew
-            ./gradlew assembleRelease --no-daemon
-          else
-            gradle assembleRelease --no-daemon
+            GRADLE_CMD="./gradlew"
           fi
+          $GRADLE_CMD assembleRelease \
+            --parallel \
+            --build-cache \
+            --configuration-cache \
+            -Dorg.gradle.jvmargs="-Xmx12g -XX:+UseParallelGC -XX:MaxMetaspaceSize=2g -Dfile.encoding=UTF-8 -Djava.awt.headless=true" \
+            -Dorg.gradle.workers.max=4 \
+            -Dorg.gradle.vfs.watch=true \
+            -Djava.awt.headless=true \
+            -Pkotlin.compiler.execution.strategy=daemon \
+            -Pksp.useKSP2=true \
+            -x lint \
+            -x lintVitalRelease \
+            -x test
         env:
+          JAVA_TOOL_OPTIONS: "-Djava.awt.headless=true"
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
 
-      - name: Prepare Release APK File
+      - name: Generate Unique Tag & Prepare Release APK
         id: prepare_apk
         run: |
           APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
@@ -92,27 +118,27 @@ jobs:
             echo "Error: Release APK not found!"
             exit 1
           fi
-          RELEASE_APK_NAME="AudioEQ-v1.0-${GITHUB_SHA::7}-release.apk"
+          TIMESTAMP=$(date -u +"%Y%m%d-%H%M%S")
+          UNIQUE_TAG="v1.0.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}-${TIMESTAMP}"
+          RELEASE_APK_NAME="AudioEQ-${UNIQUE_TAG}.apk"
           cp "$APK_PATH" "${GITHUB_WORKSPACE}/${RELEASE_APK_NAME}"
           echo "apk_path=${GITHUB_WORKSPACE}/${RELEASE_APK_NAME}" >> "$GITHUB_OUTPUT"
           echo "apk_name=${RELEASE_APK_NAME}" >> "$GITHUB_OUTPUT"
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            echo "tag_name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag_name=v1.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-          fi
+          echo "tag_name=${UNIQUE_TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Publish APK directly to GitHub Releases
+      - name: Create New GitHub Release with APK
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.prepare_apk.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
           name: "Audio EQ ${{ steps.prepare_apk.outputs.tag_name }}"
           body: |
-            ### Audio EQ Android Release (${{ steps.prepare_apk.outputs.tag_name }})
-            - **10-Band Master Equalizer** across Bass (20–250 Hz), Mids (250 Hz–4 kHz), Treble (4–12 kHz), and Air (12–20 kHz).
-            - **Mid/Side Stereo Width** per section with Linkwitz-Riley 4th-order crossovers and sub-60 Hz mono fold-down.
-            - **Presets**: Flat, Balanced Deep, Bass Boost, Vocal Clarity, Percussion Clarity (Tabla tuned), and Custom.
-            - **4 Engine Modes**: Legacy, Global, ADB/Shizuku, and Root DSP.
+            ### Audio EQ Android Release (`${{ steps.prepare_apk.outputs.tag_name }}`)
+            - **Commit**: `${{ github.sha }}` (Run #${{ github.run_number }}.${{ github.run_attempt }})
+            - **10-Band Master Equalizer**: Bass (20–250 Hz), Mids (250 Hz–4 kHz), Treble (4–12 kHz), Air (12–20 kHz)
+            - **Mid/Side Stereo Width**: Linkwitz-Riley 4th-order crossovers + sub-60 Hz mono protection
+            - **Presets**: Flat, Balanced Deep, Bass Boost, Vocal Clarity, Percussion Clarity (Tabla tuned), Custom
+            - **4 Engine Modes**: Legacy, Global, ADB/Shizuku, and Root DSP
           files: ${{ steps.prepare_apk.outputs.apk_path }}
           draft: false
           prerelease: false

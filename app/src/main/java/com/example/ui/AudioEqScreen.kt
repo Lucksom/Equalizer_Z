@@ -3,7 +3,6 @@ package com.example.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -34,19 +33,15 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
-import com.example.model.EngineMode
-import com.example.model.EqConstants
-import com.example.model.FrequencySection
+import com.example.model.OutputRoute
 import com.example.ui.components.DspReferenceMonitorCard
-import com.example.ui.components.FrequencyResponseGraph
-import com.example.ui.components.FrequencySectionCard
 import com.example.ui.components.ModeSelectorCard
-import com.example.ui.components.PowerHeroCard
-import com.example.ui.components.PresetChipRow
 import com.example.ui.components.RootWarningDialog
 import com.example.ui.components.SavePresetDialog
 import com.example.ui.components.SettingsAndDiagnosticsSheet
+import com.example.ui.components.SoundCalibrationSheet
 import com.example.ui.components.TopBarHeader
+import com.example.ui.components.UnifiedEqualizerCard
 
 @Composable
 fun AudioEqScreen(
@@ -55,7 +50,11 @@ fun AudioEqScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
-    val showPerSectionWidths = state.alwaysShowSectionWidths || state.selectedMode == EngineMode.ROOT
+    val activeCalLabel = when {
+        state.activeRoute == OutputRoute.SPEAKER && state.speakerCalEnabled -> "Spk Cal On"
+        state.activeRoute != OutputRoute.SPEAKER && state.selectedHeadphoneProfileId != "none" -> state.selectedHeadphoneProfile.name.take(12)
+        else -> "Calibrate"
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -65,8 +64,8 @@ fun AudioEqScreen(
             ExtendedFloatingActionButton(
                 onClick = { viewModel.openSavePresetDialog() },
                 shape = RoundedCornerShape(18.dp),
-                containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                 icon = {
                     Icon(
                         imageVector = Icons.Default.Add,
@@ -89,12 +88,10 @@ fun AudioEqScreen(
                 .padding(innerPadding),
             contentAlignment = Alignment.TopCenter
         ) {
-            val isExpandedScreen = maxWidth >= 720.dp
-
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .widthIn(max = if (isExpandedScreen) 960.dp else 500.dp),
+                    .widthIn(max = 980.dp),
                 contentPadding = PaddingValues(
                     start = 16.dp,
                     end = 16.dp,
@@ -103,14 +100,14 @@ fun AudioEqScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // 1. Top Brand Header + Settings Button
+                // 1. Top Bar Header + Settings Icon
                 item {
                     TopBarHeader(
                         onOpenSettings = { viewModel.openSettingsSheet() }
                     )
                 }
 
-                // Optional status toast banner for backup/restore/preset save feedback
+                // Optional feedback banner
                 item {
                     AnimatedVisibility(visible = state.statusBannerMessage != null) {
                         state.statusBannerMessage?.let { msg ->
@@ -143,52 +140,46 @@ fun AudioEqScreen(
                     }
                 }
 
-                // 2. Global Equalizer Power Hero Card
-                item {
-                    PowerHeroCard(
-                        isEnabled = state.isEnabled,
-                        activeSessionsCount = state.activeStatus.activeSessionsCount,
-                        onTogglePower = { viewModel.setPowerEnabled(it) }
-                    )
-                }
-
-                // 3. Engine Mode Selector + Capability Status Pill
+                // 2. Top Horizontal Engine Mode Selector (3 Profiles: Legacy [Global without ADB/Root], ADB / Shizuku, Root)
                 item {
                     ModeSelectorCard(
                         selectedMode = state.selectedMode,
                         activeStatus = state.activeStatus,
                         diagnostics = state.diagnostics,
-                        spatialStrength = state.spatialStrength,
-                        alwaysShowSectionWidths = state.alwaysShowSectionWidths,
                         onSelectMode = { viewModel.selectMode(it) },
-                        onSpatialStrengthChange = { viewModel.updateSpatialStrength(it) },
                         onBackupRootConfig = { viewModel.backupAndStageRootModule() },
                         onRestoreRootConfig = { viewModel.restoreStockAudioConfig() }
                     )
                 }
 
-                // 4. Preset Chip Row (Flat, Balanced Deep, Bass Boost, Vocal Clarity, Percussion Clarity, Custom)
+                // 3. Unified 10-Band Equalizer Card (with v4 Presets, Graph, True Category Ranges, 10 Fluid Sliders, Intensity, Volume Contour, A/B Compare, Headroom Meter)
                 item {
-                    PresetChipRow(
+                    UnifiedEqualizerCard(
                         presets = state.presets,
                         selectedPresetId = state.selectedPresetId,
+                        targetGainsDb = state.gainsDb,
+                        intensity = state.intensity,
+                        volumeContourEnabled = state.volumeContourEnabled,
+                        isAbCompare = state.isAbCompare,
+                        activeRoute = state.activeRoute,
+                        inputGainDb = state.inputGainDb,
+                        makeupGainDb = state.makeupGainDb,
+                        ceilingLoadDb = state.ceilingLoadDb,
+                        activeCalibrationLabel = activeCalLabel,
+                        isEnabled = state.isEnabled,
                         onSelectPreset = { viewModel.selectPreset(it) },
-                        onDeleteCustomPreset = { viewModel.deleteCustomPreset(it) }
+                        onDeleteCustomPreset = { viewModel.deleteCustomPreset(it) },
+                        onBandGainChange = { idx, db -> viewModel.updateBandGain(idx, db) },
+                        onIntensityChange = { viewModel.setIntensity(it) },
+                        onToggleVolumeContour = { viewModel.setVolumeContourEnabled(it) },
+                        onToggleAbCompare = { viewModel.setAbCompare(it) },
+                        onOpenCalibration = { viewModel.openCalibrationSheet() },
+                        onToggleEnabled = { viewModel.setPowerEnabled(it) },
+                        onResetFlat = { viewModel.resetToFlat() }
                     )
                 }
 
-                // 5. Live Frequency Response Curve Card
-                item {
-                    FrequencyResponseGraph(
-                        responsePoints = state.responseCurvePoints,
-                        gainsDb = state.gainsDb,
-                        preampDb = state.preampDb,
-                        highPassHz = state.highPassHz,
-                        isEnabled = state.isEnabled
-                    )
-                }
-
-                // 6. Live DSP Reference Monitor (Tabla Groove / Pink Noise / Sine Sweep)
+                // 4. Live DSP Reference Monitor Card (Tabla Groove, Pink Noise, Log Sweep)
                 item {
                     DspReferenceMonitorCard(
                         isPlaying = state.isReferencePlaying,
@@ -196,86 +187,6 @@ fun AudioEqScreen(
                         onTogglePlay = { viewModel.toggleReferenceMonitor() },
                         onSelectSignal = { viewModel.selectReferenceSignal(it) }
                     )
-                }
-
-                // 7. Four Frequency Section Cards (Bass, Mids, Treble, Air)
-                if (isExpandedScreen) {
-                    // Canonical 2-column grid layout on Tablets / Foldables
-                    val sections = FrequencySection.entries
-                    item {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(14.dp)
-                        ) {
-                            FrequencySectionCard(
-                                section = sections[0],
-                                bands = EqConstants.MASTER_BANDS.filter { it.section == sections[0] },
-                                gainsDb = state.gainsDb,
-                                widthPct = state.widths.forSection(sections[0]),
-                                showWidthSlider = showPerSectionWidths,
-                                isEnabled = state.isEnabled,
-                                onBandGainChange = { idx, db -> viewModel.updateBandGain(idx, db) },
-                                onWidthChange = { sec, w -> viewModel.updateSectionWidth(sec, w) },
-                                modifier = Modifier.weight(1f)
-                            )
-                            FrequencySectionCard(
-                                section = sections[1],
-                                bands = EqConstants.MASTER_BANDS.filter { it.section == sections[1] },
-                                gainsDb = state.gainsDb,
-                                widthPct = state.widths.forSection(sections[1]),
-                                showWidthSlider = showPerSectionWidths,
-                                isEnabled = state.isEnabled,
-                                onBandGainChange = { idx, db -> viewModel.updateBandGain(idx, db) },
-                                onWidthChange = { sec, w -> viewModel.updateSectionWidth(sec, w) },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                    item {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(14.dp)
-                        ) {
-                            FrequencySectionCard(
-                                section = sections[2],
-                                bands = EqConstants.MASTER_BANDS.filter { it.section == sections[2] },
-                                gainsDb = state.gainsDb,
-                                widthPct = state.widths.forSection(sections[2]),
-                                showWidthSlider = showPerSectionWidths,
-                                isEnabled = state.isEnabled,
-                                onBandGainChange = { idx, db -> viewModel.updateBandGain(idx, db) },
-                                onWidthChange = { sec, w -> viewModel.updateSectionWidth(sec, w) },
-                                modifier = Modifier.weight(1f)
-                            )
-                            FrequencySectionCard(
-                                section = sections[3],
-                                bands = EqConstants.MASTER_BANDS.filter { it.section == sections[3] },
-                                gainsDb = state.gainsDb,
-                                widthPct = state.widths.forSection(sections[3]),
-                                showWidthSlider = showPerSectionWidths,
-                                isEnabled = state.isEnabled,
-                                onBandGainChange = { idx, db -> viewModel.updateBandGain(idx, db) },
-                                onWidthChange = { sec, w -> viewModel.updateSectionWidth(sec, w) },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                } else {
-                    FrequencySection.entries.forEach { section ->
-                        item(key = section.id) {
-                            val sectionBands = EqConstants.MASTER_BANDS.filter { it.section == section }
-                            FrequencySectionCard(
-                                section = section,
-                                bands = sectionBands,
-                                gainsDb = state.gainsDb,
-                                widthPct = state.widths.forSection(section),
-                                showWidthSlider = showPerSectionWidths,
-                                isEnabled = state.isEnabled,
-                                onBandGainChange = { idx, db -> viewModel.updateBandGain(idx, db) },
-                                onWidthChange = { sec, w -> viewModel.updateSectionWidth(sec, w) }
-                            )
-                        }
-                    }
                 }
 
                 item {
@@ -287,7 +198,7 @@ fun AudioEqScreen(
 
     if (state.showSavePresetDialog) {
         SavePresetDialog(
-            currentPreampDb = state.preampDb,
+            currentPreampDb = state.inputGainDb,
             currentHighPassHz = state.highPassHz,
             onDismiss = { viewModel.dismissSavePresetDialog() },
             onSave = { name -> viewModel.saveCustomPreset(name) }
@@ -301,13 +212,39 @@ fun AudioEqScreen(
         )
     }
 
+    if (state.showCalibrationSheet) {
+        SoundCalibrationSheet(
+            activeRoute = state.activeRoute,
+            headphoneProfiles = state.headphoneProfiles,
+            selectedHeadphoneProfileId = state.selectedHeadphoneProfileId,
+            headphoneStrength = state.headphoneStrength,
+            speakerCalEnabled = state.speakerCalEnabled,
+            speakerCalStrength = state.speakerCalStrength,
+            speakerMeas31Db = state.speakerMeas31Db,
+            speakerCorrection31Db = state.speakerCorrection31Db,
+            isCalibratingSpeaker = state.isCalibratingSpeaker,
+            calibrationProgress = state.calibrationProgress,
+            calibrationStatusText = state.calibrationStatusText,
+            connectedProductName = state.diagnostics.connectedProductName,
+            onSelectHeadphoneProfile = { viewModel.selectHeadphoneProfile(it) },
+            onHeadphoneStrengthChange = { viewModel.updateHeadphoneStrength(it) },
+            onToggleSpeakerCalibration = { viewModel.toggleSpeakerCalibration(it) },
+            onSpeakerStrengthChange = { viewModel.updateSpeakerCalStrength(it) },
+            onRunSpeakerCalibration = { viewModel.runSpeakerSelfCalibration() },
+            onResetSpeakerCalibration = { viewModel.resetSpeakerCalibration() },
+            onDismiss = { viewModel.dismissCalibrationSheet() }
+        )
+    }
+
     if (state.showSettingsSheet) {
         SettingsAndDiagnosticsSheet(
             diagnostics = state.diagnostics,
             highPassHz = state.highPassHz,
-            alwaysShowSectionWidths = state.alwaysShowSectionWidths,
+            compatibility10Band = state.compatibility10Band,
+            transientMode = state.transientMode,
             onHighPassChange = { viewModel.updateHighPassHz(it) },
-            onToggleAlwaysShowWidths = { viewModel.setAlwaysShowSectionWidths(it) },
+            onToggleCompatibility10Band = { viewModel.setCompatibility10Band(it) },
+            onToggleTransientMode = { viewModel.setTransientMode(it) },
             onBackupRootConfig = { viewModel.backupAndStageRootModule() },
             onRestoreRootConfig = { viewModel.restoreStockAudioConfig() },
             onDismiss = { viewModel.dismissSettingsSheet() }

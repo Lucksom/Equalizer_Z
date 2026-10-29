@@ -1,31 +1,52 @@
 package com.example.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Speaker
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -37,167 +58,550 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.R
 import com.example.model.EqBandSpec
+import com.example.model.EqConstants
 import com.example.model.FrequencySection
-import com.example.model.SectionColorRole
-import kotlin.math.roundToInt
+import com.example.model.OutputRoute
+import com.example.model.PresetConfig
+import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.exp
 
 /**
- * Renders one of the four Frequency Section Cards (Bass, Mids, Treble, Air) matching the HTML v3 mockup:
- * - Rounded 28.dp container with tonal role (`primaryContainer`, `secondaryContainer`, `tertiaryContainer`)
- * - Header with section title and frequency range pill (`20–250 Hz`, `250 Hz–4 kHz`, `4–12 kHz`, `12–20 kHz`)
- * - Vertical M3 sliders for every band in the section with tabular gain pill (`+3`, `-3`, `0`)
- * - Bottom Stereo Width Mid/Side control row (`0%` to `200%`)
+ * Unified 10-Band Equalizer Card updated for Deep Optimization v4:
+ * - Header with "Equalizer", Active Route badge (`Speaker`, `Wired Headphones`, `Bluetooth`, `USB DAC`), and Headroom / Ceiling Load meter (`ceilingLoad = max(0, max(effective) - 3) dB`, warning above 4 dB)
+ * - Preset Pills (`Flat`, `Balanced Deep`, `Bass Boost`, `Vocal Clarity`, `Percussion Clarity`, `Cinema`, plus custom presets)
+ * - Live Frequency Response Graph (`equalizer.html` curve)
+ * - True v4 Category Boundary Strip (`Bass 20–350 Hz`, `Mids 350 Hz–2.8 kHz`, `Treble 2.8–11 kHz`, `Air 11–20 kHz`)
+ * - 10 Fluid Vertical Sliders (with raw pointer tracking so dragging never gets stuck)
+ * - v4 Intensity Macro (`Light 0.6x`, `Standard 1.0x`, `Deep+ 1.3x`), `Volume Contour` toggle, `A/B Loudness Compare` button, and `Sound Calibration` launcher
+ * - Footer with `Enabled` checkbox and `Reset` button
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun FrequencySectionCard(
-    section: FrequencySection,
-    bands: List<EqBandSpec>,
-    gainsDb: List<Float>,
-    widthPct: Int,
-    showWidthSlider: Boolean,
+fun UnifiedEqualizerCard(
+    presets: List<PresetConfig>,
+    selectedPresetId: String,
+    targetGainsDb: List<Float>,
+    intensity: Float,
+    volumeContourEnabled: Boolean,
+    isAbCompare: Boolean,
+    activeRoute: OutputRoute,
+    inputGainDb: Float,
+    makeupGainDb: Float,
+    ceilingLoadDb: Float,
+    activeCalibrationLabel: String?,
     isEnabled: Boolean,
+    onSelectPreset: (PresetConfig) -> Unit,
+    onDeleteCustomPreset: (String) -> Unit,
     onBandGainChange: (Int, Float) -> Unit,
-    onWidthChange: (FrequencySection, Int) -> Unit,
+    onIntensityChange: (Float) -> Unit,
+    onToggleVolumeContour: (Boolean) -> Unit,
+    onToggleAbCompare: (Boolean) -> Unit,
+    onOpenCalibration: () -> Unit,
+    onToggleEnabled: (Boolean) -> Unit,
+    onResetFlat: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val (containerColor, contentColor) = when (section.colorRole) {
-        SectionColorRole.PRIMARY -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
-        SectionColorRole.SECONDARY -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
-        SectionColorRole.TERTIARY -> MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
+    val displayGains = remember {
+        mutableStateListOf<Float>().apply {
+            for (i in 0 until 10) {
+                add(targetGainsDb.getOrElse(i) { 0f } * intensity)
+            }
+        }
+    }
+    val draggingBands = remember {
+        mutableStateListOf<Boolean>().apply {
+            repeat(10) { add(false) }
+        }
     }
 
-    val translucentOverlay = Color.White.copy(alpha = 0.28f)
+    val currentTargetGains by rememberUpdatedState(targetGainsDb)
+    val currentIntensity by rememberUpdatedState(intensity)
+
+    // Frame-rate independent exponential smoothing loop matching equalizer.html: k = 1 - exp(-dt * 18)
+    LaunchedEffect(targetGainsDb, intensity) {
+        var lastNanos = withFrameNanos { it }
+        var moving = true
+        while (moving) {
+            val nowNanos = withFrameNanos { it }
+            val dt = ((nowNanos - lastNanos) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
+            lastNanos = nowNanos
+            val k = (1f - exp(-dt * 18f)).coerceIn(0.05f, 1f)
+
+            moving = false
+            for (i in 0 until 10) {
+                val target = currentTargetGains.getOrElse(i) { 0f }
+                if (draggingBands[i]) {
+                    displayGains[i] = target
+                } else {
+                    val diff = target - displayGains[i]
+                    if (abs(diff) > 0.005f) {
+                        displayGains[i] = displayGains[i] + diff * k
+                        moving = true
+                    } else {
+                        displayGains[i] = target
+                    }
+                }
+            }
+        }
+    }
+
+    val bandsAlpha by animateFloatAsState(
+        targetValue = if (isEnabled && !isAbCompare) 1f else 0.45f,
+        animationSpec = tween(250),
+        label = "bandsAlpha"
+    )
+
+    // Graph shows user × intensity when active, or flat when A/B compare is held
+    val graphDisplayGains = remember(displayGains.toList(), intensity, isAbCompare) {
+        if (isAbCompare) {
+            List(10) { 0f }
+        } else {
+            displayGains.map { (it * intensity).coerceIn(-12f, 12f) }
+        }
+    }
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .alpha(if (isEnabled) 1f else 0.45f)
-            .testTag("section_card_${section.id}"),
+            .testTag("unified_equalizer_card"),
         shape = RoundedCornerShape(28.dp),
-        color = containerColor,
-        contentColor = contentColor
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 2.dp
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(18.dp)
+                .padding(horizontal = 20.dp, vertical = 22.dp)
         ) {
-            // Section Header
+            // Header: "Equalizer" + Route & Headroom / Ceiling Meter Badges
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = section.title,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = contentColor
-                )
-                Box(
+                Column(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(translucentOverlay)
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                        .weight(1f)
+                        .padding(end = 8.dp)
                 ) {
                     Text(
-                        text = section.rangeLabel,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = contentColor
+                        text = "Equalizer",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
+                    Text(
+                        text = "Route: ${activeRoute.label} · In ${String.format(Locale.US, "%.1f", inputGainDb)} dB · Makeup +${String.format(Locale.US, "%.1f", makeupGainDb)} dB",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
+
+                // v4 Section 3 Headroom Meter (ceilingLoad = max(0, max(effective) - 3) dB, warn > 4 dB)
+                val isCeilingWarn = ceilingLoadDb > 4.0f
+                val meterBg by animateColorAsState(
+                    targetValue = if (isCeilingWarn) {
+                        MaterialTheme.colorScheme.errorContainer
+                    } else {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    },
+                    label = "headroomMeterBg"
+                )
+                val meterContent by animateColorAsState(
+                    targetValue = if (isCeilingWarn) {
+                        MaterialTheme.colorScheme.onErrorContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSecondaryContainer
+                    },
+                    label = "headroomMeterContent"
+                )
+
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = meterBg,
+                    contentColor = meterContent,
+                    modifier = Modifier.testTag("headroom_ceiling_meter")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        if (isCeilingWarn) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = "High ceiling load warning",
+                                modifier = Modifier.height(14.dp)
+                            )
+                        }
+                        Text(
+                            text = "Ceiling ${String.format(Locale.US, "%.1f", ceilingLoadDb)} dB",
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1
+                        )
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            Text(
-                text = section.hint,
-                style = MaterialTheme.typography.bodySmall,
-                color = contentColor.copy(alpha = 0.8f)
-            )
+            // Preset Chips (Flat, Balanced Deep, Bass Boost, Vocal Clarity, Percussion Clarity, Cinema, + Saved)
+            FlowRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("preset_chip_row"),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                presets.forEach { preset ->
+                    val isSelected = preset.id == selectedPresetId
+                    EqualizerPresetPill(
+                        preset = preset,
+                        isSelected = isSelected,
+                        onClick = { onSelectPreset(preset) },
+                        onDelete = if (!preset.isBuiltIn) {
+                            { onDeleteCustomPreset(preset.id) }
+                        } else null
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Vertical Band Sliders Row
+            // Response Graph (matching equalizer.html .graph)
+            FrequencyResponseGraph(
+                displayGainsDb = graphDisplayGains,
+                isEnabled = isEnabled
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // v4 Section 2 True Category Boundaries Strip:
+            // Bass (20–350 Hz) | Mids (350 Hz–2.8 kHz) | Treble (2.8–11 kHz) | Air (11–20 kHz)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = if (showWidthSlider) 16.dp else 4.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                bands.forEach { band ->
-                    val gain = gainsDb.getOrElse(band.index) { 0f }
-                    VerticalEqBandSlider(
-                        band = band,
-                        gainDb = gain,
-                        accentColor = contentColor,
-                        trackBgColor = contentColor.copy(alpha = 0.25f),
-                        thumbBorderColor = containerColor,
-                        pillBgColor = translucentOverlay,
-                        enabled = isEnabled,
-                        onGainChange = { newDb -> onBandGainChange(band.index, newDb) },
-                        modifier = Modifier.weight(1f)
-                    )
+                FrequencySection.entries.forEach { sec ->
+                    val weight = when (sec) {
+                        FrequencySection.BASS -> 4f
+                        FrequencySection.MIDS -> 3f
+                        FrequencySection.TREBLE -> 2f
+                        FrequencySection.AIR -> 1f
+                    }
+                    Surface(
+                        modifier = Modifier.weight(weight),
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surface
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = sec.title,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = sec.rangeLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                    }
                 }
             }
 
-            // Stereo Width Row (0% to 200% Mid/Side Side*width)
-            if (showWidthSlider) {
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 10-Band Fluid Vertical Sliders Grid
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .alpha(bandsAlpha)
+                    .padding(horizontal = 6.dp, vertical = 16.dp)
+                    .testTag("ten_band_sliders_container")
+            ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(translucentOverlay)
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
-                        Text(
-                            text = stringResource(R.string.width_label),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = contentColor.copy(alpha = 0.9f)
-                        )
-                        Text(
-                            text = if (section == FrequencySection.BASS && widthPct < 100) "Sub <60Hz Mono" else "Default ${section.defaultWidthRange}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = contentColor.copy(alpha = 0.7f)
+                    EqConstants.MASTER_BANDS.forEach { band ->
+                        val gain = displayGains.getOrElse(band.index) { 0f }
+                        FluidVerticalBandSlider(
+                            band = band,
+                            gainDb = gain,
+                            enabled = isEnabled,
+                            onDragStateChange = { isDragging ->
+                                draggingBands[band.index] = isDragging
+                            },
+                            onGainChange = { newDb ->
+                                displayGains[band.index] = newDb
+                                onBandGainChange(band.index, newDb)
+                            },
+                            modifier = Modifier.weight(1f)
                         )
                     }
+                }
+            }
 
-                    Slider(
-                        value = widthPct.toFloat(),
-                        onValueChange = { onWidthChange(section, it.roundToInt()) },
-                        valueRange = 0f..200f,
-                        enabled = isEnabled,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("width_slider_${section.id}")
-                            .semantics {
-                                contentDescription = "${section.title} stereo width slider"
-                            },
-                        colors = SliderDefaults.colors(
-                            thumbColor = contentColor,
-                            activeTrackColor = contentColor,
-                            inactiveTrackColor = contentColor.copy(alpha = 0.25f)
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // v4 Section 4.2, 7 & 10: Ordered Intensity Macro, Volume Contour, A/B Compare & Sound Calibration Card
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surface
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // 1. Intensity Header + 3 Equal-Width Mode Chips
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "EQ Intensity",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = String.format(Locale.US, "%.1fx scale", intensity),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val options = listOf(
+                                Triple("Light", "0.6x", 0.6f),
+                                Triple("Standard", "1.0x", 1.0f),
+                                Triple("Deep+", "1.3x", 1.3f)
+                            )
+                            options.forEach { (label, sub, value) ->
+                                val selected = abs(intensity - value) < 0.08f
+                                val chipBg = if (selected) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainerHigh
+                                }
+                                val chipText = if (selected) {
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable { onIntensityChange(value) }
+                                        .testTag("intensity_chip_${label.lowercase()}"),
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = chipBg
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 8.dp, horizontal = 6.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = chipText,
+                                            maxLines = 1
+                                        )
+                                        Text(
+                                            text = sub,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = chipText.copy(alpha = 0.8f),
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. Volume Contour Full-Width Switch Row
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(end = 12.dp)
+                            ) {
+                                Text(
+                                    text = "Volume Contour (ISO 226)",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = "Boosts low-volume bass & treble balance",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
+                            Switch(
+                                checked = volumeContourEnabled,
+                                onCheckedChange = onToggleVolumeContour,
+                                modifier = Modifier.testTag("volume_contour_switch")
+                            )
+                        }
+                    }
+
+                    // 3. Two Equal-Width Action Buttons: A/B Compare & Sound Calibration
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val abContainerColor = if (isAbCompare) {
+                            MaterialTheme.colorScheme.tertiaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerHigh
+                        }
+                        val abContentColor = if (isAbCompare) {
+                            MaterialTheme.colorScheme.onTertiaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        }
+
+                        FilledTonalButton(
+                            onClick = { onToggleAbCompare(!isAbCompare) },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = abContainerColor,
+                                contentColor = abContentColor
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("ab_compare_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Tune,
+                                contentDescription = "A/B Loudness Compare",
+                                modifier = Modifier.height(18.dp)
+                            )
+                            Spacer(modifier = Modifier.padding(3.dp))
+                            Text(
+                                text = if (isAbCompare) "A/B: Bypass" else "A/B Compare",
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1
+                            )
+                        }
+
+                        FilledTonalButton(
+                            onClick = onOpenCalibration,
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("open_calibration_button")
+                        ) {
+                            Icon(
+                                imageVector = if (activeRoute == OutputRoute.SPEAKER) Icons.Default.Speaker else Icons.Default.Headphones,
+                                contentDescription = "Sound Calibration",
+                                modifier = Modifier.height(18.dp)
+                            )
+                            Spacer(modifier = Modifier.padding(3.dp))
+                            Text(
+                                text = activeCalibrationLabel ?: "Sound Calibrate",
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Footer: Enabled Checkbox Toggle + Reset Button (matching equalizer.html footer)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onToggleEnabled(!isEnabled) }
+                        .padding(end = 12.dp, top = 4.dp, bottom = 4.dp)
+                        .testTag("global_power_switch"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = isEnabled,
+                        onCheckedChange = onToggleEnabled,
+                        colors = CheckboxDefaults.colors(
+                            checkedColor = MaterialTheme.colorScheme.primary,
+                            uncheckedColor = MaterialTheme.colorScheme.outline
                         )
                     )
-
                     Text(
-                        text = "$widthPct%",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = contentColor,
-                        textAlign = TextAlign.End,
-                        modifier = Modifier
-                            .widthIn(min = 46.dp)
-                            .testTag("width_value_${section.id}")
+                        text = if (isEnabled) "Enabled" else "Bypassed",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("power_status_text")
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onResetFlat,
+                    shape = RoundedCornerShape(999.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.primary
+                    ),
+                    modifier = Modifier.testTag("reset_equalizer_button")
+                ) {
+                    Text(
+                        text = "Reset",
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(horizontal = 6.dp)
                     )
                 }
             }
@@ -206,95 +610,161 @@ fun FrequencySectionCard(
 }
 
 @Composable
-private fun VerticalEqBandSlider(
+private fun EqualizerPresetPill(
+    preset: PresetConfig,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onDelete: (() -> Unit)? = null
+) {
+    val bgColor = if (isSelected) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        Color.Transparent
+    }
+    val textColor = if (isSelected) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val borderColor = if (isSelected) {
+        Color.Transparent
+    } else {
+        MaterialTheme.colorScheme.outline
+    }
+
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(bgColor)
+            .border(1.dp, borderColor, RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 6.dp)
+            .testTag("preset_chip_${preset.id}"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            text = preset.name,
+            style = MaterialTheme.typography.labelLarge,
+            color = textColor
+        )
+        if (onDelete != null) {
+            Text(
+                text = "×",
+                style = MaterialTheme.typography.labelLarge,
+                color = textColor,
+                modifier = Modifier
+                    .clickable { onDelete() }
+                    .padding(horizontal = 2.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun FluidVerticalBandSlider(
     band: EqBandSpec,
     gainDb: Float,
-    accentColor: Color,
-    trackBgColor: Color,
-    thumbBorderColor: Color,
-    pillBgColor: Color,
     enabled: Boolean,
+    onDragStateChange: (Boolean) -> Unit,
     onGainChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val formattedGain = remember(gainDb) {
-        val rounded = (gainDb * 2).roundToInt() / 2f
-        val text = if (rounded % 1f == 0f) {
-            rounded.toInt().toString()
-        } else {
-            rounded.toString()
-        }
-        if (rounded > 0f) "+$text" else text
-    }
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+    val surfaceColor = MaterialTheme.colorScheme.surface
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
 
-    var dragHeightPx by remember { mutableFloatStateOf(1f) }
+    var isPressed by remember { mutableStateOf(false) }
+    val thumbScale by animateFloatAsState(
+        targetValue = if (isPressed) 1.18f else 1.0f,
+        animationSpec = spring(dampingRatio = 0.65f, stiffness = 600f),
+        label = "thumbScale"
+    )
+
+    val currentEnabled by rememberUpdatedState(enabled)
+    val currentOnGainChange by rememberUpdatedState(onGainChange)
+    val currentOnDragStateChange by rememberUpdatedState(onDragStateChange)
+
+    val formattedGain = remember(gainDb) {
+        val sign = if (gainDb > 0.05f) "+" else ""
+        String.format(Locale.US, "%s%.1f", sign, gainDb)
+    }
 
     Column(
         modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Gain value badge
-        Box(
+        Text(
+            text = formattedGain,
+            style = MaterialTheme.typography.labelSmall,
+            color = onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
             modifier = Modifier
-                .widthIn(min = 38.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(pillBgColor)
-                .padding(horizontal = 6.dp, vertical = 2.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = formattedGain,
-                style = MaterialTheme.typography.labelSmall,
-                color = accentColor,
-                textAlign = TextAlign.Center
-            )
-        }
+                .height(20.dp)
+                .padding(bottom = 4.dp)
+        )
 
-        // Custom accessible vertical M3 slider (48.dp minimum touch width, 134.dp height)
         Box(
             modifier = Modifier
-                .width(48.dp)
-                .height(134.dp)
+                .fillMaxWidth()
+                .height(260.dp)
                 .testTag("band_slider_${band.frequencyHz}")
                 .semantics {
-                    contentDescription = "${band.label} Hz equalizer band gain"
+                    contentDescription = "${band.label} Hz gain"
                 }
-                .pointerInput(enabled) {
-                    if (!enabled) return@pointerInput
-                    detectTapGestures(
-                        onDoubleTap = {
-                            onGainChange(0f) // Double-tap resets band to 0 dB
-                        },
-                        onPress = { offset ->
-                            val h = size.height.toFloat().coerceAtLeast(1f)
-                            val pad = 12.dp.toPx()
-                            val usable = (h - 2 * pad).coerceAtLeast(1f)
-                            val norm = (1f - ((offset.y - pad) / usable)).coerceIn(0f, 1f)
-                            val db = -12f + norm * 24f
-                            onGainChange(db)
+                .pointerInput(band.index) {
+                    var lastTapTime = 0L
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        if (!currentEnabled) return@awaitEachGesture
+
+                        down.consume()
+
+                        val now = System.currentTimeMillis()
+                        if (now - lastTapTime < 280L) {
+                            currentOnDragStateChange(true)
+                            currentOnGainChange(0f)
+                            currentOnDragStateChange(false)
+                            lastTapTime = 0L
+                            return@awaitEachGesture
                         }
-                    )
-                }
-                .pointerInput(enabled) {
-                    if (!enabled) return@pointerInput
-                    detectVerticalDragGestures(
-                        onDragStart = { offset ->
-                            dragHeightPx = size.height.toFloat().coerceAtLeast(1f)
-                            val pad = 12.dp.toPx()
-                            val usable = (dragHeightPx - 2 * pad).coerceAtLeast(1f)
-                            val norm = (1f - ((offset.y - pad) / usable)).coerceIn(0f, 1f)
-                            onGainChange(-12f + norm * 24f)
-                        },
-                        onVerticalDrag = { change, _ ->
-                            change.consume()
+                        lastTapTime = now
+
+                        isPressed = true
+                        currentOnDragStateChange(true)
+
+                        val padPx = 14.dp.toPx()
+                        fun yToDb(y: Float): Float {
                             val h = size.height.toFloat().coerceAtLeast(1f)
-                            val pad = 12.dp.toPx()
-                            val usable = (h - 2 * pad).coerceAtLeast(1f)
-                            val norm = (1f - ((change.position.y - pad) / usable)).coerceIn(0f, 1f)
-                            onGainChange(-12f + norm * 24f)
+                            val usable = (h - 2f * padPx).coerceAtLeast(1f)
+                            val norm = (1f - ((y - padPx) / usable)).coerceIn(0f, 1f)
+                            return (-12f + norm * 24f).coerceIn(-12f, 12f)
                         }
-                    )
+
+                        currentOnGainChange(yToDb(down.position.y))
+
+                        try {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id }
+                                    ?: event.changes.firstOrNull()
+                                    ?: break
+
+                                if (!change.pressed) {
+                                    change.consume()
+                                    break
+                                }
+
+                                change.consume()
+                                currentOnGainChange(yToDb(change.position.y))
+                            }
+                        } finally {
+                            isPressed = false
+                            currentOnDragStateChange(false)
+                        }
+                    }
                 },
             contentAlignment = Alignment.Center
         ) {
@@ -303,62 +773,59 @@ private fun VerticalEqBandSlider(
                     .fillMaxWidth()
                     .fillMaxHeight()
             ) {
-                val trackWidth = 6.dp.toPx()
-                val pad = 12.dp.toPx()
-                val usableHeight = (size.height - 2 * pad).coerceAtLeast(1f)
+                val trackWidth = 14.dp.toPx()
+                val pad = 14.dp.toPx()
+                val usableHeight = (size.height - 2f * pad).coerceAtLeast(1f)
                 val centerX = size.width * 0.5f
 
-                val fraction = ((gainDb.coerceIn(-12f, 12f) + 12f) / 24f).coerceIn(0f, 1f)
-                val thumbY = pad + (1f - fraction) * usableHeight
-                val zeroY = pad + 0.5f * usableHeight
+                val pct = ((gainDb.coerceIn(-12f, 12f) + 12f) / 24f).coerceIn(0f, 1f)
+                val thumbY = pad + (1f - pct) * usableHeight
 
-                // Inactive full track
                 drawRoundRect(
-                    color = trackBgColor,
+                    color = trackColor,
                     topLeft = Offset(centerX - trackWidth / 2f, pad),
                     size = Size(trackWidth, usableHeight),
-                    cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx())
+                    cornerRadius = CornerRadius(trackWidth / 2f, trackWidth / 2f)
                 )
 
-                // Active filled track from bottom to thumb (matching HTML v3 --p linear-gradient)
                 val fillTop = thumbY
                 val fillHeight = (pad + usableHeight - fillTop).coerceAtLeast(0f)
-                drawRoundRect(
-                    color = accentColor,
-                    topLeft = Offset(centerX - trackWidth / 2f, fillTop),
-                    size = Size(trackWidth, fillHeight),
-                    cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx())
-                )
+                if (fillHeight > 0.5f) {
+                    drawRoundRect(
+                        color = primaryColor,
+                        topLeft = Offset(centerX - trackWidth / 2f, fillTop),
+                        size = Size(trackWidth, fillHeight),
+                        cornerRadius = CornerRadius(trackWidth / 2f, trackWidth / 2f)
+                    )
+                }
 
-                // Center 0 dB tick mark
-                drawLine(
-                    color = accentColor.copy(alpha = 0.45f),
-                    start = Offset(centerX - 7.dp.toPx(), zeroY),
-                    end = Offset(centerX + 7.dp.toPx(), zeroY),
-                    strokeWidth = 1.5.dp.toPx()
-                )
-
-                // M3 Thumb with container border ring
-                val thumbRadius = 10.dp.toPx()
+                val baseRadius = 11.dp.toPx() * thumbScale
                 drawCircle(
-                    color = accentColor,
-                    radius = thumbRadius,
+                    color = Color.Black.copy(alpha = 0.24f),
+                    radius = baseRadius + 1.dp.toPx(),
+                    center = Offset(centerX, thumbY + 1.5.dp.toPx())
+                )
+                drawCircle(
+                    color = primaryColor,
+                    radius = baseRadius,
                     center = Offset(centerX, thumbY)
                 )
                 drawCircle(
-                    color = thumbBorderColor,
-                    radius = thumbRadius,
+                    color = surfaceColor,
+                    radius = baseRadius,
                     center = Offset(centerX, thumbY),
-                    style = Stroke(width = 3.dp.toPx())
+                    style = Stroke(width = 3.5.dp.toPx())
                 )
             }
         }
 
-        // Frequency label
         Text(
             text = band.label,
             style = MaterialTheme.typography.labelSmall,
-            color = accentColor.copy(alpha = 0.85f)
+            color = onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            modifier = Modifier.padding(top = 8.dp)
         )
     }
 }
