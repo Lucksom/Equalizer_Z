@@ -20,15 +20,26 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
-          cache: 'gradle'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Android SDK and Licenses
+        run: |
+          export ANDROID_SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+          CMDLINE_BIN=$(find "${ANDROID_SDK_ROOT}/cmdline-tools" -name "sdkmanager" | sort -V | tail -n 1)
+          if [ -n "$CMDLINE_BIN" ]; then
+            yes | "$CMDLINE_BIN" --licenses > /dev/null || true
+          fi
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
 
       - name: Generate Signing Keystore (Fallback if Secret Not Provided)
         run: |
@@ -60,17 +71,14 @@ jobs:
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
 
-      - name: Ensure Gradle Wrapper or Gradle CLI is Ready
+      - name: Build Signed Release APK
         run: |
           if [ -f "./gradlew" ]; then
             chmod +x ./gradlew
+            ./gradlew assembleRelease --no-daemon
           else
-            gradle wrapper --gradle-version 8.11.1
-            chmod +x ./gradlew
+            gradle assembleRelease --no-daemon
           fi
-
-      - name: Build Signed Release APK
-        run: ./gradlew assembleRelease --no-daemon
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
