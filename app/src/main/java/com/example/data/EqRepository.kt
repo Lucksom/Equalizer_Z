@@ -8,7 +8,6 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import androidx.room.Room
 import com.example.audio.DaxProfile
 import com.example.audio.EqMath
 import com.example.model.DeviceProfileMemory
@@ -20,7 +19,7 @@ import com.example.model.SectionWidths
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -72,16 +71,6 @@ class EqRepository(private val context: Context) {
     val sqliteHelper: EqualizerDatabaseHelper = EqualizerDatabaseHelper.getInstance(context)
 
     private val sqlitePresetsTrigger = MutableStateFlow(0L)
-
-    private val database: EqDatabase by lazy {
-        Room.databaseBuilder(
-            context.applicationContext,
-            EqDatabase::class.java,
-            "audio_eq_db"
-        ).fallbackToDestructiveMigration(true).build()
-    }
-
-    private val dao: CustomPresetDao by lazy { database.customPresetDao() }
 
     private object Keys {
         val IS_ENABLED = booleanPreferencesKey("is_enabled")
@@ -207,37 +196,13 @@ class EqRepository(private val context: Context) {
         )
     }
 
-    val customPresetsFlow: Flow<List<PresetConfig>> = combine(
-        dao.getAllCustomPresets(),
-        sqlitePresetsTrigger
-    ) { entities, _ ->
-        val sqliteAll = try {
+    val customPresetsFlow: Flow<List<PresetConfig>> = sqlitePresetsTrigger.map {
+        try {
             sqliteHelper.getAllPresets().filter { !it.isBuiltIn }
         } catch (_: Throwable) {
             emptyList()
         }
-        val roomPresets = entities.map { entity ->
-            val gains = entity.gainsCsv.split(",")
-                .mapNotNull { it.toFloatOrNull() }
-                .let { if (it.size == 10) it else List(10) { 0f } }
-            val maxBoost = (gains.maxOrNull() ?: 0f).coerceAtLeast(0f)
-            PresetConfig(
-                id = "user_${entity.id}",
-                name = entity.name,
-                description = "Saved user preset · HPF ${entity.highPassHz.toInt()} Hz",
-                gainsDb = gains,
-                largestBoostDb = maxBoost,
-                highPassHz = entity.highPassHz,
-                bassHarmonicMixDb = if (maxBoost >= 2f) -12f else null,
-                widths = SectionWidths(),
-                legacyNativeDb = EqConstants.convert10BandTo5BandNative(gains),
-                bassBoostStrength = entity.bassBoostStrength,
-                virtualizerStrength = entity.virtualizerStrength,
-                isBuiltIn = false
-            )
-        }
-        (roomPresets + sqliteAll).distinctBy { it.name }
-    }
+    }.flowOn(Dispatchers.IO)
 
     suspend fun saveState(
         isEnabled: Boolean,
@@ -392,20 +357,6 @@ class EqRepository(private val context: Context) {
             } catch (_: Throwable) {
             }
         }
-        dao.insertPreset(
-            CustomPresetEntity(
-                name = cleanName,
-                gainsCsv = gainsDb.joinToString(","),
-                preampDb = preampDb,
-                highPassHz = highPassHz,
-                bassWidthPct = widths.bassWidthPct,
-                midsWidthPct = widths.midsWidthPct,
-                trebleWidthPct = widths.trebleWidthPct,
-                airWidthPct = widths.airWidthPct,
-                bassBoostStrength = bassBoostStrength,
-                virtualizerStrength = virtualizerStrength
-            )
-        )
     }
 
     suspend fun deleteCustomPreset(presetId: String) {
@@ -416,8 +367,6 @@ class EqRepository(private val context: Context) {
             } catch (_: Throwable) {
             }
         }
-        val numericId = presetId.removePrefix("user_").toIntOrNull() ?: return
-        dao.deletePresetById(numericId)
     }
 
     private fun encodeB64(s: String): String =

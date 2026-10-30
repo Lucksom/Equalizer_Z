@@ -9,7 +9,6 @@ import android.media.AudioManager
 import android.media.audiofx.AudioEffect
 import android.media.audiofx.DynamicsProcessing
 import android.media.audiofx.Equalizer
-import android.media.audiofx.LoudnessEnhancer
 import android.os.Build
 import androidx.core.content.ContextCompat
 import com.example.model.CapabilityLevel
@@ -72,18 +71,14 @@ class AudioEngineController(private val context: Context) {
         val sessionId: Int,
         val masterController: MasterEqController,
         var v5Engine: EqEngine? = null,
-        var equalizer: Equalizer? = null,
         var bassBoostFx: BassBoostFx? = null,
-        var virtualizerFx: VirtualizerFx? = null,
-        var loudnessEnhancer: LoudnessEnhancer? = null
+        var virtualizerFx: VirtualizerFx? = null
     ) {
         fun release() {
             try { masterController.release() } catch (_: Exception) {}
             try { v5Engine?.release() } catch (_: Exception) {}
-            try { equalizer?.release() } catch (_: Exception) {}
             try { bassBoostFx?.release() } catch (_: Exception) {}
             try { virtualizerFx?.release() } catch (_: Exception) {}
-            try { loudnessEnhancer?.release() } catch (_: Exception) {}
         }
     }
 
@@ -133,6 +128,24 @@ class AudioEngineController(private val context: Context) {
 
     var diagnostics: DeviceDiagnostics = DeviceDiagnostics()
         private set
+
+    private var hardwareProbedOnce: Boolean = false
+    private var probedPositiveSessionOnce: Boolean = false
+    private var cachedNativeBands: Int = 5
+    private val cachedCentersHz = mutableListOf(60, 230, 910, 3600, 14000)
+    private val cachedFreqRanges = mutableListOf(
+        intArrayOf(30_000, 120_000),
+        intArrayOf(120_001, 460_000),
+        intArrayOf(460_001, 1_800_000),
+        intArrayOf(1_800_001, 7_000_000),
+        intArrayOf(7_000_001, 20_000_000)
+    )
+    private var cachedMinDb: Float = -15f
+    private var cachedMaxDb: Float = 15f
+    private var cachedGlobal0Ok: Boolean = false
+    private var cachedDpOk: Boolean = false
+    private var cachedDpBandCount: Int = 31
+    private var cachedVirtSupported: Boolean = true
 
     private val audioSessionReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -232,101 +245,130 @@ class AudioEngineController(private val context: Context) {
     }
 
     fun probeCapabilities(internalReferenceSessionId: Int = 0): Map<EngineMode, ModeStatusInfo> {
-        var nativeBands = 5
-        val centers = mutableListOf<Int>()
-        val freqRanges = mutableListOf<IntArray>()
-        var minDb = -15f
-        var maxDb = 15f
-        var global0Ok = false
-        var dpOk = false
-        var dpBandCount = if (compatibility10Band) 10 else 31
+        val isSmallRoute = getCurrentRoute() == OutputRoute.SPEAKER
 
-        try {
-            val eq0 = Equalizer(0, 0)
-            global0Ok = true
-            val count = eq0.numberOfBands.toInt()
-            if (count > 0) {
-                nativeBands = count
-                for (b in 0 until count) {
-                    centers.add((eq0.getCenterFreq(b.toShort()) / 1000))
-                    val r = eq0.getBandFreqRange(b.toShort())
-                    if (r != null && r.size >= 2) {
-                        freqRanges.add(intArrayOf(r[0], r[1]))
-                    }
-                }
-            }
-            val range = eq0.bandLevelRange
-            if (range != null && range.size >= 2) {
-                minDb = range[0] / 100f
-                maxDb = range[1] / 100f
-            }
-            eq0.release()
-        } catch (_: Throwable) {
-            global0Ok = false
-        }
-
-        if (centers.isEmpty() && internalReferenceSessionId > 0) {
+        if (!hardwareProbedOnce && activeBundles.isEmpty()) {
+            hardwareProbedOnce = true
+            val centers = mutableListOf<Int>()
+            val freqRanges = mutableListOf<IntArray>()
             try {
-                val eqTest = Equalizer(0, internalReferenceSessionId)
-                val count = eqTest.numberOfBands.toInt()
+                val eq0 = Equalizer(0, 0)
+                cachedGlobal0Ok = true
+                val count = eq0.numberOfBands.toInt()
                 if (count > 0) {
-                    nativeBands = count
+                    cachedNativeBands = count
                     for (b in 0 until count) {
-                        centers.add((eqTest.getCenterFreq(b.toShort()) / 1000))
-                        val r = eqTest.getBandFreqRange(b.toShort())
+                        centers.add((eq0.getCenterFreq(b.toShort()) / 1000))
+                        val r = eq0.getBandFreqRange(b.toShort())
                         if (r != null && r.size >= 2) {
                             freqRanges.add(intArrayOf(r[0], r[1]))
                         }
                     }
                 }
-                val range = eqTest.bandLevelRange
+                val range = eq0.bandLevelRange
                 if (range != null && range.size >= 2) {
-                    minDb = range[0] / 100f
-                    maxDb = range[1] / 100f
+                    cachedMinDb = range[0] / 100f
+                    cachedMaxDb = range[1] / 100f
                 }
-                eqTest.release()
+                eq0.release()
             } catch (_: Throwable) {
+                cachedGlobal0Ok = false
             }
-        }
 
-        if (centers.isEmpty()) {
-            centers.addAll(listOf(60, 230, 910, 3600, 14000))
-        }
-        if (freqRanges.isEmpty()) {
-            freqRanges.addAll(
-                listOf(
-                    intArrayOf(30_000, 120_000),
-                    intArrayOf(120_001, 460_000),
-                    intArrayOf(460_001, 1_800_000),
-                    intArrayOf(1_800_001, 7_000_000),
-                    intArrayOf(7_000_001, 20_000_000)
-                )
-            )
-        }
+            if (centers.isNotEmpty()) {
+                cachedCentersHz.clear()
+                cachedCentersHz.addAll(centers)
+            }
+            if (freqRanges.isNotEmpty()) {
+                cachedFreqRanges.clear()
+                cachedFreqRanges.addAll(freqRanges)
+            }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val testSession = if (internalReferenceSessionId > 0) internalReferenceSessionId else 0
-            val candidates = if (compatibility10Band) intArrayOf(10) else intArrayOf(31, 20, 10)
-            for (c in candidates) {
-                try {
-                    val cfg = DynamicsProcessing.Config.Builder(
-                        DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
-                        2,
-                        true, c,
-                        true, 6,
-                        false, 0,
-                        true
-                    ).build()
-                    val dp = DynamicsProcessing(0, testSession, cfg)
-                    dpOk = true
-                    dpBandCount = c
-                    dp.release()
-                    break
-                } catch (_: Throwable) {
-                    dpOk = false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val testSession = if (internalReferenceSessionId > 0) internalReferenceSessionId else 0
+                val candidates = if (compatibility10Band) intArrayOf(10) else intArrayOf(31, 20, 10)
+                for (c in candidates) {
+                    var dp: DynamicsProcessing? = null
+                    try {
+                        val cfg = DynamicsProcessing.Config.Builder(
+                            DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
+                            2,
+                            true, c,
+                            true, 6,
+                            false, 0,
+                            true
+                        ).build()
+                        dp = DynamicsProcessing(0, testSession, cfg)
+                        val probeBand = DynamicsProcessing.EqBand(true, EqMath.RENDER_31_CUTOFF_HZ[0], 0f)
+                        dp.setPreEqBandAllChannelsTo(0, probeBand)
+                        cachedDpOk = true
+                        cachedDpBandCount = c
+                        dp.release()
+                        dp = null
+                        break
+                    } catch (_: Throwable) {
+                        try { dp?.release() } catch (_: Throwable) {}
+                        cachedDpOk = false
+                    }
+                }
+            }
+
+            val probeVirt = VirtualizerFx(if (internalReferenceSessionId > 0) internalReferenceSessionId else 0)
+            cachedVirtSupported = probeVirt.supported(isSmallRoute)
+            probeVirt.release()
+        } else if (internalReferenceSessionId > 0 &&
+            !probedPositiveSessionOnce &&
+            !activeBundles.containsKey(internalReferenceSessionId)
+        ) {
+            probedPositiveSessionOnce = true
+            if (!cachedDpOk && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val candidates = if (compatibility10Band) intArrayOf(10) else intArrayOf(31, 20, 10)
+                for (c in candidates) {
+                    var dp: DynamicsProcessing? = null
+                    try {
+                        val cfg = DynamicsProcessing.Config.Builder(
+                            DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
+                            2,
+                            true, c,
+                            true, 6,
+                            false, 0,
+                            true
+                        ).build()
+                        dp = DynamicsProcessing(0, internalReferenceSessionId, cfg)
+                        val probeBand = DynamicsProcessing.EqBand(true, EqMath.RENDER_31_CUTOFF_HZ[0], 0f)
+                        dp.setPreEqBandAllChannelsTo(0, probeBand)
+                        cachedDpOk = true
+                        cachedDpBandCount = c
+                        dp.release()
+                        dp = null
+                        break
+                    } catch (_: Throwable) {
+                        try { dp?.release() } catch (_: Throwable) {}
+                    }
                 }
             }
         }
+
+        // If any active MasterEqController is running Tier 2 DP, reflect that in cachedDpOk
+        val anyActiveDp = activeBundles.values.any {
+            it.masterController.activeMode != OperatingMode.LEGACY_TIER1_NATIVE
+        }
+        if (anyActiveDp) {
+            cachedDpOk = true
+        } else if (activeBundles.isNotEmpty() && activeBundles.values.all {
+                it.masterController.activeMode == OperatingMode.LEGACY_TIER1_NATIVE
+            }) {
+            cachedDpOk = false
+        }
+
+        val nativeBands = cachedNativeBands
+        val centers = cachedCentersHz.toList()
+        val freqRanges = cachedFreqRanges.toList()
+        val minDb = cachedMinDb
+        val maxDb = cachedMaxDb
+        val global0Ok = cachedGlobal0Ok
+        val dpOk = cachedDpOk
+        val dpBandCount = if (compatibility10Band) 10 else cachedDpBandCount
 
         val dumpGranted = ContextCompat.checkSelfPermission(
             context,
@@ -354,16 +396,10 @@ class AudioEngineController(private val context: Context) {
         val devKey = buildCurrentDeviceKey(audioManager)
         val bitPerfectSupported = UsbBitPerfectHelper.isBitPerfectSupported(audioManager)
         val btCodec = if (dumpGranted || hasSu) readBluetoothCodecFromDumpsys(hasSu) else null
-        val isSmallRoute = getCurrentRoute() == OutputRoute.SPEAKER
 
         val virtSupported = activeBundles.values.firstNotNullOfOrNull { it.virtualizerFx }
             ?.supported(isSmallRoute)
-            ?: run {
-                val probeVirt = VirtualizerFx(if (internalReferenceSessionId > 0) internalReferenceSessionId else 0)
-                val ok = probeVirt.supported(isSmallRoute)
-                probeVirt.release()
-                ok
-            }
+            ?: cachedVirtSupported
         val avgWriteMs = activeBundles.values.mapNotNull { it.v5Engine?.writeCostMs() }
             .filter { it > 0.0 }
             .takeIf { it.isNotEmpty() }
@@ -719,10 +755,10 @@ class AudioEngineController(private val context: Context) {
 
         val preferredOpMode = resolvePreferredOperatingMode()
         val masterController = MasterEqController(sessionId)
-        masterController.start(preferredOpMode)
+        val actualMode = masterController.start(preferredOpMode)
 
         var v5Engine: EqEngine? = null
-        if (compatibility10Band || transientMode) {
+        if ((compatibility10Band || transientMode) && actualMode == OperatingMode.LEGACY_TIER1_NATIVE) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val candidate = EqEngine(
                     sessionId = sessionId,
@@ -735,29 +771,15 @@ class AudioEngineController(private val context: Context) {
             }
         }
 
-        val eq: Equalizer? = try {
-            Equalizer(0, sessionId)
-        } catch (_: Throwable) {
-            null
-        }
-
-        val bbFx = BassBoostFx(sessionId)
+        val bbFx = if (actualMode == OperatingMode.LEGACY_TIER1_NATIVE) BassBoostFx(sessionId) else null
         val virtFx = VirtualizerFx(sessionId)
-
-        val le: LoudnessEnhancer? = try {
-            LoudnessEnhancer(sessionId)
-        } catch (_: Throwable) {
-            null
-        }
 
         activeBundles[sessionId] = SessionEffectBundle(
             sessionId = sessionId,
             masterController = masterController,
             v5Engine = v5Engine,
-            equalizer = eq,
             bassBoostFx = bbFx,
-            virtualizerFx = virtFx,
-            loudnessEnhancer = le
+            virtualizerFx = virtFx
         )
     }
 
@@ -797,7 +819,6 @@ class AudioEngineController(private val context: Context) {
             }
 
             if (bundle.masterController.activeMode != OperatingMode.LEGACY_TIER1_NATIVE) {
-                try { bundle.equalizer?.enabled = false } catch (_: Throwable) {}
                 bundle.bassBoostFx?.apply(0.0, enabledGate = false)
                 bundle.virtualizerFx?.apply(surroundAmount, small = isSmallSpeaker, enabledGate = activeGate)
             } else {
@@ -807,13 +828,6 @@ class AudioEngineController(private val context: Context) {
                 )
                 bundle.bassBoostFx?.apply(deepBassAmount, enabledGate = activeGate)
                 bundle.virtualizerFx?.apply(surroundAmount, small = isSmallSpeaker, enabledGate = activeGate)
-            }
-
-            bundle.loudnessEnhancer?.let { le ->
-                try {
-                    le.enabled = false
-                    le.setTargetGain(0)
-                } catch (_: Throwable) {}
             }
         }
     }

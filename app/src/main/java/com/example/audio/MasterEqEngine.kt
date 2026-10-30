@@ -830,6 +830,9 @@ class MasterEqController(private val sessionId: Int) {
     private val writtenMbc = FloatArray(6) { Float.NaN }
 
     @Volatile
+    private var hasEffectControl: Boolean = true
+
+    @Volatile
     var inputGainDb: Float = -3.0f
         private set
 
@@ -865,6 +868,7 @@ class MasterEqController(private val sessionId: Int) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
             preferredMode != OperatingMode.LEGACY_TIER1_NATIVE
         ) {
+            var candidateEngine: DynamicsProcessing? = null
             try {
                 val cfg = DynamicsProcessing.Config.Builder(
                     DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
@@ -875,7 +879,8 @@ class MasterEqController(private val sessionId: Int) {
                     true
                 ).build()
                 val engine = DynamicsProcessing(0, sessionId, cfg)
-                preEq = DynamicsProcessing.Eq(true, true, 31).apply {
+                candidateEngine = engine
+                val initPreEq = DynamicsProcessing.Eq(true, true, 31).apply {
                     for (i in 0 until 31) {
                         val b = getBand(i)
                         b.isEnabled = true
@@ -884,7 +889,7 @@ class MasterEqController(private val sessionId: Int) {
                         setBand(i, b)
                     }
                 }
-                mbc = DynamicsProcessing.Mbc(true, true, 6).apply {
+                val initMbc = DynamicsProcessing.Mbc(true, true, 6).apply {
                     for (i in 0 until 6) {
                         val b = getBand(i)
                         b.isEnabled = true
@@ -895,30 +900,98 @@ class MasterEqController(private val sessionId: Int) {
                         setBand(i, b)
                     }
                 }
-                engine.setPreEqAllChannelsTo(preEq)
-                engine.setMbcAllChannelsTo(mbc)
+                engine.setPreEqAllChannelsTo(initPreEq)
+                engine.setMbcAllChannelsTo(initMbc)
+                // Probe single-band parameter updates so any HAL rejection on sessionId (e.g. session 0) is caught immediately
+                engine.setPreEqBandAllChannelsTo(0, initPreEq.getBand(0))
+                engine.setMbcBandAllChannelsTo(0, initMbc.getBand(0))
+                engine.setInputGainAllChannelsTo(inputGainDb)
                 engine.enabled = true
-                dp = engine
+
                 try {
-                    virtualizer = Virtualizer(0, sessionId)
+                    engine.setControlStatusListener { _, controlGranted ->
+                        hasEffectControl = controlGranted
+                        if (controlGranted) {
+                            handler.post {
+                                written31.fill(Float.NaN)
+                                writtenMbc.fill(Float.NaN)
+                                applyTargetsAndSchedule(activeState, recomputeMbc = true, glideMs = 60.0)
+                            }
+                        }
+                    }
                 } catch (_: Throwable) {
                 }
+
+                preEq = initPreEq
+                mbc = initMbc
+                dp = engine
+                hasEffectControl = true
+                initVirtualizerOnly()
                 activeMode = preferredMode
                 return activeMode
             } catch (_: Throwable) {
+                try {
+                    candidateEngine?.release()
+                } catch (_: Throwable) {
+                }
+                dp = null
+                preEq = null
+                mbc = null
                 // Fall through to Legacy Tier 1
             }
         }
 
-        // Legacy Tier 1 Fallback (5-Band Native Equalizer + BassBoost + Virtualizer)
-        try {
-            nativeEq = Equalizer(0, sessionId)?.apply { enabled = true }
-            bassBoost = BassBoost(0, sessionId)?.apply { enabled = true }
-            virtualizer = Virtualizer(0, sessionId)?.apply { enabled = true }
-        } catch (_: Throwable) {
-        }
+        initTier1Fallback()
         activeMode = OperatingMode.LEGACY_TIER1_NATIVE
         return activeMode
+    }
+
+    private fun initVirtualizerOnly() {
+        if (virtualizer == null) {
+            try {
+                virtualizer = Virtualizer(0, sessionId)
+            } catch (_: Throwable) {
+                virtualizer = null
+            }
+        }
+    }
+
+    private fun initTier1Fallback() {
+        if (nativeEq == null) {
+            try {
+                nativeEq = Equalizer(0, sessionId)?.apply { enabled = true }
+            } catch (_: Throwable) {
+                nativeEq = null
+            }
+        }
+        if (bassBoost == null) {
+            try {
+                bassBoost = BassBoost(0, sessionId)?.apply { enabled = true }
+            } catch (_: Throwable) {
+                bassBoost = null
+            }
+        }
+        if (virtualizer == null) {
+            try {
+                virtualizer = Virtualizer(0, sessionId)?.apply { enabled = true }
+            } catch (_: Throwable) {
+                virtualizer = null
+            }
+        }
+    }
+
+    private fun fallbackToTier1OnError(state: EngineState) {
+        handler.removeCallbacks(tickRunnable)
+        try {
+            dp?.release()
+        } catch (_: Throwable) {
+        }
+        dp = null
+        preEq = null
+        mbc = null
+        activeMode = OperatingMode.LEGACY_TIER1_NATIVE
+        initTier1Fallback()
+        applyTier1Fallback(state)
     }
 
     /**
@@ -972,37 +1045,50 @@ class MasterEqController(private val sessionId: Int) {
             return
         }
 
-        engine.enabled = state.enabled && !state.flatBypass
-        if (recomputeMbc && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            engine.setInputGainAllChannelsTo(if (state.flatBypass) 0f else inputGainDb)
-            engine.setLimiterAllChannelsTo(
-                DynamicsProcessing.Limiter(
-                    true,
-                    true,
-                    0,
-                    1f,
-                    50f,
-                    20f,
-                    state.route.limiterThresholdDb,
-                    0f
+        if (!hasEffectControl) {
+            return
+        }
+
+        try {
+            engine.enabled = state.enabled && !state.flatBypass
+            if (recomputeMbc && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                engine.setInputGainAllChannelsTo(if (state.flatBypass) 0f else inputGainDb)
+                engine.setLimiterAllChannelsTo(
+                    DynamicsProcessing.Limiter(
+                        true,
+                        true,
+                        0,
+                        1f,
+                        50f,
+                        20f,
+                        state.route.limiterThresholdDb,
+                        0f
+                    )
                 )
-            )
-            val m = mbc
-            if (m != null) {
-                val levelerShift = if (state.profile.levelerOn) 1.5f else 0.0f
-                for (i in 0 until 6) {
-                    val meanBoost = max(0.0, EqMath.MBC_RANGES[i].map { eff31[it] }.average()).toFloat()
-                    val b = m.getBand(i)
-                    b.attackTime = state.mbc.attackMs[i]
-                    b.releaseTime = state.mbc.releaseMs[i]
-                    b.ratio = state.mbc.ratio[i]
-                    b.threshold = state.mbc.baseThresholdDb[i] + meanBoost - levelerShift
-                    b.kneeWidth = state.mbc.kneeDb[i]
-                    b.postGain = makeupDb
-                    m.setBand(i, b)
+                val m = mbc
+                if (m != null) {
+                    val levelerShift = if (state.profile.levelerOn) 1.5f else 0.0f
+                    for (i in 0 until 6) {
+                        val meanBoost = max(0.0, EqMath.MBC_RANGES[i].map { eff31[it] }.average()).toFloat()
+                        val b = m.getBand(i)
+                        b.attackTime = state.mbc.attackMs[i]
+                        b.releaseTime = state.mbc.releaseMs[i]
+                        b.ratio = state.mbc.ratio[i]
+                        b.threshold = state.mbc.baseThresholdDb[i] + meanBoost - levelerShift
+                        b.kneeWidth = state.mbc.kneeDb[i]
+                        b.postGain = makeupDb
+                        m.setBand(i, b)
+                        writtenMbc[i] = b.threshold
+                    }
+                    engine.setMbcAllChannelsTo(m)
                 }
-                engine.setMbcAllChannelsTo(m)
             }
+        } catch (_: Throwable) {
+            fallbackToTier1OnError(state)
+            return
+        }
+
+        if (recomputeMbc) {
             try {
                 virtualizer?.let { v ->
                     v.enabled = state.enabled && state.profile.virtualizerStrength > 0
@@ -1025,6 +1111,7 @@ class MasterEqController(private val sessionId: Int) {
             val engine = dp ?: return
             val eq = preEq ?: return
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
+            if (!hasEffectControl) return
 
             val now = System.nanoTime()
             val dt = ((now - lastTickNs) / 1e9).coerceIn(0.001, 0.1)
@@ -1032,46 +1119,69 @@ class MasterEqController(private val sessionId: Int) {
             val alpha = 1.0f - exp(-dt / tauSec).toFloat()
 
             var moving = false
-            for (i in 0 until 31) {
-                val diff = target31[i] - current31[i]
-                if (abs(diff) > 0.03f) {
-                    current31[i] += diff * alpha
-                    moving = true
-                } else {
-                    current31[i] = target31[i]
-                }
+            var anyEqBandChanged = false
+            try {
+                for (i in 0 until 31) {
+                    val diff = target31[i] - current31[i]
+                    if (abs(diff) > 0.03f) {
+                        current31[i] += diff * alpha
+                        moving = true
+                    } else {
+                        current31[i] = target31[i]
+                    }
 
-                if (written31[i].isNaN() ||
-                    abs(current31[i] - written31[i]) > 0.08f ||
-                    (!moving && current31[i] != written31[i])
-                ) {
-                    val b = eq.getBand(i).apply { gain = current31[i] }
-                    eq.setBand(i, b)
-                    engine.setPreEqBandAllChannelsTo(i, b)
-                    written31[i] = current31[i]
-                }
-            }
-
-            // Update MBC thresholds continuously if slider boost changed by > 0.25 dB
-            val m = mbc
-            if (m != null) {
-                val levelerShift = if (activeState.profile.levelerOn) 1.5f else 0.0f
-                for (i in 0 until 6) {
-                    val meanBoost = max(0.0f, EqMath.MBC_RANGES[i].map { current31[it] }.average().toFloat())
-                    val thr = activeState.mbc.baseThresholdDb[i] + meanBoost - levelerShift
-                    if (writtenMbc[i].isNaN() || abs(thr - writtenMbc[i]) > 0.25f) {
-                        val b = m.getBand(i).apply {
-                            threshold = thr
-                            postGain = makeupDb
+                    if (written31[i].isNaN() ||
+                        abs(current31[i] - written31[i]) > 0.08f ||
+                        (!moving && current31[i] != written31[i])
+                    ) {
+                        val b = eq.getBand(i).apply { gain = current31[i] }
+                        eq.setBand(i, b)
+                        try {
+                            engine.setPreEqBandAllChannelsTo(i, b)
+                        } catch (_: UnsupportedOperationException) {
+                            anyEqBandChanged = true
                         }
-                        m.setBand(i, b)
-                        engine.setMbcBandAllChannelsTo(i, b)
-                        writtenMbc[i] = thr
+                        written31[i] = current31[i]
                     }
                 }
+                if (anyEqBandChanged) {
+                    engine.setPreEqAllChannelsTo(eq)
+                }
+
+                // Update MBC thresholds continuously if slider boost changed by > 0.25 dB
+                val m = mbc
+                if (m != null) {
+                    var anyMbcBandChanged = false
+                    val levelerShift = if (activeState.profile.levelerOn) 1.5f else 0.0f
+                    for (i in 0 until 6) {
+                        val meanBoost = max(0.0f, EqMath.MBC_RANGES[i].map { current31[it] }.average().toFloat())
+                        val thr = activeState.mbc.baseThresholdDb[i] + meanBoost - levelerShift
+                        if (writtenMbc[i].isNaN() || abs(thr - writtenMbc[i]) > 0.25f) {
+                            val b = m.getBand(i).apply {
+                                threshold = thr
+                                postGain = makeupDb
+                            }
+                            m.setBand(i, b)
+                            try {
+                                engine.setMbcBandAllChannelsTo(i, b)
+                            } catch (_: UnsupportedOperationException) {
+                                anyMbcBandChanged = true
+                            }
+                            writtenMbc[i] = thr
+                        }
+                    }
+                    if (anyMbcBandChanged) {
+                        engine.setMbcAllChannelsTo(m)
+                    }
+                }
+            } catch (_: Throwable) {
+                fallbackToTier1OnError(activeState)
+                return
             }
 
-            if (moving) handler.postDelayed(this, 30L)
+            if (moving && dp != null) {
+                handler.postDelayed(this, 30L)
+            }
         }
     }
 
@@ -1085,10 +1195,16 @@ class MasterEqController(private val sessionId: Int) {
                     eq.setBandLevel(b.toShort(), mb)
                 }
             }
+        } catch (_: Throwable) {
+        }
+        try {
             bassBoost?.let { bb ->
                 bb.enabled = s.enabled && !s.flatBypass && s.tier1BassBoost > 0
                 if (bb.strengthSupported) bb.setStrength(s.tier1BassBoost)
             }
+        } catch (_: Throwable) {
+        }
+        try {
             virtualizer?.let { v ->
                 v.enabled = s.enabled && !s.flatBypass && s.profile.virtualizerStrength > 0
                 if (v.strengthSupported) v.setStrength(s.profile.virtualizerStrength)
@@ -1099,6 +1215,7 @@ class MasterEqController(private val sessionId: Int) {
 
     fun release() {
         handler.post {
+            handler.removeCallbacks(tickRunnable)
             try {
                 dp?.release()
             } catch (_: Throwable) {
@@ -1116,6 +1233,11 @@ class MasterEqController(private val sessionId: Int) {
             } catch (_: Throwable) {
             }
             oemBridge?.release()
+            dp = null
+            nativeEq = null
+            bassBoost = null
+            virtualizer = null
+            oemBridge = null
             thread.quitSafely()
         }
     }

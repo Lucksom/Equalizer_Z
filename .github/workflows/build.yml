@@ -100,7 +100,6 @@ jobs:
             -Dorg.gradle.vfs.watch=true \
             -Djava.awt.headless=true \
             -Pkotlin.compiler.execution.strategy=daemon \
-            -Pksp.useKSP2=true \
             -x lint \
             -x lintVitalRelease \
             -x test
@@ -135,10 +134,10 @@ jobs:
           body: |
             ### Audio EQ Android Release (`${{ steps.prepare_apk.outputs.tag_name }}`)
             - **Commit**: `${{ github.sha }}` (Run #${{ github.run_number }}.${{ github.run_attempt }})
-            - **10-Band Master Equalizer**: Bass (20–250 Hz), Mids (250 Hz–4 kHz), Treble (4–12 kHz), Air (12–20 kHz)
-            - **Mid/Side Stereo Width**: Linkwitz-Riley 4th-order crossovers + sub-60 Hz mono protection
-            - **Presets**: Flat, Balanced Deep, Bass Boost, Vocal Clarity, Percussion Clarity (Tabla tuned), Custom
-            - **4 Engine Modes**: Legacy, Global, ADB/Shizuku, and Root DSP
+            - **Master Equalizer Engine (v6)**: 10-Band UI (`31 Hz–16 kHz`) mapped to 31-Band ISO Third-Octave DSP (`20 Hz–20 kHz`) and 20-Band Bark/ERB (`47 Hz–19,688 Hz`)
+            - **Acoustic Profiles & Enhancers**: Dynamic, Movie, Music, Voice + Deeper Bass, Surround Audio, Enhance Beats, Enhance Vocal
+            - **Presets**: Flat, Balanced Deep, Bass Boost, Vocal Clarity, Percussion Clarity (Tabla tuned), plus Custom SQLite (`equalizer.db`) presets
+            - **3 Engine Modes**: Legacy (Global AudioSession 0), ADB/Shizuku (31-band DynamicsProcessing + OEM DAX reflection), and Root (RAM-only helper)
           files: ${{ steps.prepare_apk.outputs.apk_path }}
           draft: false
           prerelease: false
