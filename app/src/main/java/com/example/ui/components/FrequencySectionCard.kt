@@ -87,8 +87,12 @@ fun UnifiedEqualizerCard(
     presets: List<PresetConfig>,
     selectedPresetId: String,
     targetGainsDb: List<Float>,
+    splitLREnabled: Boolean = false,
+    editingRightChannel: Boolean = false,
     intensity: Float,
     volumeContourEnabled: Boolean,
+    nightModeEnabled: Boolean = false,
+    usbBitPerfectActive: Boolean = false,
     isAbCompare: Boolean,
     activeRoute: OutputRoute,
     inputGainDb: Float,
@@ -98,10 +102,13 @@ fun UnifiedEqualizerCard(
     isEnabled: Boolean,
     onSelectPreset: (PresetConfig) -> Unit,
     onDeleteCustomPreset: (String) -> Unit,
+    onSelectEditingChannel: (Boolean) -> Unit = {},
     onBandGainChange: (Int, Float) -> Unit,
     onIntensityChange: (Float) -> Unit,
     onToggleVolumeContour: (Boolean) -> Unit,
+    onToggleNightMode: (Boolean) -> Unit = {},
     onToggleAbCompare: (Boolean) -> Unit,
+    onOpenAbxTest: () -> Unit = {},
     onOpenCalibration: () -> Unit,
     onToggleEnabled: (Boolean) -> Unit,
     onResetFlat: () -> Unit,
@@ -152,14 +159,14 @@ fun UnifiedEqualizerCard(
     }
 
     val bandsAlpha by animateFloatAsState(
-        targetValue = if (isEnabled && !isAbCompare) 1f else 0.45f,
+        targetValue = if (isEnabled && !isAbCompare && !usbBitPerfectActive) 1f else 0.45f,
         animationSpec = tween(250),
         label = "bandsAlpha"
     )
 
     // Graph shows user × intensity when active, or flat when A/B compare is held
-    val graphDisplayGains = remember(displayGains.toList(), intensity, isAbCompare) {
-        if (isAbCompare) {
+    val graphDisplayGains = remember(displayGains.toList(), intensity, isAbCompare, usbBitPerfectActive) {
+        if (isAbCompare || usbBitPerfectActive) {
             List(10) { 0f }
         } else {
             displayGains.map { (it * intensity).coerceIn(-12f, 12f) }
@@ -196,14 +203,18 @@ fun UnifiedEqualizerCard(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "Route: ${activeRoute.label} · In ${String.format(Locale.US, "%.1f", inputGainDb)} dB · Makeup +${String.format(Locale.US, "%.1f", makeupGainDb)} dB",
+                        text = if (usbBitPerfectActive) {
+                            "Route: ${activeRoute.label} · Bit-perfect ON, EQ off"
+                        } else {
+                            "Route: ${activeRoute.label} · In ${String.format(Locale.US, "%.1f", inputGainDb)} dB · Makeup +${String.format(Locale.US, "%.1f", makeupGainDb)} dB"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1
                     )
                 }
 
-                // v4 Section 3 Headroom Meter (ceilingLoad = max(0, max(effective) - 3) dB, warn > 4 dB)
+                // v5 Section 3 Headroom Meter (ceilingLoad = max(0, max(effective) - 3) dB, warn > 4 dB)
                 val isCeilingWarn = ceilingLoadDb > 4.0f
                 val meterBg by animateColorAsState(
                     targetValue = if (isCeilingWarn) {
@@ -277,12 +288,47 @@ fun UnifiedEqualizerCard(
             // Response Graph (matching equalizer.html .graph)
             FrequencyResponseGraph(
                 displayGainsDb = graphDisplayGains,
-                isEnabled = isEnabled
+                isEnabled = isEnabled && !usbBitPerfectActive
             )
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // v4 Section 2 True Category Boundaries Strip:
+            // Optional Independent Left / Right Channel Selector when Split L/R EQ is enabled (v5 Section 17.2 F4)
+            if (splitLREnabled) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf("Left Channel (L)" to false, "Right Channel (R)" to true).forEach { (label, isRight) ->
+                        val selected = editingRightChannel == isRight
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { onSelectEditingChannel(isRight) }
+                                .testTag("channel_tab_${if (isRight) "right" else "left"}"),
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
+                        ) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(vertical = 6.dp),
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+            }
+
+            // v5 Section 2 True Category Boundaries Strip:
             // Bass (20–350 Hz) | Mids (350 Hz–2.8 kHz) | Treble (2.8–11 kHz) | Air (11–20 kHz)
             Row(
                 modifier = Modifier
@@ -345,7 +391,7 @@ fun UnifiedEqualizerCard(
                         FluidVerticalBandSlider(
                             band = band,
                             gainDb = gain,
-                            enabled = isEnabled,
+                            enabled = isEnabled && !usbBitPerfectActive,
                             onDragStateChange = { isDragging ->
                                 draggingBands[band.index] = isDragging
                             },
@@ -361,7 +407,7 @@ fun UnifiedEqualizerCard(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // v4 Section 4.2, 7 & 10: Ordered Intensity Macro, Volume Contour, A/B Compare & Sound Calibration Card
+            // v5 Section 4.2, 7, 10 & 17: Ordered Intensity Macro, Volume Contour, Night Mode, A/B Compare, Blind ABX & Sound Calibration Card
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 color = MaterialTheme.colorScheme.surface
@@ -370,7 +416,7 @@ fun UnifiedEqualizerCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     // 1. Intensity Header + 3 Equal-Width Mode Chips
                     Column(
@@ -488,7 +534,46 @@ fun UnifiedEqualizerCard(
                         }
                     }
 
-                    // 3. Two Equal-Width Action Buttons: A/B Compare & Sound Calibration
+                    // 3. Night Mode (F8: Lower ceiling thresholds & higher ratios for quiet listening)
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(end = 12.dp)
+                            ) {
+                                Text(
+                                    text = "Night Mode (Quiet Ceilings)",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = "Lowers 6-band ceiling thresholds (-6 dB) without peaks",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
+                            Switch(
+                                checked = nightModeEnabled,
+                                onCheckedChange = onToggleNightMode,
+                                modifier = Modifier.testTag("night_mode_switch")
+                            )
+                        }
+                    }
+
+                    // 4. Two Equal-Width Action Buttons: A/B Compare & Sound Calibration
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -554,6 +639,22 @@ fun UnifiedEqualizerCard(
                                 maxLines = 1
                             )
                         }
+                    }
+
+                    // 5. Blind ABX Tool Launcher (v5 Section 17.2 F6)
+                    OutlinedButton(
+                        onClick = onOpenAbxTest,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .testTag("open_abx_test_button")
+                    ) {
+                        Text(
+                            text = "Blind ABX Listening Test (A vs B vs Hidden X)",
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1
+                        )
                     }
                 }
             }

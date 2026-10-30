@@ -22,17 +22,15 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Public
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -58,19 +56,20 @@ import com.example.model.EngineMode
 import com.example.model.ModeStatusInfo
 
 /**
- * Top Horizontal Engine Mode Selector Bar with 3 profiles:
+ * Top Horizontal Engine Mode Selector Bar with 3 profiles (v5 APK-only):
  * 1. Legacy (Works globally without ADB, Shizuku, or Root)
  * 2. ADB / Shizuku
- * 3. Root
+ * 3. Root (APK-only su helper: session discovery, start-on-boot, codec readout & BT absolute-volume control)
  */
 @Composable
 fun ModeSelectorCard(
     selectedMode: EngineMode,
     activeStatus: ModeStatusInfo,
     diagnostics: DeviceDiagnostics,
+    startOnBoot: Boolean,
     onSelectMode: (EngineMode) -> Unit,
-    onBackupRootConfig: () -> Unit,
-    onRestoreRootConfig: () -> Unit,
+    onToggleStartOnBoot: (Boolean) -> Unit,
+    onToggleRootBtAbsVol: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showSetupDetails by remember { mutableStateOf(false) }
@@ -102,7 +101,11 @@ fun ModeSelectorCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = if (diagnostics.dynamicsProcessingSupported) "10-Band Global Ready" else "${diagnostics.nativeEqBandCount}-Band Native",
+                    text = if (diagnostics.dynamicsProcessingSupported) {
+                        "${diagnostics.activeRenderBandCount}-Band PCHIP Ready"
+                    } else {
+                        "Basic Engine (${diagnostics.nativeEqBandCount}-Band)"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -247,41 +250,54 @@ fun ModeSelectorCard(
                         }
 
                         if (selectedMode == EngineMode.ROOT) {
-                            Row(
+                            Column(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Start on Boot (Root Helper)",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "Launches APK-only su helper automatically at device boot",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Switch(
+                                        checked = startOnBoot,
+                                        onCheckedChange = onToggleStartOnBoot,
+                                        modifier = Modifier.testTag("root_start_on_boot_switch")
+                                    )
+                                }
+
                                 FilledTonalButton(
-                                    onClick = onBackupRootConfig,
+                                    onClick = { onToggleRootBtAbsVol(!diagnostics.btDisableAbsVolActive) },
                                     modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("backup_root_config_button")
+                                        .fillMaxWidth()
+                                        .testTag("root_bt_abs_vol_button")
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = "Backup config",
+                                        contentDescription = "Bluetooth Absolute Volume",
                                         modifier = Modifier.size(16.dp)
                                     )
                                     Spacer(modifier = Modifier.size(6.dp))
-                                    Text(if (diagnostics.backupExists) "Update Backup" else "Backup & Stage")
-                                }
-
-                                OutlinedButton(
-                                    onClick = onRestoreRootConfig,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("restore_root_config_button"),
-                                    colors = ButtonDefaults.outlinedButtonColors(
-                                        contentColor = MaterialTheme.colorScheme.error
+                                    Text(
+                                        text = if (diagnostics.btDisableAbsVolActive) {
+                                            "BT Absolute Volume Disabled (Contour Active)"
+                                        } else {
+                                            "Disable BT Absolute Volume via su"
+                                        },
+                                        maxLines = 1
                                     )
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Refresh,
-                                        contentDescription = "Restore stock config",
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.size(6.dp))
-                                    Text("Restore Stock")
                                 }
                             }
                         }
@@ -325,7 +341,7 @@ private fun HorizontalModePill(
     val subLabel = when (mode) {
         EngineMode.LEGACY -> "Global · No ADB/Root"
         EngineMode.ADB_SHIZUKU -> "All Sessions"
-        EngineMode.ROOT -> "Deep DSP"
+        EngineMode.ROOT -> "APK-Only su"
     }
 
     Column(

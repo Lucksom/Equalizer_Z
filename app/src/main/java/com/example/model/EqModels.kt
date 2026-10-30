@@ -116,7 +116,7 @@ enum class EngineMode(
         id = "root",
         title = "Root",
         shortTitle = "Root",
-        subtitle = "Deep Biquad DSP optimization, bass harmonic enhancer, and stream-level audio session capture."
+        subtitle = "APK-only su helper: global session discovery, start-on-boot, codec readout & BT absolute-volume control (no flashing)."
     )
 }
 
@@ -229,7 +229,43 @@ data class HeadphoneProfile(
     val source: String,
     val license: String,
     val preampDb: Float,
-    val filters: List<ParametricCorrectionFilter>
+    val filters: List<ParametricCorrectionFilter>,
+    val rig: String? = null,
+    val autoEqPath: String? = null,
+    val rawText: String? = null,
+    val isApproximation: Boolean = false
+)
+
+/**
+ * Per-device profile memory (v5 Section 16.6 & 17.2 F2):
+ * Keyed by `route + productName (+ address if available)` and auto-restored within 300 ms on connect.
+ */
+data class DeviceProfileMemory(
+    val deviceKey: String,
+    val routeId: String,
+    val productName: String,
+    val profileId: String,
+    val profileName: String,
+    val profileSource: String,
+    val autoEqPath: String,
+    val rawPeqOrGraphicText: String,
+    val strength: Float = 0.8f,
+    val fullRange: Boolean = false,
+    val presetId: String = "percussion_clarity",
+    val intensity: Float = 1.0f,
+    val tiltBassDb: Float = 0.0f,
+    val tiltTrebleDb: Float = 0.0f
+)
+
+/**
+ * Personal Hearing Curve (v5 Section 17.2 F5):
+ * Per-ear offsets at 6 test frequencies (250, 500, 1k, 2k, 4k, 8k Hz), capped at ±6 dB, strength 0.5.
+ */
+data class PersonalHearingCurve(
+    val enabled: Boolean = false,
+    val leftEarDb: List<Float> = listOf(0f, 0f, 0f, 0f, 0f, 0f),  // 250, 500, 1k, 2k, 4k, 8k Hz
+    val rightEarDb: List<Float> = listOf(0f, 0f, 0f, 0f, 0f, 0f), // 250, 500, 1k, 2k, 4k, 8k Hz
+    val strength: Float = 0.5f
 )
 
 object EqConstants {
@@ -458,8 +494,22 @@ object EqConstants {
         )
     )
 
-    fun mbcForPreset(preset: PresetConfig?): MbcConfig {
-        return preset?.mbcOverride ?: DEFAULT_MBC_CONFIG
+    val HEARING_TEST_FREQS_HZ = doubleArrayOf(250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0)
+
+    /**
+     * Returns 6-band MBC config for the preset, optionally applying Night Mode (v5 Section 17.2 F8):
+     * Night mode lowers the 6 ceiling thresholds (-6 dB) and raises the ratios (+1.5), keeping makeup unchanged.
+     */
+    fun mbcForPreset(preset: PresetConfig?, nightMode: Boolean = false): MbcConfig {
+        val base = preset?.mbcOverride ?: DEFAULT_MBC_CONFIG
+        if (!nightMode) return base
+        return MbcConfig(
+            attackMs = base.attackMs.clone(),
+            releaseMs = base.releaseMs.clone(),
+            ratio = FloatArray(6) { (base.ratio[it] + 1.5f).coerceAtMost(8.0f) },
+            baseThresholdDb = FloatArray(6) { base.baseThresholdDb[it] - 6.0f },
+            kneeDb = base.kneeDb.clone()
+        )
     }
 
     fun convert10BandTo5BandNative(gainsDb: List<Float>): List<Float> {

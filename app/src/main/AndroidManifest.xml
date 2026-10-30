@@ -5,7 +5,14 @@
     <!-- Normal permission required for Equalizer, BassBoost, Virtualizer, DynamicsProcessing -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
-    <!-- Optional runtime permission for Speaker Self-Calibration wizard (Section 8.2) -->
+    <!-- Network permissions for AutoEq GitHub profile fetching (v5 Section 16.3 & 17.4) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Boot permission for Root / Service Start-on-Boot (v5 Section 17.2 F12 & 18.2) -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Optional runtime permission for Speaker Self-Calibration wizard (v5 Section 8.2) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- Optional ADB/Shizuku permissions for audio session discovery (granted via adb shell pm grant) -->
@@ -46,6 +53,16 @@
                 <category android:name="android.intent.category.CATEGORY_CONTENT_MUSIC" />
             </intent-filter>
         </activity>
+
+        <!-- Boot receiver for Start-on-Boot (v5 Section 17.2 F12 & 18.2) -->
+        <receiver
+            android:name=".audio.BootCompletedReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

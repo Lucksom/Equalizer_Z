@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.model.OutputRoute
+import com.example.ui.components.AbxBlindTestSheet
 import com.example.ui.components.DspReferenceMonitorCard
 import com.example.ui.components.ModeSelectorCard
 import com.example.ui.components.RootWarningDialog
@@ -53,7 +54,7 @@ fun AudioEqScreen(
     val activeCalLabel = when {
         state.activeRoute == OutputRoute.SPEAKER && state.speakerCalEnabled -> "Spk Cal On"
         state.activeRoute != OutputRoute.SPEAKER && state.selectedHeadphoneProfileId != "none" -> state.selectedHeadphoneProfile.name.take(12)
-        else -> "Calibrate"
+        else -> "Sound Calibrate"
     }
 
     Scaffold(
@@ -140,26 +141,31 @@ fun AudioEqScreen(
                     }
                 }
 
-                // 2. Top Horizontal Engine Mode Selector (3 Profiles: Legacy [Global without ADB/Root], ADB / Shizuku, Root)
+                // 2. Top Horizontal Engine Mode Selector (3 Profiles: Legacy [Global without ADB/Root], ADB / Shizuku, Root [APK-only su])
                 item {
                     ModeSelectorCard(
                         selectedMode = state.selectedMode,
                         activeStatus = state.activeStatus,
                         diagnostics = state.diagnostics,
+                        startOnBoot = state.startOnBoot,
                         onSelectMode = { viewModel.selectMode(it) },
-                        onBackupRootConfig = { viewModel.backupAndStageRootModule() },
-                        onRestoreRootConfig = { viewModel.restoreStockAudioConfig() }
+                        onToggleStartOnBoot = { viewModel.setStartOnBoot(it) },
+                        onToggleRootBtAbsVol = { viewModel.toggleRootBluetoothAbsVolume(it) }
                     )
                 }
 
-                // 3. Unified 10-Band Equalizer Card (with v4 Presets, Graph, True Category Ranges, 10 Fluid Sliders, Intensity, Volume Contour, A/B Compare, Headroom Meter)
+                // 3. Unified 10-Band Equalizer Card (with v5 Presets, Graph, True Category Ranges, 10 Fluid Sliders, L/R Channel tabs, Intensity, Volume Contour, Night Mode, A/B Compare, Blind ABX, Sound Calibration, Headroom Meter)
                 item {
                     UnifiedEqualizerCard(
                         presets = state.presets,
                         selectedPresetId = state.selectedPresetId,
-                        targetGainsDb = state.gainsDb,
+                        targetGainsDb = state.activeSlidersGainsDb,
+                        splitLREnabled = state.splitLREnabled,
+                        editingRightChannel = state.editingRightChannel,
                         intensity = state.intensity,
                         volumeContourEnabled = state.volumeContourEnabled,
+                        nightModeEnabled = state.nightModeEnabled,
+                        usbBitPerfectActive = state.diagnostics.usbBitPerfectActive,
                         isAbCompare = state.isAbCompare,
                         activeRoute = state.activeRoute,
                         inputGainDb = state.inputGainDb,
@@ -169,10 +175,13 @@ fun AudioEqScreen(
                         isEnabled = state.isEnabled,
                         onSelectPreset = { viewModel.selectPreset(it) },
                         onDeleteCustomPreset = { viewModel.deleteCustomPreset(it) },
+                        onSelectEditingChannel = { viewModel.setEditingRightChannel(it) },
                         onBandGainChange = { idx, db -> viewModel.updateBandGain(idx, db) },
                         onIntensityChange = { viewModel.setIntensity(it) },
                         onToggleVolumeContour = { viewModel.setVolumeContourEnabled(it) },
+                        onToggleNightMode = { viewModel.setNightModeEnabled(it) },
                         onToggleAbCompare = { viewModel.setAbCompare(it) },
+                        onOpenAbxTest = { viewModel.openAbxSheet() },
                         onOpenCalibration = { viewModel.openCalibrationSheet() },
                         onToggleEnabled = { viewModel.setPowerEnabled(it) },
                         onResetFlat = { viewModel.resetToFlat() }
@@ -215,9 +224,18 @@ fun AudioEqScreen(
     if (state.showCalibrationSheet) {
         SoundCalibrationSheet(
             activeRoute = state.activeRoute,
+            isLegacyTier1 = state.diagnostics.isLegacyTier1BasicEngine,
             headphoneProfiles = state.headphoneProfiles,
             selectedHeadphoneProfileId = state.selectedHeadphoneProfileId,
             headphoneStrength = state.headphoneStrength,
+            headphoneFullRange = state.headphoneFullRange,
+            headphoneTrimmedDb = state.headphoneTrimmedDb,
+            tiltBassDb = state.tiltBassDb,
+            tiltTrebleDb = state.tiltTrebleDb,
+            autoEqCatalog = state.autoEqCatalog,
+            autoEqLoading = state.autoEqLoading,
+            autoEqRateLimited = state.autoEqRateLimited,
+            autoEqOffline = state.autoEqOffline,
             speakerCalEnabled = state.speakerCalEnabled,
             speakerCalStrength = state.speakerCalStrength,
             speakerMeas31Db = state.speakerMeas31Db,
@@ -225,14 +243,38 @@ fun AudioEqScreen(
             isCalibratingSpeaker = state.isCalibratingSpeaker,
             calibrationProgress = state.calibrationProgress,
             calibrationStatusText = state.calibrationStatusText,
+            hearingCurve = state.hearingCurve,
             connectedProductName = state.diagnostics.connectedProductName,
             onSelectHeadphoneProfile = { viewModel.selectHeadphoneProfile(it) },
+            onSelectAutoEqEntry = { viewModel.selectAutoEqCatalogEntry(it) },
+            onRefreshAutoEqCatalog = { viewModel.refreshAutoEqCatalog(force = true) },
             onHeadphoneStrengthChange = { viewModel.updateHeadphoneStrength(it) },
+            onToggleHeadphoneFullRange = { viewModel.setHeadphoneFullRange(it) },
+            onTiltBassChange = { viewModel.updateTiltBassDb(it) },
+            onTiltTrebleChange = { viewModel.updateTiltTrebleDb(it) },
+            onImportCustomText = { name, raw -> viewModel.importCustomAutoEqText(name, raw) },
+            onExportActiveText = { viewModel.exportActiveCorrectionText() },
             onToggleSpeakerCalibration = { viewModel.toggleSpeakerCalibration(it) },
             onSpeakerStrengthChange = { viewModel.updateSpeakerCalStrength(it) },
             onRunSpeakerCalibration = { viewModel.runSpeakerSelfCalibration() },
             onResetSpeakerCalibration = { viewModel.resetSpeakerCalibration() },
+            onToggleHearingCurve = { viewModel.setHearingCurveEnabled(it) },
+            onUpdateHearingBand = { isRight, idx, db -> viewModel.updateHearingCurveBand(isRight, idx, db) },
+            onPlayHearingTone = { idx, isRight -> viewModel.playHearingTestTone(idx, isRight) },
             onDismiss = { viewModel.dismissCalibrationSheet() }
+        )
+    }
+
+    if (state.showAbxSheet) {
+        AbxBlindTestSheet(
+            listeningChoice = state.abxListeningChoice,
+            correctCount = state.abxCorrectCount,
+            trialCount = state.abxTrialCount,
+            lastResultText = state.abxLastResultText,
+            onSelectSource = { viewModel.selectAbxListeningSource(it) },
+            onGuessXIsB = { viewModel.submitAbxGuess(it) },
+            onResetScore = { viewModel.resetAbxScore() },
+            onDismiss = { viewModel.dismissAbxSheet() }
         )
     }
 
@@ -240,13 +282,19 @@ fun AudioEqScreen(
         SettingsAndDiagnosticsSheet(
             diagnostics = state.diagnostics,
             highPassHz = state.highPassHz,
+            splitLREnabled = state.splitLREnabled,
+            balanceDb = state.balanceDb,
+            usbBitPerfectEnabled = state.usbBitPerfectEnabled,
+            startOnBoot = state.startOnBoot,
             compatibility10Band = state.compatibility10Band,
             transientMode = state.transientMode,
             onHighPassChange = { viewModel.updateHighPassHz(it) },
+            onToggleSplitLR = { viewModel.setSplitLREnabled(it) },
+            onBalanceChange = { viewModel.updateBalanceDb(it) },
+            onToggleUsbBitPerfect = { viewModel.setUsbBitPerfectEnabled(it) },
+            onToggleStartOnBoot = { viewModel.setStartOnBoot(it) },
             onToggleCompatibility10Band = { viewModel.setCompatibility10Band(it) },
             onToggleTransientMode = { viewModel.setTransientMode(it) },
-            onBackupRootConfig = { viewModel.backupAndStageRootModule() },
-            onRestoreRootConfig = { viewModel.restoreStockAudioConfig() },
             onDismiss = { viewModel.dismissSettingsSheet() }
         )
     }
