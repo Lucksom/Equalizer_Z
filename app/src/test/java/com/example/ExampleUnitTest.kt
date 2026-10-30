@@ -3,6 +3,11 @@ package com.example
 import com.example.audio.AutoEq
 import com.example.audio.BiquadFilter
 import com.example.audio.Dsp
+import com.example.audio.Enhancer
+import com.example.audio.EnhancerCurves
+import com.example.audio.EnhancerMbc
+import com.example.audio.EnhancerMixer
+import com.example.audio.FastRender
 import com.example.audio.Layers
 import com.example.audio.MidSideProcessor
 import com.example.audio.PeqFilter
@@ -17,6 +22,7 @@ import org.junit.Test
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sin
+import kotlin.random.Random
 
 class ExampleUnitTest {
 
@@ -287,5 +293,105 @@ class ExampleUnitTest {
         val pcm = ShortArray(512) { i -> (sin((i / 2) * 0.15) * 16000.0).toInt().toShort() }
         processor.processStereoPcm16(pcm, 256)
         assertTrue(pcm.any { it.toInt() != 0 })
+    }
+
+    @Test
+    fun enhancersT1_curvePeaksMatchSection7Spec() {
+        assertEquals(4.33, EnhancerCurves.CURVE[Enhancer.DEEP_BASS.ordinal][0].maxOrNull() ?: 0.0, 0.02)
+        assertEquals(3.96, EnhancerCurves.CURVE[Enhancer.DEEP_BASS.ordinal][1].maxOrNull() ?: 0.0, 0.02)
+        assertEquals(1.00, EnhancerCurves.CURVE[Enhancer.SURROUND.ordinal][0].maxOrNull() ?: 0.0, 0.02)
+        assertEquals(1.00, EnhancerCurves.CURVE[Enhancer.SURROUND.ordinal][1].maxOrNull() ?: 0.0, 0.02)
+        assertEquals(2.56, EnhancerCurves.CURVE[Enhancer.BEATS.ordinal][0].maxOrNull() ?: 0.0, 0.02)
+        assertEquals(2.68, EnhancerCurves.CURVE[Enhancer.BEATS.ordinal][1].maxOrNull() ?: 0.0, 0.02)
+        assertEquals(3.00, EnhancerCurves.CURVE[Enhancer.VOCAL.ordinal][0].maxOrNull() ?: 0.0, 0.02)
+        assertEquals(3.00, EnhancerCurves.CURVE[Enhancer.VOCAL.ordinal][1].maxOrNull() ?: 0.0, 0.02)
+    }
+
+    @Test
+    fun enhancersT2AndT3_goldenMixVectorsMatchSection7Spec() {
+        // T2: Golden mix A: bass 1.0 + surround 0.5, Full
+        val (outA, resA) = EnhancerMixer.mixToNewArray(
+            amounts = doubleArrayOf(1.0, 0.5, 0.0, 0.0),
+            smallDriver = false
+        )
+        val expectedA = doubleArrayOf(
+            -2.832, -1.167,  0.929,  2.975,  4.330,  4.203,  2.967,  2.009,  1.768,  1.232,  0.127, -0.740,
+            -0.965, -0.694, -0.315, -0.092, -0.017, -0.002,  0.000,  0.000,  0.000,  0.002,  0.012,  0.048,
+             0.137,  0.287,  0.442,  0.499,  0.414,  0.253,  0.113
+        )
+        assertEquals(1.0, resA.scale, 0.001)
+        for (i in 0 until 31) {
+            assertEquals("Golden Mix A mismatch at band $i", expectedA[i], outA[i], 0.01)
+        }
+
+        // T3: Golden mix B: beats 1.0 + vocal 1.0, Small
+        val (outB, resB) = EnhancerMixer.mixToNewArray(
+            amounts = doubleArrayOf(0.0, 0.0, 1.0, 1.0),
+            smallDriver = true
+        )
+        val expectedB = doubleArrayOf(
+             0.000,  0.000,  0.000,  0.005,  0.052,  0.312,  1.074,  2.150,  2.607,  2.124,  0.733, -1.475,
+            -2.722, -2.187, -0.940,  0.096,  0.757,  1.006,  0.911,  1.070,  2.176,  3.861,  4.880,  4.755,
+             3.451,  1.448,  1.113,  1.758,  1.479,  0.764,  0.260
+        )
+        assertEquals(1.0, resB.scale, 0.001)
+        for (i in 0 until 31) {
+            assertEquals("Golden Mix B mismatch at band $i", expectedB[i], outB[i], 0.01)
+        }
+    }
+
+    @Test
+    fun enhancersT4AndT5_budgetCapContinuityAndFastRenderEquivalence() {
+        val rng = Random(7)
+
+        // T4a: All four at 1.0 -> peak 6.00 on both variants
+        for (small in listOf(false, true)) {
+            val (outAll, resAll) = EnhancerMixer.mixToNewArray(doubleArrayOf(1.0, 1.0, 1.0, 1.0), small)
+            assertEquals(6.00, resAll.peakDb, 0.01)
+            assertEquals(6.00, outAll.maxOrNull() ?: 0.0, 0.01)
+            assertTrue(resAll.isBudgetLimited)
+        }
+
+        // T4b: 1000 random vectors must never exceed 6.0001 dB
+        repeat(1000) {
+            val amounts = DoubleArray(4) { rng.nextDouble(0.0, 1.0) }
+            val small = rng.nextBoolean()
+            val (out, _) = EnhancerMixer.mixToNewArray(amounts, small)
+            val maxGain = out.maxOrNull() ?: 0.0
+            assertTrue("Exceeded 6.0 dB budget: $maxGain", maxGain <= 6.0001)
+        }
+
+        // T4c: Continuity across peak = 6.0 boundary (sweep amounts 0->1: no step above 0.1 dB per 0.01)
+        for (step in 0 until 100) {
+            val a = step * 0.01
+            val aNext = (step + 1) * 0.01
+            val (out1, _) = EnhancerMixer.mixToNewArray(doubleArrayOf(a, 0.0, a, 0.0), false)
+            val (out2, _) = EnhancerMixer.mixToNewArray(doubleArrayOf(aNext, 0.0, aNext, 0.0), false)
+            for (i in 0 until 31) {
+                assertTrue("Step jump >= 0.1 dB at band $i", abs(out2[i] - out1[i]) < 0.1)
+            }
+        }
+
+        // T5: FastRender vs Dsp.renderCurve across 2000 random 10-band vectors (< 1e-9 dB)
+        repeat(2000) {
+            val y10 = DoubleArray(10) { rng.nextDouble(-12.0, 12.0) }
+            val fast = FastRender.renderToNewArray(y10)
+            val full = Dsp.renderCurve(y10)
+            for (i in 0 until 31) {
+                val diff = abs(fast[i] - full[i])
+                assertTrue("FastRender mismatch at band $i: $diff", diff < 1e-9)
+            }
+        }
+
+        // Verify EnhancerMbc.blend behaves according to spec
+        val mbcBlended = EnhancerMbc.blend(
+            base = EqConstants.DEFAULT_MBC_CONFIG,
+            amounts = doubleArrayOf(1.0, 0.0, 1.0, 1.0)
+        )
+        assertEquals(3.0f, mbcBlended.ratio[0], 0.01f)
+        assertEquals(25f, mbcBlended.attackMs[2], 0.01f)
+        assertEquals(320f, mbcBlended.releaseMs[0], 0.1f)
+        assertEquals(3.8f, mbcBlended.ratio[4], 0.01f)
+        assertEquals(-11f, mbcBlended.baseThresholdDb[4], 0.01f)
     }
 }

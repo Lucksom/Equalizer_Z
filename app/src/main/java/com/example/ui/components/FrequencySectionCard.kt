@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -61,6 +62,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.model.EqBandSpec
 import com.example.model.EqConstants
@@ -210,7 +212,8 @@ fun UnifiedEqualizerCard(
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
@@ -329,40 +332,40 @@ fun UnifiedEqualizerCard(
             }
 
             // v5 Section 2 True Category Boundaries Strip:
-            // Bass (20–350 Hz) | Mids (350 Hz–2.8 kHz) | Treble (2.8–11 kHz) | Air (11–20 kHz)
+            // Bass (20–350 Hz) | Mids (350–2.8k Hz) | Treble (2.8–11 kHz) | Air (11–20 kHz)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    .padding(horizontal = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 FrequencySection.entries.forEach { sec ->
-                    val weight = when (sec) {
-                        FrequencySection.BASS -> 4f
-                        FrequencySection.MIDS -> 3f
-                        FrequencySection.TREBLE -> 2f
-                        FrequencySection.AIR -> 1f
-                    }
                     Surface(
-                        modifier = Modifier.weight(weight),
-                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
                         color = MaterialTheme.colorScheme.surface
                     ) {
                         Column(
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
                                 text = sec.title,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
-                                maxLines = 1
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
                                 text = sec.rangeLabel,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -517,13 +520,15 @@ fun UnifiedEqualizerCard(
                                     text = "Volume Contour (ISO 226)",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     text = "Boosts low-volume bass & treble balance",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                             Switch(
@@ -556,13 +561,15 @@ fun UnifiedEqualizerCard(
                                     text = "Night Mode (Quiet Ceilings)",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     text = "Lowers 6-band ceiling thresholds (-6 dB) without peaks",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                             Switch(
@@ -593,6 +600,7 @@ fun UnifiedEqualizerCard(
                         FilledTonalButton(
                             onClick = { onToggleAbCompare(!isAbCompare) },
                             shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
                             colors = ButtonDefaults.filledTonalButtonColors(
                                 containerColor = abContainerColor,
                                 contentColor = abContentColor
@@ -611,13 +619,15 @@ fun UnifiedEqualizerCard(
                             Text(
                                 text = if (isAbCompare) "A/B: Bypass" else "A/B Compare",
                                 style = MaterialTheme.typography.labelLarge,
-                                maxLines = 1
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
 
                         FilledTonalButton(
                             onClick = onOpenCalibration,
                             shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
                             colors = ButtonDefaults.filledTonalButtonColors(
                                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
                                 contentColor = MaterialTheme.colorScheme.onSecondaryContainer
@@ -636,7 +646,8 @@ fun UnifiedEqualizerCard(
                             Text(
                                 text = activeCalibrationLabel ?: "Sound Calibrate",
                                 style = MaterialTheme.typography.labelLarge,
-                                maxLines = 1
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -645,6 +656,7 @@ fun UnifiedEqualizerCard(
                     OutlinedButton(
                         onClick = onOpenAbxTest,
                         shape = RoundedCornerShape(14.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(44.dp)
@@ -653,7 +665,8 @@ fun UnifiedEqualizerCard(
                         Text(
                             text = "Blind ABX Listening Test (A vs B vs Hidden X)",
                             style = MaterialTheme.typography.labelLarge,
-                            maxLines = 1
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }

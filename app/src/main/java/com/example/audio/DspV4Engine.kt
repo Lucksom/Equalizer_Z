@@ -11,7 +11,9 @@ import android.media.MediaRecorder
 import android.media.audiofx.DynamicsProcessing
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
+import android.os.Process
 import com.example.model.EqConstants
 import com.example.model.HeadphoneProfile
 import com.example.model.MbcConfig
@@ -244,7 +246,8 @@ object Dsp {
     }
 
     /**
-     * Computes `effective` 31-band curve and `ceilingLoad` (Headroom meter: max(0, max(effective) - 3), v5 Section 3 & 9).
+     * Computes `effective` 31-band curve and `ceilingLoad` (Headroom meter: max(0, max(effective) - 3), v5 Section 3 & Enhancers Section 3).
+     * Uses precomputed PCHIP basis (`FastRender`) and sums `taste + correction31 + enhancer31 + hearing31`, clamped to [-15, +10] dB.
      */
     fun computeEffective31(layers: Layers, withContour: Boolean = true, channel: Int = 0): DoubleArray {
         val uDb = if (channel == 1 && layers.rightUserDb != null) layers.rightUserDb else layers.userDb
@@ -254,8 +257,11 @@ object Dsp {
                 layers.routeDb[it] +
                 (if (withContour) layers.contourDb[it] else 0.0)
         }
-        val taste = renderCurve(slider)
-        return DoubleArray(31) { (taste[it] + layers.correction31[it] + hearing31[it]).coerceIn(-15.0, 10.0) }
+        val taste = DoubleArray(31)
+        FastRender.render(slider, taste)
+        return DoubleArray(31) {
+            (taste[it] + layers.correction31[it] + layers.enhancer31[it] + hearing31[it]).coerceIn(-15.0, 10.0)
+        }
     }
 
     fun computeCeilingLoadDb(effective31: DoubleArray): Float {
@@ -371,64 +377,102 @@ object UsbBitPerfectHelper {
 }
 
 class Layers(
-    val userDb: DoubleArray,
+    userDb: DoubleArray,
     val intensity: Double,
-    val routeDb: DoubleArray,
-    val contourDb: DoubleArray,
-    val correction31: DoubleArray = DoubleArray(31),
+    routeDb: DoubleArray,
+    contourDb: DoubleArray,
+    correction31: DoubleArray = DoubleArray(31),
+    enhancer31: DoubleArray = DoubleArray(31),
     val balanceDb: Float = 0f, // -6..+6 dB (F4)
-    val rightUserDb: DoubleArray? = null, // Independent Right channel 10-band EQ (F4)
-    val hearingLeft31: DoubleArray = DoubleArray(31), // Personal hearing curve Left (F5)
-    val hearingRight31: DoubleArray = DoubleArray(31) // Personal hearing curve Right (F5)
+    rightUserDb: DoubleArray? = null, // Independent Right channel 10-band EQ (F4)
+    hearingLeft31: DoubleArray = DoubleArray(31), // Personal hearing curve Left (F5)
+    hearingRight31: DoubleArray = DoubleArray(31) // Personal hearing curve Right (F5)
 ) {
+    // Defensive copies: the UI may reuse its arrays, and EqEngine reads these on its own HandlerThread.
+    val userDb: DoubleArray = userDb.copyOf()
+    val routeDb: DoubleArray = routeDb.copyOf()
+    val contourDb: DoubleArray = contourDb.copyOf()
+    val correction31: DoubleArray = correction31.copyOf()
+    val enhancer31: DoubleArray = enhancer31.copyOf()
+    val rightUserDb: DoubleArray? = rightUserDb?.copyOf()
+    val hearingLeft31: DoubleArray = hearingLeft31.copyOf()
+    val hearingRight31: DoubleArray = hearingRight31.copyOf()
+
     fun hasIndependentChannels(): Boolean {
         return abs(balanceDb) > 0.02f ||
-            rightUserDb != null ||
-            hearingLeft31.any { abs(it) > 0.02 } ||
-            hearingRight31.any { abs(it) > 0.02 }
+            this.rightUserDb != null ||
+            this.hearingLeft31.any { abs(it) > 0.02 } ||
+            this.hearingRight31.any { abs(it) > 0.02 }
     }
 }
 
 /**
- * Per-session v5 `EqEngine` wrapping `DynamicsProcessing` (v5 Section 9, 10 & 17.2 F4):
- * - Tries 31 pre-EQ bands first; if construction fails or 10-band compatibility mode is enabled, falls back to 20 or 10 bands.
- * - Uses `VARIANT_FAVOR_FREQUENCY_RESOLUTION` (or optional Transient Mode `VARIANT_FAVOR_TIME_RESOLUTION`).
- * - Supports both coupled stereo (`set...AllChannelsTo`) and independent Left/Right EQ & Balance (`set...ByChannel`)
- *   while keeping the ~33 Hz delta-only binder write budget.
+ * Per-session v5 `EqEngine` wrapping `DynamicsProcessing` (v5 Section 9 + Enhancers Spec Section 5):
+ * 1. Own `HandlerThread("eq-writer", THREAD_PRIORITY_FOREGROUND)`: every binder call leaves the UI thread.
+ * 2. `Layers` carries `enhancer31` with defensive copies.
+ * 3. Per-tick path allocates nothing except the `EqBand`/`MbcBand` objects the API requires.
+ * 4. PCHIP slopes are computed once per change, and basis values per band are precomputed (`FastRender`).
+ * 5. Adaptive tick interval (`30..100 ms`) based on measured EMA binder write cost (`writeCostMs()`).
+ * 6. Fix: `setEnabled(false)` is never undone by the enable-status listener (`wantEnabled` flag).
  */
 class EqEngine(
     val sessionId: Int,
     private val compatibility10Band: Boolean = false,
     private val transientMode: Boolean = false
 ) {
+    private val thread = HandlerThread("eq-writer-$sessionId", Process.THREAD_PRIORITY_FOREGROUND).also { it.start() }
+    val handler = Handler(thread.looper)
+
+    @Volatile
     private var dp: DynamicsProcessing? = null
+    @Volatile
     var activeBandCount: Int = 31
         private set
 
-    private val handler = Handler(Looper.getMainLooper())
+    @Volatile
+    private var wantEnabled: Boolean = true
+    @Volatile
+    private var isPowerOn: Boolean = true
+    @Volatile
+    private var isAbBypassCompare: Boolean = false
+    @Volatile
+    private var isFlatBypass: Boolean = false
+
     private val curL = DoubleArray(31)
     private val curR = DoubleArray(31)
-    private var goalL = DoubleArray(31)
-    private var goalR = DoubleArray(31)
+    private val goalL = DoubleArray(31)
+    private val goalR = DoubleArray(31)
+    private val sliderScratch = DoubleArray(10)
+    private val tasteScratch = DoubleArray(31)
+
     private var tauMs = 60.0
     private var mbc: MbcConfig = EqConstants.DEFAULT_MBC_CONFIG
+
+    @Volatile
     var inputDb: Float = -3f
         private set
+    @Volatile
     var makeupDb: Float = 0f
         private set
+    @Volatile
     var limiterDb: Float = -1f
         private set
+
     private var currentBalanceDb: Float = 0f
     private var splitChannels: Boolean = false
-
-    private var isPowerOn: Boolean = true
-    private var isAbBypassCompare: Boolean = false
-    private var isFlatBypass: Boolean = false
 
     private val sentEqL = DoubleArray(31) { Double.NaN }
     private val sentEqR = DoubleArray(31) { Double.NaN }
     private val sentThr = DoubleArray(6) { Double.NaN }
-    private var sentFixed = ""
+    private var fixedDirty = true
+    private var mbcDirty = true
+    private var tickMs = 30L
+
+    @Volatile
+    private var writeEmaMs = 0.0
+
+    /** Average binder write cost in ms, for diagnostics / debug overlay. */
+    fun writeCostMs(): Double = writeEmaMs
 
     fun start(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false
@@ -454,17 +498,23 @@ class EqEngine(
                 dp = instance.also { d ->
                     d.setControlStatusListener { _, granted ->
                         if (granted) {
-                            invalidate()
-                            write(curL, curR)
+                            handler.post {
+                                invalidate()
+                                writeNow()
+                            }
                         }
                     }
                     d.setEnableStatusListener { _, on ->
-                        val shouldBeEnabled = isPowerOn && !isFlatBypass
-                        if (!on && shouldBeEnabled) {
-                            try { d.enabled = true } catch (_: Exception) {}
+                        if (!on && wantEnabled) {
+                            handler.post {
+                                try {
+                                    dp?.enabled = true
+                                } catch (_: Throwable) {
+                                }
+                            }
                         }
                     }
-                    d.enabled = isPowerOn && !isFlatBypass
+                    d.enabled = wantEnabled
                 }
                 return true
             } catch (_: Throwable) {
@@ -474,13 +524,26 @@ class EqEngine(
         return false
     }
 
+    /** Fills `out` with the 31 target gains for `channel` (0=L, 1=R). Zero heap allocations. */
+    private fun effectiveInto(l: Layers, withContour: Boolean, channel: Int, out: DoubleArray) {
+        val uDb = if (channel == 1 && l.rightUserDb != null) l.rightUserDb else l.userDb
+        val hearing31 = if (channel == 1) l.hearingRight31 else l.hearingLeft31
+        for (i in 0 until 10) {
+            sliderScratch[i] = uDb[i] * l.intensity + l.routeDb[i] + (if (withContour) l.contourDb[i] else 0.0)
+        }
+        FastRender.render(sliderScratch, tasteScratch)
+        for (i in 0 until 31) {
+            out[i] = (tasteScratch[i] + l.correction31[i] + l.enhancer31[i] + hearing31[i]).coerceIn(-15.0, 10.0)
+        }
+    }
+
     fun effective(l: Layers, withContour: Boolean = true, channel: Int = 0): DoubleArray {
         return Dsp.computeEffective31(l, withContour, channel)
     }
 
     /**
-     * Call on preset, route, profile, or intensity change. Not while a slider is being dragged.
-     * Computes `inputDb` and `makeupDb` (frozen during slider drags).
+     * Preset, route, profile, intensity, or enhancer COMMIT. Never while a slider is being dragged.
+     * `m` already includes the enhancer MBC blend (`EnhancerMbc.blend`).
      */
     fun load(
         l: Layers,
@@ -490,75 +553,117 @@ class EqEngine(
         flatBypass: Boolean = false,
         glideMs: Double = 250.0
     ) {
-        val base = effective(l, withContour = false, channel = 0)
-        inputDb = routeBaseDb - max(0.0, (l.correction31.maxOrNull() ?: 0.0) - 3.0).toFloat()
-        makeupDb = (-inputDb - Dsp.pinkGainDb(base)).coerceIn(0.0, 4.0).toFloat()
+        val base = DoubleArray(31)
+        val uDb = l.userDb
+        val sliderTmp = DoubleArray(10) { uDb[it] * l.intensity + l.routeDb[it] }
+        FastRender.render(sliderTmp, base)
+        for (i in 0 until 31) {
+            base[i] = (base[i] + l.correction31[i] + l.enhancer31[i] + l.hearingLeft31[i]).coerceIn(-15.0, 10.0)
+        }
+        var corrMax = 0.0
+        for (v in l.correction31) corrMax = max(corrMax, v)
+        val computedInDb = routeBaseDb - max(0.0, corrMax - 3.0).toFloat()
+        val computedMakeupDb = if (flatBypass) 0f else (-computedInDb - Dsp.pinkGainDb(base)).coerceIn(0.0, 4.0).toFloat()
+
+        inputDb = computedInDb
+        makeupDb = computedMakeupDb
         limiterDb = limiter
-        mbc = m
         isFlatBypass = flatBypass
-        sentThr.fill(Double.NaN)
-        sentFixed = ""
-        applyEnabledState()
-        update(l, glideMs)
+        wantEnabled = isPowerOn && !isFlatBypass
+
+        handler.post {
+            mbc = m
+            currentBalanceDb = l.balanceDb
+            splitChannels = l.hasIndependentChannels()
+            fixedDirty = true
+            mbcDirty = true
+            sentThr.fill(Double.NaN)
+            applyEnabledStateOnThread()
+            effectiveInto(l, true, 0, goalL)
+            effectiveInto(l, true, 1, goalR)
+            tauMs = glideMs
+            scheduleTick()
+        }
     }
 
     /**
-     * Call on slider drags and volume contour changes. Never touches `inputDb` or `makeupDb`.
+     * Slider drags, enhancer drags, and volume contour changes.
+     * Never touches input gain, makeup gain, or MBC parameters.
      */
     fun update(l: Layers, glideMs: Double = 60.0) {
-        goalL = effective(l, withContour = true, channel = 0)
-        goalR = effective(l, withContour = true, channel = 1)
-        currentBalanceDb = l.balanceDb
-        splitChannels = l.hasIndependentChannels()
-        tauMs = glideMs
-        handler.removeCallbacks(tick)
-        handler.post(tick)
+        handler.post {
+            val prevBalance = currentBalanceDb
+            val prevSplit = splitChannels
+            currentBalanceDb = l.balanceDb
+            splitChannels = l.hasIndependentChannels()
+            if (abs(prevBalance - currentBalanceDb) > 0.01f || prevSplit != splitChannels) {
+                fixedDirty = true
+            }
+            effectiveInto(l, true, 0, goalL)
+            effectiveInto(l, true, 1, goalR)
+            tauMs = glideMs
+            scheduleTick()
+        }
     }
 
     /**
      * A/B compare at matched loudness (v5 Section 10):
-     * When `abCompare` is true, pre-EQ bands are zeroed while keeping `inputDb + makeupDb` active
-     * so the user compares tone at matched loudness rather than volume jump.
+     * When `abBypass` is true, pre-EQ bands are zeroed while keeping `inputDb + makeupDb` active.
      */
     fun setAbCompareMode(abBypass: Boolean) {
         if (isAbBypassCompare != abBypass) {
             isAbBypassCompare = abBypass
-            invalidate()
-            write(curL, curR)
+            handler.post {
+                invalidate()
+                writeNow()
+            }
         }
     }
 
     fun setEnabled(on: Boolean) {
         isPowerOn = on
-        applyEnabledState()
+        wantEnabled = isPowerOn && !isFlatBypass
+        handler.post {
+            applyEnabledStateOnThread()
+        }
     }
 
-    private fun applyEnabledState() {
+    private fun applyEnabledStateOnThread() {
+        wantEnabled = isPowerOn && !isFlatBypass
         try {
-            dp?.enabled = isPowerOn && !isFlatBypass
+            dp?.enabled = wantEnabled
         } catch (_: Throwable) {
         }
     }
 
     fun release() {
-        handler.removeCallbacks(tick)
-        try {
-            dp?.release()
-        } catch (_: Throwable) {
+        handler.post {
+            handler.removeCallbacks(tick)
+            try {
+                dp?.release()
+            } catch (_: Throwable) {
+            }
+            dp = null
+            thread.quitSafely()
         }
-        dp = null
     }
 
     private fun invalidate() {
         sentEqL.fill(Double.NaN)
         sentEqR.fill(Double.NaN)
         sentThr.fill(Double.NaN)
-        sentFixed = ""
+        fixedDirty = true
+        mbcDirty = true
+    }
+
+    private fun scheduleTick() {
+        handler.removeCallbacks(tick)
+        handler.post(tick)
     }
 
     private val tick = object : Runnable {
         override fun run() {
-            val k = 1.0 - exp(-30.0 / tauMs.coerceAtLeast(1.0))
+            val k = 1.0 - exp(-tickMs.toDouble() / tauMs.coerceAtLeast(1.0))
             var settled = true
             for (i in 0 until 31) {
                 curL[i] += (goalL[i] - curL[i]) * k
@@ -574,23 +679,25 @@ class EqEngine(
                     settled = false
                 }
             }
-            write(curL, curR)
+            val t0 = System.nanoTime()
+            writeNow()
+            val ms = (System.nanoTime() - t0) / 1e6
+            writeEmaMs = if (writeEmaMs == 0.0) ms else writeEmaMs * 0.8 + ms * 0.2
+            // If writes are slow, back off instead of queueing more binder calls (30 ms floor, 100 ms ceiling).
+            tickMs = (writeEmaMs * 2.5).toLong().coerceIn(30L, 100L)
             if (!settled) {
-                handler.postDelayed(this, 30L) // ~33 updates per second max
+                handler.postDelayed(this, tickMs)
             }
         }
     }
 
-    private fun write(dbL31: DoubleArray, dbR31: DoubleArray) {
+    private fun writeNow() {
         val d = dp ?: return
         val m = mbc
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
         try {
-            val sig = "$inputDb|$makeupDb|$limiterDb|$isAbBypassCompare|$activeBandCount|$currentBalanceDb|$splitChannels"
-            val fixed = sig != sentFixed
-            if (fixed) {
+            if (fixedDirty) {
                 if (abs(currentBalanceDb) > 0.02f) {
-                    // F4 L/R Balance: positive balance attenuates Left, negative attenuates Right (never boosts above inputDb)
                     val leftGain = inputDb - max(0f, currentBalanceDb)
                     val rightGain = inputDb - max(0f, -currentBalanceDb)
                     d.setInputGainbyChannel(0, leftGain)
@@ -601,13 +708,13 @@ class EqEngine(
                 d.setLimiterAllChannelsTo(
                     DynamicsProcessing.Limiter(true, true, 0, 1f, 50f, 20f, limiterDb, 0f)
                 )
-                sentFixed = sig
+                fixedDirty = false
             }
 
             if (activeBandCount == 31) {
                 for (i in 0 until 31) {
-                    val targetL = if (isAbBypassCompare) 0.0 else dbL31[i]
-                    val targetR = if (isAbBypassCompare) 0.0 else dbR31[i]
+                    val targetL = if (isAbBypassCompare) 0.0 else curL[i]
+                    val targetR = if (isAbBypassCompare) 0.0 else curR[i]
                     if (!splitChannels) {
                         if (sentEqL[i].isNaN() || abs(targetL - sentEqL[i]) > 0.05) {
                             d.setPreEqBandAllChannelsTo(
@@ -637,13 +744,18 @@ class EqEngine(
                     }
                 }
                 for (b in 0 until 6) {
+                    val r = Dsp.MBC_RANGE[b]
                     val meanBoost = if (isAbBypassCompare) {
                         0.0
                     } else {
-                        max(0.0, Dsp.MBC_RANGE[b].map { max(dbL31[it], dbR31[it]) }.average())
+                        var sum = 0.0
+                        for (idx in r.first..r.last) {
+                            sum += max(curL[idx], curR[idx])
+                        }
+                        max(0.0, sum / (r.last - r.first + 1))
                     }
                     val thr = m.baseThresholdDb[b] + meanBoost
-                    if (fixed || sentThr[b].isNaN() || abs(thr - sentThr[b]) > 0.1) {
+                    if (mbcDirty || sentThr[b].isNaN() || abs(thr - sentThr[b]) > 0.1) {
                         d.setMbcBandAllChannelsTo(
                             b,
                             DynamicsProcessing.MbcBand(
@@ -663,10 +775,11 @@ class EqEngine(
                         sentThr[b] = thr
                     }
                 }
+                mbcDirty = false
             } else if (activeBandCount == 10) {
                 for (i in 0 until 10) {
                     val renderIdx = (i * 3).coerceIn(0, 30)
-                    val targetGain = if (isAbBypassCompare) 0.0 else dbL31[renderIdx]
+                    val targetGain = if (isAbBypassCompare) 0.0 else curL[renderIdx]
                     if (sentEqL[i].isNaN() || abs(targetGain - sentEqL[i]) > 0.05) {
                         d.setPreEqBandAllChannelsTo(
                             i,
@@ -677,9 +790,17 @@ class EqEngine(
                 }
                 for (b in 0 until 6) {
                     val range = Dsp.FALLBACK_10_MBC_RANGE[b]
-                    val meanBoost = if (isAbBypassCompare) 0.0 else max(0.0, range.map { dbL31[(it * 3).coerceIn(0, 30)] }.average())
+                    val meanBoost = if (isAbBypassCompare) {
+                        0.0
+                    } else {
+                        var sum = 0.0
+                        for (idx in range.first..range.last) {
+                            sum += curL[(idx * 3).coerceIn(0, 30)]
+                        }
+                        max(0.0, sum / (range.last - range.first + 1))
+                    }
                     val thr = m.baseThresholdDb[b] + meanBoost
-                    if (fixed || sentThr[b].isNaN() || abs(thr - sentThr[b]) > 0.1) {
+                    if (mbcDirty || sentThr[b].isNaN() || abs(thr - sentThr[b]) > 0.1) {
                         d.setMbcBandAllChannelsTo(
                             b,
                             DynamicsProcessing.MbcBand(
@@ -699,10 +820,11 @@ class EqEngine(
                         sentThr[b] = thr
                     }
                 }
+                mbcDirty = false
             } else {
                 for (i in 0 until activeBandCount) {
                     val renderIdx = ((i.toDouble() / (activeBandCount - 1)) * 30.0).toInt().coerceIn(0, 30)
-                    val targetGain = if (isAbBypassCompare) 0.0 else dbL31[renderIdx]
+                    val targetGain = if (isAbBypassCompare) 0.0 else curL[renderIdx]
                     if (sentEqL[i].isNaN() || abs(targetGain - sentEqL[i]) > 0.05) {
                         d.setPreEqBandAllChannelsTo(
                             i,
@@ -711,6 +833,7 @@ class EqEngine(
                         sentEqL[i] = targetGain
                     }
                 }
+                mbcDirty = false
             }
         } catch (_: Throwable) {
         }

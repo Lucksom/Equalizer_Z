@@ -51,6 +51,10 @@ data class PersistedEqPreferences(
     val deviceMemories: Map<String, DeviceProfileMemory> = emptyMap(), // F2
     val compatibility10Band: Boolean = false,
     val transientMode: Boolean = false,
+    val enhancerEnabledFlags: List<Boolean> = listOf(false, false, false, false),
+    val enhancerSliderPcts: List<Float> = listOf(0f, 0f, 0f, 0f),
+    val tryDolbyControl: Boolean = false,
+    val dolbyDeepBass: Boolean = false,
     val rootWarningAccepted: Boolean = false
 )
 
@@ -100,6 +104,10 @@ class EqRepository(private val context: Context) {
         val DEVICE_MEMORIES_RAW = stringPreferencesKey("device_memories_raw")
         val COMPAT_10_BAND = booleanPreferencesKey("compatibility_10_band")
         val TRANSIENT_MODE = booleanPreferencesKey("transient_mode")
+        val ENHANCER_ENABLED_CSV = stringPreferencesKey("enhancer_enabled_csv")
+        val ENHANCER_PCT_CSV = stringPreferencesKey("enhancer_pct_csv")
+        val TRY_DOLBY_CONTROL = booleanPreferencesKey("try_dolby_control")
+        val DOLBY_DEEP_BASS = booleanPreferencesKey("dolby_deep_bass")
         val ROOT_WARNING_ACCEPTED = booleanPreferencesKey("root_warning_accepted")
     }
 
@@ -129,6 +137,16 @@ class EqRepository(private val context: Context) {
             ?: List(6) { 0f }
 
         val deviceMap = decodeDeviceMemories(prefs[Keys.DEVICE_MEMORIES_RAW] ?: "")
+        val enhEnabled = prefs[Keys.ENHANCER_ENABLED_CSV]
+            ?.split(",")
+            ?.map { it == "1" }
+            ?.takeIf { it.size == 4 }
+            ?: listOf(false, false, false, false)
+        val enhPcts = prefs[Keys.ENHANCER_PCT_CSV]
+            ?.split(",")
+            ?.mapNotNull { it.toFloatOrNull()?.coerceIn(0f, 100f) }
+            ?.takeIf { it.size == 4 }
+            ?: listOf(0f, 0f, 0f, 0f)
 
         PersistedEqPreferences(
             isEnabled = prefs[Keys.IS_ENABLED] ?: true,
@@ -166,6 +184,10 @@ class EqRepository(private val context: Context) {
             deviceMemories = deviceMap,
             compatibility10Band = prefs[Keys.COMPAT_10_BAND] ?: false,
             transientMode = prefs[Keys.TRANSIENT_MODE] ?: false,
+            enhancerEnabledFlags = enhEnabled,
+            enhancerSliderPcts = enhPcts,
+            tryDolbyControl = prefs[Keys.TRY_DOLBY_CONTROL] ?: false,
+            dolbyDeepBass = prefs[Keys.DOLBY_DEEP_BASS] ?: false,
             rootWarningAccepted = prefs[Keys.ROOT_WARNING_ACCEPTED] ?: false
         )
     }
@@ -219,7 +241,11 @@ class EqRepository(private val context: Context) {
         speakerCalEnabled: Boolean,
         speakerCalStrength: Float,
         compatibility10Band: Boolean,
-        transientMode: Boolean
+        transientMode: Boolean,
+        enhancerEnabledFlags: List<Boolean> = listOf(false, false, false, false),
+        enhancerSliderPcts: List<Float> = listOf(0f, 0f, 0f, 0f),
+        tryDolbyControl: Boolean = false,
+        dolbyDeepBass: Boolean = false
     ) {
         context.eqDataStore.edit { prefs ->
             prefs[Keys.IS_ENABLED] = isEnabled
@@ -250,6 +276,10 @@ class EqRepository(private val context: Context) {
             prefs[Keys.SPEAKER_CAL_STRENGTH] = speakerCalStrength
             prefs[Keys.COMPAT_10_BAND] = compatibility10Band
             prefs[Keys.TRANSIENT_MODE] = transientMode
+            prefs[Keys.ENHANCER_ENABLED_CSV] = enhancerEnabledFlags.joinToString(",") { if (it) "1" else "0" }
+            prefs[Keys.ENHANCER_PCT_CSV] = enhancerSliderPcts.joinToString(",") { "%.1f".format(Locale.US, it) }
+            prefs[Keys.TRY_DOLBY_CONTROL] = tryDolbyControl
+            prefs[Keys.DOLBY_DEEP_BASS] = dolbyDeepBass
         }
     }
 

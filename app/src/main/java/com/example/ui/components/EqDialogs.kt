@@ -1286,6 +1286,7 @@ fun SettingsAndDiagnosticsSheet(
     startOnBoot: Boolean,
     compatibility10Band: Boolean,
     transientMode: Boolean,
+    tryDolbyControl: Boolean = false,
     onHighPassChange: (Float) -> Unit,
     onToggleSplitLR: (Boolean) -> Unit,
     onBalanceChange: (Float) -> Unit,
@@ -1293,6 +1294,7 @@ fun SettingsAndDiagnosticsSheet(
     onToggleStartOnBoot: (Boolean) -> Unit,
     onToggleCompatibility10Band: (Boolean) -> Unit,
     onToggleTransientMode: (Boolean) -> Unit,
+    onToggleTryDolbyControl: (Boolean) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1500,6 +1502,31 @@ fun SettingsAndDiagnosticsSheet(
                             modifier = Modifier.testTag("transient_mode_switch")
                         )
                     }
+
+                    HorizontalDivider()
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Try Dolby Control (Experimental)",
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                            Text(
+                                text = "Exposes RAM-only dolby.deepbass & dolby.bass in Enhancers card on Root/ADB",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = tryDolbyControl,
+                            onCheckedChange = onToggleTryDolbyControl,
+                            modifier = Modifier.testTag("try_dolby_control_switch")
+                        )
+                    }
                 }
             }
 
@@ -1559,6 +1586,9 @@ fun SettingsAndDiagnosticsSheet(
                     )
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                     DiagnosticRow("DynamicsProcessing API 28+", if (diagnostics.dynamicsProcessingSupported) "Active (${diagnostics.activeRenderBandCount} bands)" else "Basic Engine Fallback")
+                    DiagnosticRow("Avg Binder Write Cost", String.format(Locale.US, "%.2f ms", diagnostics.avgBinderWriteCostMs))
+                    DiagnosticRow("Virtualizer Support", if (diagnostics.virtualizerSupported) "Supported" else "May Not Apply on Route")
+                    DiagnosticRow("Dolby Props Detected", if (diagnostics.dolbyPropsDetected) "Detected (dolby.bass/deepbass)" else "Not Present")
                     DiagnosticRow("Legacy Tier 1 Native Bands", "${diagnostics.nativeEqBandCount} bands (${diagnostics.nativeBandCentersHz.joinToString("/")} Hz)")
                     DiagnosticRow("Global Session 0 Mix", if (diagnostics.globalSession0Supported) "Supported" else "Restricted by OEM")
                     DiagnosticRow("ADB DUMP Permission", if (diagnostics.dumpPermissionGranted) "Granted" else "Not Granted")
@@ -1623,12 +1653,20 @@ private fun DiagnosticRow(label: String, value: String) {
         Text(
             text = label,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 8.dp)
         )
         Text(
             text = value,
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurface
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

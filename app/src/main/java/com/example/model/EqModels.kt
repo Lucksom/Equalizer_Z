@@ -21,7 +21,7 @@ enum class FrequencySection(
     MIDS(
         id = "mids",
         title = "Mids",
-        rangeLabel = "350 Hz–2.8 kHz",
+        rangeLabel = "350–2.8k Hz",
         trueRangeHz = "354–2828 Hz",
         hint = "Vocals, guitars, and clarity.",
         defaultWidthRange = "80–100%",

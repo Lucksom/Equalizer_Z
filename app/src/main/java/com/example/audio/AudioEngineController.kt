@@ -48,16 +48,19 @@ data class DeviceDiagnostics(
     val usbBitPerfectSupported: Boolean = false,
     val usbBitPerfectActive: Boolean = false,
     val bluetoothCodecSummary: String? = null,
-    val btDisableAbsVolActive: Boolean = false
+    val btDisableAbsVolActive: Boolean = false,
+    val virtualizerSupported: Boolean = true,
+    val dolbyPropsDetected: Boolean = false,
+    val avgBinderWriteCostMs: Double = 0.0
 )
 
 /**
- * AudioEngineController updated for Audio EQ Deep Optimization v5 (APK-only):
- * - Hosts per-session `EqEngine` (31-band PCHIP pre-EQ + 6-band MBC ceilings + limiter backstop, ~33 Hz delta writes, L/R channels)
- * - Falls back cleanly to Legacy Tier 1 (`Equalizer` + `BassBoost` + `Virtualizer`) using band-averaged 31-band curves (`AutoEq.map31ToNativeBands`)
- *   when `DynamicsProcessing` is unavailable, and sets `BassBoost = 0` whenever `DynamicsProcessing` is active (v5 Section 13 & 16.4)
- * - APK-only Root helper (`su -c`) for global session discovery, Bluetooth codec readout (F10), and Bluetooth absolute-volume control (Section 18.2)
- * - Android 14+ USB DAC Bit-Perfect mixer attribute support (F7)
+ * AudioEngineController updated for Audio EQ Deep Optimization v5 + Enhancers Spec (APK-only):
+ * - Hosts per-session `EqEngine` (own HandlerThread, 31-band FastRender PCHIP pre-EQ + 6-band MBC ceilings + limiter backstop, adaptive ~33 Hz delta writes, L/R channels)
+ * - Hosts per-session `VirtualizerFx` (Binaural on headphones / Transaural on speaker for Surround Audio) and `BassBoostFx` (Legacy Tier 1 only)
+ * - Hosts `DolbyControl` (`dolby.deepbass` and `dolby.bass` coalesced background shell runner with `restore()`)
+ * - Falls back cleanly to Legacy Tier 1 (`Equalizer` + `BassBoostFx` + `VirtualizerFx`) using band-averaged 31-band curves (`AutoEq.map31ToNativeBands`)
+ *   when `DynamicsProcessing` is unavailable, and forces `BassBoost = 0` whenever `DynamicsProcessing` is active
  */
 class AudioEngineController(private val context: Context) {
 
@@ -65,15 +68,15 @@ class AudioEngineController(private val context: Context) {
         val sessionId: Int,
         var v5Engine: EqEngine? = null,
         var equalizer: Equalizer? = null,
-        var bassBoost: BassBoost? = null,
-        var virtualizer: Virtualizer? = null,
+        var bassBoostFx: BassBoostFx? = null,
+        var virtualizerFx: VirtualizerFx? = null,
         var loudnessEnhancer: LoudnessEnhancer? = null
     ) {
         fun release() {
             try { v5Engine?.release() } catch (_: Exception) {}
             try { equalizer?.release() } catch (_: Exception) {}
-            try { bassBoost?.release() } catch (_: Exception) {}
-            try { virtualizer?.release() } catch (_: Exception) {}
+            try { bassBoostFx?.release() } catch (_: Exception) {}
+            try { virtualizerFx?.release() } catch (_: Exception) {}
             try { loudnessEnhancer?.release() } catch (_: Exception) {}
         }
     }
@@ -85,17 +88,25 @@ class AudioEngineController(private val context: Context) {
     private val broadcastSessions = mutableSetOf<Int>()
     private var receiverRegistered = false
 
+    val dolbyControl = DolbyControl { cmd ->
+        runShellCommand(cmd, useSu = diagnostics.rootSuBinaryDetected)
+    }
+
     private var lastLayers: Layers = Layers(
         userDb = DoubleArray(10),
         intensity = 1.0,
         routeDb = DoubleArray(10),
         contourDb = DoubleArray(10),
-        correction31 = DoubleArray(31)
+        correction31 = DoubleArray(31),
+        enhancer31 = DoubleArray(31)
     )
     private var lastMbc: MbcConfig = EqConstants.DEFAULT_MBC_CONFIG
     private var lastRouteBaseDb: Float = -3.0f
     private var lastLimiterDb: Float = -1.0f
     private var lastFlatBypass: Boolean = false
+    private var lastEnhancerAmounts: DoubleArray = DoubleArray(4)
+    private var lastDolbyControlActive: Boolean = false
+    private var lastDolbyDeepBass: Boolean = false
     private var lastBassBoostStrength: Int = 150
     private var lastVirtualizerStrength: Int = 150
     private var lastEnabled: Boolean = true
@@ -314,6 +325,21 @@ class AudioEngineController(private val context: Context) {
         val devKey = buildCurrentDeviceKey(audioManager)
         val bitPerfectSupported = UsbBitPerfectHelper.isBitPerfectSupported(audioManager)
         val btCodec = if (dumpGranted || hasSu) readBluetoothCodecFromDumpsys(hasSu) else null
+        val isSmallRoute = getCurrentRoute() == OutputRoute.SPEAKER
+
+        val virtSupported = activeBundles.values.firstNotNullOfOrNull { it.virtualizerFx }
+            ?.supported(isSmallRoute)
+            ?: run {
+                val probeVirt = VirtualizerFx(if (internalReferenceSessionId > 0) internalReferenceSessionId else 0)
+                val ok = probeVirt.supported(isSmallRoute)
+                probeVirt.release()
+                ok
+            }
+        val avgWriteMs = activeBundles.values.mapNotNull { it.v5Engine?.writeCostMs() }
+            .filter { it > 0.0 }
+            .takeIf { it.isNotEmpty() }
+            ?.average() ?: 0.0
+        val dolbyDetected = if (hasSu || dumpGranted) dolbyControl.detect() else diagnostics.dolbyPropsDetected
 
         diagnostics = DeviceDiagnostics(
             nativeEqBandCount = nativeBands,
@@ -332,7 +358,11 @@ class AudioEngineController(private val context: Context) {
             connectedDeviceKey = devKey,
             usbBitPerfectSupported = bitPerfectSupported,
             usbBitPerfectActive = usbBitPerfectEnabled && bitPerfectSupported,
-            bluetoothCodecSummary = btCodec
+            bluetoothCodecSummary = btCodec,
+            btDisableAbsVolActive = diagnostics.btDisableAbsVolActive,
+            virtualizerSupported = virtSupported,
+            dolbyPropsDetected = dolbyDetected,
+            avgBinderWriteCostMs = avgWriteMs
         )
 
         val pkgName = context.packageName
@@ -455,8 +485,9 @@ class AudioEngineController(private val context: Context) {
     }
 
     /**
-     * Called on preset, route, headphone profile, speaker calibration, or intensity change (v5 Section 9 `load`).
-     * Recomputes `inputDb` and `makeupDb` and glides over 250 ms.
+     * Called on preset, route, headphone profile, speaker calibration, intensity, or enhancer COMMIT.
+     * Recomputes `inputDb`, `makeupDb`, and `EnhancerMbc.blend`, applies `VirtualizerFx`, `BassBoostFx` (Tier 1),
+     * and `DolbyControl`, and glides over 250 ms.
      */
     fun loadEngineState(
         mode: EngineMode,
@@ -467,56 +498,82 @@ class AudioEngineController(private val context: Context) {
         routeBaseDb: Float,
         limiterDb: Float,
         flatBypass: Boolean,
-        bassBoostStrength: Int,
-        virtualizerStrength: Int,
+        enhancerAmounts: DoubleArray = DoubleArray(4),
+        dolbyControlActive: Boolean = false,
+        dolbyDeepBass: Boolean = false,
+        bassBoostStrength: Int = 0,
+        virtualizerStrength: Int = 0,
         internalSessionId: Int = 0
     ) {
         currentMode = mode
         lastEnabled = enabled && !(usbBitPerfectEnabled && getCurrentRoute() == OutputRoute.USB)
         lastAbCompare = abCompare
         lastLayers = layers
-        lastMbc = mbc
+        lastEnhancerAmounts = enhancerAmounts.copyOf()
+        lastDolbyControlActive = dolbyControlActive
+        lastDolbyDeepBass = dolbyDeepBass
+
+        // Enhancers Section 3.1: Blend MBC parameters with active enhancer amounts on commit
+        lastMbc = EnhancerMbc.blend(mbc, lastEnhancerAmounts)
         lastRouteBaseDb = routeBaseDb
         lastLimiterDb = limiterDb
-        lastFlatBypass = flatBypass
+
+        // Enhancers Section 3 Rule 4: Flat + enhancers must keep the chain ON
+        val anyEnhancerOn = EnhancerMixer.anyActive(lastEnhancerAmounts)
+        lastFlatBypass = flatBypass && !anyEnhancerOn
+
         lastBassBoostStrength = bassBoostStrength
         lastVirtualizerStrength = virtualizerStrength
 
         val base31 = Dsp.computeEffective31(layers, withContour = false, channel = 0)
         currentInputGainDb = routeBaseDb - kotlin.math.max(0.0, (layers.correction31.maxOrNull() ?: 0.0) - 3.0).toFloat()
-        currentMakeupGainDb = if (flatBypass) 0f else (-currentInputGainDb - Dsp.pinkGainDb(base31)).coerceIn(0.0, 4.0).toFloat()
+        currentMakeupGainDb = if (lastFlatBypass) 0f else (-currentInputGainDb - Dsp.pinkGainDb(base31)).coerceIn(0.0, 4.0).toFloat()
 
         ensureTargetSessionsAttached(internalSessionId)
         loadAllSessions(glideMs = 250.0)
+
+        if (lastDolbyControlActive) {
+            val deepBassAmt = if (lastEnabled && !lastAbCompare) {
+                lastEnhancerAmounts.getOrElse(Enhancer.DEEP_BASS.ordinal) { 0.0 }
+            } else 0.0
+            dolbyControl.apply(lastDolbyDeepBass && deepBassAmt > 0.0, deepBassAmt)
+        }
     }
 
     /**
-     * Called on slider drags and volume contour ticks (v5 Section 9 `update`).
-     * Never modifies `inputDb` or `makeupDb` (makeup stays frozen while dragging sliders) and glides over 60 ms.
+     * Called on slider drags, enhancer drags, and volume contour ticks (v5 Section 9 `update` & Enhancers `onDrag`).
+     * Never modifies `inputDb`, `makeupDb`, MBC, or side effects (`Virtualizer`, `BassBoost`, `Dolby`) and glides over 60 ms.
      */
     fun updateSlidersOrContourFast(
         enabled: Boolean,
         abCompare: Boolean,
         layers: Layers,
         flatBypass: Boolean,
+        enhancerAmounts: DoubleArray = lastEnhancerAmounts,
         internalSessionId: Int = 0
     ) {
         lastEnabled = enabled && !(usbBitPerfectEnabled && getCurrentRoute() == OutputRoute.USB)
         lastAbCompare = abCompare
         lastLayers = layers
-        lastFlatBypass = flatBypass
+        lastEnhancerAmounts = enhancerAmounts.copyOf()
+        val anyEnhancerOn = EnhancerMixer.anyActive(lastEnhancerAmounts)
+        lastFlatBypass = flatBypass && !anyEnhancerOn
 
         ensureTargetSessionsAttached(internalSessionId)
         for (bundle in activeBundles.values) {
             val v5 = bundle.v5Engine
             if (v5 != null) {
-                v5.setEnabled(lastEnabled)
+                v5.setEnabled(lastEnabled && !lastFlatBypass)
                 v5.setAbCompareMode(lastAbCompare)
                 v5.update(lastLayers, glideMs = 60.0)
             } else {
-                applyTier1FallbackToBundle(bundle)
+                applyTier1FallbackToBundle(bundle, commitSideEffects = false)
             }
         }
+    }
+
+    fun restoreDolbyProperties() {
+        dolbyControl.restore()
     }
 
     private fun ensureTargetSessionsAttached(internalSessionId: Int) {
@@ -551,55 +608,42 @@ class AudioEngineController(private val context: Context) {
             }
         }
 
-        var eq: Equalizer? = null
-        var bb: BassBoost? = null
-        var virt: Virtualizer? = null
-        var le: LoudnessEnhancer? = null
-
-        try {
-            eq = Equalizer(0, sessionId)
+        val eq: Equalizer? = try {
+            Equalizer(0, sessionId)
         } catch (_: Throwable) {
-            eq = null
+            null
         }
 
-        try {
-            val candidateBb = BassBoost(0, sessionId)
-            if (candidateBb.strengthSupported) {
-                bb = candidateBb
-            } else {
-                candidateBb.release()
-            }
+        val bbFx = BassBoostFx(sessionId)
+        val virtFx = VirtualizerFx(sessionId)
+
+        val le: LoudnessEnhancer? = try {
+            LoudnessEnhancer(sessionId)
         } catch (_: Throwable) {
+            null
         }
 
-        try {
-            val candidateVirt = Virtualizer(0, sessionId)
-            if (candidateVirt.strengthSupported) {
-                virt = candidateVirt
-            } else {
-                candidateVirt.release()
-            }
-        } catch (_: Throwable) {
-        }
-
-        try {
-            le = LoudnessEnhancer(sessionId)
-        } catch (_: Throwable) {
-        }
-
-        if (v5Engine != null || eq != null || bb != null || virt != null) {
+        if (v5Engine != null || eq != null) {
             activeBundles[sessionId] = SessionEffectBundle(
                 sessionId = sessionId,
                 v5Engine = v5Engine,
                 equalizer = eq,
-                bassBoost = bb,
-                virtualizer = virt,
+                bassBoostFx = bbFx,
+                virtualizerFx = virtFx,
                 loudnessEnhancer = le
             )
+        } else {
+            bbFx.release()
+            virtFx.release()
+            try { le?.release() } catch (_: Throwable) {}
         }
     }
 
     private fun loadAllSessions(glideMs: Double) {
+        val isSmallSpeaker = getCurrentRoute() == OutputRoute.SPEAKER
+        val surroundAmount = lastEnhancerAmounts.getOrElse(Enhancer.SURROUND.ordinal) { 0.0 }
+        val activeGate = lastEnabled && !lastFlatBypass && !lastAbCompare
+
         for (bundle in activeBundles.values) {
             val v5 = bundle.v5Engine
             if (v5 != null) {
@@ -616,20 +660,14 @@ class AudioEngineController(private val context: Context) {
                 currentInputGainDb = v5.inputDb
                 currentMakeupGainDb = v5.makeupDb
 
-                // v5 Section 13: When DynamicsProcessing is active, disable native Equalizer and set BassBoost to 0
+                // v5 Section 13 & Enhancers Section 4.2: When DynamicsProcessing is active, disable native Equalizer and set BassBoost to 0
                 try { bundle.equalizer?.enabled = false } catch (_: Throwable) {}
-                try {
-                    bundle.bassBoost?.setStrength(0)
-                    bundle.bassBoost?.enabled = false
-                } catch (_: Throwable) {}
-                try {
-                    bundle.virtualizer?.enabled = lastEnabled && !lastFlatBypass && lastVirtualizerStrength > 0
-                    if (bundle.virtualizer?.strengthSupported == true) {
-                        bundle.virtualizer?.setStrength(lastVirtualizerStrength.coerceIn(0, 1000).toShort())
-                    }
-                } catch (_: Throwable) {}
+                bundle.bassBoostFx?.apply(0.0, enabledGate = false)
+
+                // Enhancers Section 4.1: Surround VirtualizerFx applied on commit
+                bundle.virtualizerFx?.apply(surroundAmount, small = isSmallSpeaker, enabledGate = activeGate)
             } else {
-                applyTier1FallbackToBundle(bundle)
+                applyTier1FallbackToBundle(bundle, commitSideEffects = true)
             }
 
             bundle.loudnessEnhancer?.let { le ->
@@ -642,11 +680,12 @@ class AudioEngineController(private val context: Context) {
     }
 
     /**
-     * Legacy Tier 1 fallback (v5 Section 13, 16.4 & 19) when `DynamicsProcessing` fails on a session:
+     * Legacy Tier 1 fallback (v5 Section 13, 16.4 & Enhancers Section 4.2) when `DynamicsProcessing` fails on a session:
      * Reads each native band's edges with `getBandFreqRange()` (millihertz) and uses the mean of the 31-band
-     * `effective31` curve over that band (`AutoEq.map31ToNativeBands`), capped at +4 dB, plus `BassBoost` & `Virtualizer`.
+     * `effective31` curve (including `enhancer31`) over that band (`AutoEq.map31ToNativeBands`), capped at +4 dB,
+     * plus `BassBoostFx` (`600 * deepBassAmount`) and `VirtualizerFx` (`Surround`).
      */
-    private fun applyTier1FallbackToBundle(bundle: SessionEffectBundle) {
+    private fun applyTier1FallbackToBundle(bundle: SessionEffectBundle, commitSideEffects: Boolean) {
         val active = lastEnabled && !lastFlatBypass && !lastAbCompare
         val eq = bundle.equalizer
         if (eq != null) {
@@ -676,24 +715,24 @@ class AudioEngineController(private val context: Context) {
             }
         }
 
-        bundle.bassBoost?.let { bb ->
-            try {
-                bb.enabled = active && lastBassBoostStrength > 0
-                if (bb.strengthSupported) {
-                    bb.setStrength(if (active) lastBassBoostStrength.coerceIn(0, 1000).toShort() else 0)
-                }
-            } catch (_: Throwable) {
-            }
+        if (commitSideEffects) {
+            val isSmallSpeaker = getCurrentRoute() == OutputRoute.SPEAKER
+            val deepBassAmount = lastEnhancerAmounts.getOrElse(Enhancer.DEEP_BASS.ordinal) { 0.0 }
+            val surroundAmount = lastEnhancerAmounts.getOrElse(Enhancer.SURROUND.ordinal) { 0.0 }
+            bundle.bassBoostFx?.apply(deepBassAmount, enabledGate = active)
+            bundle.virtualizerFx?.apply(surroundAmount, small = isSmallSpeaker, enabledGate = active)
         }
+    }
 
-        bundle.virtualizer?.let { virt ->
-            try {
-                virt.enabled = active && lastVirtualizerStrength > 0
-                if (virt.strengthSupported) {
-                    virt.setStrength(if (active) lastVirtualizerStrength.coerceIn(0, 1000).toShort() else 0)
-                }
-            } catch (_: Throwable) {
-            }
+    private fun runShellCommand(command: String, useSu: Boolean): String? {
+        return try {
+            val cmd = if (useSu) arrayOf("su", "-c", command) else arrayOf("sh", "-c", command)
+            val proc = Runtime.getRuntime().exec(cmd)
+            val out = proc.inputStream.bufferedReader().readText()
+            proc.waitFor()
+            out
+        } catch (_: Throwable) {
+            null
         }
     }
 
@@ -749,6 +788,7 @@ class AudioEngineController(private val context: Context) {
     }
 
     fun releaseAll() {
+        dolbyControl.restore()
         if (receiverRegistered) {
             try {
                 context.unregisterReceiver(audioSessionReceiver)

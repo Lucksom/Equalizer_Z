@@ -98,7 +98,12 @@ fun ModeSelectorCard(
                 Text(
                     text = stringResource(R.string.engine_mode_header),
                     style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 8.dp)
                 )
                 Text(
                     text = if (diagnostics.dynamicsProcessingSupported) {
@@ -107,7 +112,8 @@ fun ModeSelectorCard(
                         "Basic Engine (${diagnostics.nativeEqBandCount}-Band)"
                     },
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1
                 )
             }
 
