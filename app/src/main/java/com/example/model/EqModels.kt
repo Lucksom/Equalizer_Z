@@ -254,7 +254,8 @@ data class DeviceProfileMemory(
     val presetId: String = "percussion_clarity",
     val intensity: Float = 1.0f,
     val tiltBassDb: Float = 0.0f,
-    val tiltTrebleDb: Float = 0.0f
+    val tiltTrebleDb: Float = 0.0f,
+    val daxProfileId: Int = 2 // 0=Dynamic, 1=Movie, 2=Music, 3=Voice (equalizer.db device_routing_memory)
 )
 
 /**

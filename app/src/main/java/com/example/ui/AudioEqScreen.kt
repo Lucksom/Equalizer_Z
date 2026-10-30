@@ -159,6 +159,7 @@ fun AudioEqScreen(
                     UnifiedEqualizerCard(
                         presets = state.presets,
                         selectedPresetId = state.selectedPresetId,
+                        selectedDaxProfile = state.selectedDaxProfile,
                         targetGainsDb = state.activeSlidersGainsDb,
                         splitLREnabled = state.splitLREnabled,
                         editingRightChannel = state.editingRightChannel,
@@ -174,6 +175,7 @@ fun AudioEqScreen(
                         activeCalibrationLabel = activeCalLabel,
                         isEnabled = state.isEnabled,
                         onSelectPreset = { viewModel.selectPreset(it) },
+                        onSelectDaxProfile = { viewModel.selectDaxProfile(it) },
                         onDeleteCustomPreset = { viewModel.deleteCustomPreset(it) },
                         onSelectEditingChannel = { viewModel.setEditingRightChannel(it) },
                         onBandGainChange = { idx, db -> viewModel.updateBandGain(idx, db) },

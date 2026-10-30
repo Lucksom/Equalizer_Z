@@ -6,12 +6,14 @@ import androidx.lifecycle.viewModelScope
 import com.example.audio.AudioEngineController
 import com.example.audio.AutoEq
 import com.example.audio.AutoEqRepo
+import com.example.audio.DaxProfile
 import com.example.audio.DeviceDiagnostics
 import com.example.audio.Dsp
 import com.example.audio.DspReferenceMonitor
 import com.example.audio.Enhancer
 import com.example.audio.EnhancerItemState
 import com.example.audio.EnhancerMixer
+import com.example.audio.EqMath
 import com.example.audio.HearingTonePlayer
 import com.example.audio.IndexEntry
 import com.example.audio.Layers
@@ -31,6 +33,7 @@ import com.example.model.ParametricCorrectionFilter
 import com.example.model.PersonalHearingCurve
 import com.example.model.PresetConfig
 import com.example.model.SectionWidths
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,6 +44,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.random.Random
@@ -49,6 +53,7 @@ data class EqUiState(
     val isEnabled: Boolean = true,
     val isAbCompare: Boolean = false,
     val selectedMode: EngineMode = EngineMode.LEGACY,
+    val selectedDaxProfile: DaxProfile = DaxProfile.MUSIC, // v6 Section 4 Acoustic Profile (0=Dynamic, 1=Movie, 2=Music, 3=Voice)
     val modeStatuses: Map<EngineMode, ModeStatusInfo> = emptyMap(),
     val presets: List<PresetConfig> = EqConstants.BUILT_IN_PRESETS,
     val selectedPresetId: String = "percussion_clarity",
@@ -136,6 +141,11 @@ data class EqUiState(
     val activeSlidersGainsDb: List<Float>
         get() = if (splitLREnabled && editingRightChannel) rightGainsDb else gainsDb
 
+    val dax20BandInt: List<Int>
+        get() = EqMath.sliders10ToDax20Int(
+            DoubleArray(10) { activeSlidersGainsDb.getOrElse(it) { 0f }.toDouble() }
+        ).toList()
+
     val isCeilingWarning: Boolean
         get() = ceilingLoadDb > 4.0f
 
@@ -192,6 +202,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 if (!initialLoadComplete) {
                     initialLoadComplete = true
                     val mode = EngineMode.entries.find { it.id == prefs.selectedModeId } ?: EngineMode.LEGACY
+                    val daxProf = DaxProfile.fromId(prefs.selectedProfileId)
                     val matchedPreset = allPresets.find { it.id == prefs.selectedPresetId }
                     val qOverrides = matchedPreset?.qOverrides ?: emptyMap()
                     val harmMix = matchedPreset?.bassHarmonicMixDb
@@ -203,7 +214,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                         speakerValidArray = parsedValid.toBooleanArray()
                     }
                     val spkCorr31 = if (prefs.speakerCalEnabled && parsedMeas.size == 31) {
-                        Dsp.computeSpeakerCorrection(speakerMeasArray, speakerValidArray, prefs.speakerCalStrength.toDouble())
+                        EqMath.computeSpeakerCalibration31(speakerMeasArray, speakerValidArray, prefs.speakerCalStrength.toDouble())
                     } else {
                         DoubleArray(31)
                     }
@@ -235,6 +246,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                         current.copy(
                             isEnabled = prefs.isEnabled,
                             selectedMode = mode,
+                            selectedDaxProfile = daxProf,
                             presets = allPresets,
                             selectedPresetId = prefs.selectedPresetId,
                             gainsDb = prefs.gainsDb,
@@ -332,11 +344,13 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                             customRaw = savedMem.rawPeqOrGraphicText
                         )
                         val matchedPreset = s.presets.find { it.id == savedMem.presetId }
+                        val restoredDax = DaxProfile.fromId(savedMem.daxProfileId)
                         _uiState.update { cur ->
                             cur.copy(
                                 activeRoute = newRoute,
                                 activeDeviceKey = newDevKey,
                                 currentVolumeRatio = volRatio.toFloat(),
+                                selectedDaxProfile = restoredDax,
                                 headphoneProfiles = updatedProfiles,
                                 selectedHeadphoneProfileId = savedMem.profileId,
                                 headphoneStrength = savedMem.strength,
@@ -457,6 +471,30 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                     customPath = entry.path,
                     customRaw = detailed.rawText
                 )
+                viewModelScope.launch(Dispatchers.IO) {
+                    try {
+                        val filtersJson = detailed.filters.joinToString(prefix = "[", postfix = "]") { f ->
+                            String.format(
+                                Locale.US,
+                                """{"type":"%s","fc":%.1f,"gainDb":%.2f,"q":%.2f}""",
+                                f.type,
+                                f.fc,
+                                f.gainDb,
+                                f.q
+                            )
+                        }
+                        repository.sqliteHelper.cacheAutoEqProfile(
+                            modelId = entry.path,
+                            modelName = entry.name,
+                            sourceName = entry.source ?: "AutoEq",
+                            rigName = entry.rig,
+                            preampDb = detailed.preampDb,
+                            filtersJson = filtersJson,
+                            correction31 = detailed.correction31
+                        )
+                    } catch (_: Throwable) {
+                    }
+                }
                 _uiState.update {
                     it.copy(
                         autoEqLoading = false,
@@ -558,10 +596,15 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             presetId = s.selectedPresetId,
             intensity = s.intensity,
             tiltBassDb = s.tiltBassDb,
-            tiltTrebleDb = s.tiltTrebleDb
+            tiltTrebleDb = s.tiltTrebleDb,
+            daxProfileId = s.selectedDaxProfile.id
         )
         viewModelScope.launch {
-            repository.saveDeviceMemory(mem)
+            repository.saveDeviceMemory(
+                memory = mem,
+                activeProfileId = s.selectedDaxProfile.id,
+                volumeContourOn = s.volumeContourEnabled
+            )
         }
     }
 
@@ -672,8 +715,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         val layers = buildCurrentLayers(s)
-        val eff31 = Dsp.computeEffective31(layers, withContour = true)
-        val ceilingLoad = Dsp.computeCeilingLoadDb(eff31)
 
         val trimmedDb = if (s.selectedHeadphoneProfileId != "none" || abs(s.tiltBassDb) > 0.01f || abs(s.tiltTrebleDb) > 0.01f) {
             val prof = if (s.selectedHeadphoneProfileId != "none") s.selectedHeadphoneProfile else null
@@ -689,11 +730,14 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         val mbc = EqConstants.mbcForPreset(matchedPreset, s.nightModeEnabled)
         val flatBypass = matchedPreset?.bypassChain == true
         val dolbyActive = s.tryDolbyControl || s.diagnostics.dolbyPropsDetected
+        val tier1Native5 = matchedPreset?.legacyNativeDb?.toFloatArray()
+            ?: EqConstants.convert10BandTo5BandNative(s.gainsDb).toFloatArray()
 
         engineController.loadEngineState(
             mode = s.selectedMode,
             enabled = s.isEnabled,
             abCompare = s.isAbCompare,
+            daxProfile = s.selectedDaxProfile,
             layers = layers,
             mbc = mbc,
             routeBaseDb = s.activeRoute.baseInputGainDb,
@@ -702,6 +746,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             enhancerAmounts = amounts,
             dolbyControlActive = dolbyActive,
             dolbyDeepBass = s.dolbyDeepBass,
+            tier1Native5Db = tier1Native5,
             bassBoostStrength = s.bassBoostStrength,
             virtualizerStrength = s.virtualizerStrength,
             internalSessionId = dspMonitor.getAudioSessionId()
@@ -709,8 +754,9 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
         val inGain = engineController.currentInputGainDb
         val makeupGain = engineController.currentMakeupGainDb
+        val ceilingLoad = engineController.currentCeilingLoadDb
 
-        syncReferenceMonitorDsp(s, layers, inGain, makeupGain, flatBypass && !EnhancerMixer.anyActive(amounts))
+        syncReferenceMonitorDsp(s, layers, inGain, makeupGain, flatBypass && !EnhancerMixer.anyActive(amounts) && s.selectedDaxProfile == DaxProfile.MUSIC)
 
         _uiState.update {
             it.copy(
@@ -744,20 +790,23 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         val layers = buildCurrentLayers(s)
-        val eff31 = Dsp.computeEffective31(layers, withContour = true)
-        val ceilingLoad = Dsp.computeCeilingLoadDb(eff31)
         val flatBypass = s.selectedPresetId == "flat"
+        val tier1Native5 = EqConstants.convert10BandTo5BandNative(s.gainsDb).toFloatArray()
 
         engineController.updateSlidersOrContourFast(
             enabled = s.isEnabled,
             abCompare = s.isAbCompare,
+            daxProfile = s.selectedDaxProfile,
             layers = layers,
             flatBypass = flatBypass,
             enhancerAmounts = amounts,
+            tier1Native5Db = tier1Native5,
             internalSessionId = dspMonitor.getAudioSessionId()
         )
 
-        syncReferenceMonitorDsp(s, layers, s.inputGainDb, s.makeupGainDb, flatBypass && !EnhancerMixer.anyActive(amounts))
+        val ceilingLoad = engineController.currentCeilingLoadDb
+
+        syncReferenceMonitorDsp(s, layers, s.inputGainDb, s.makeupGainDb, flatBypass && !EnhancerMixer.anyActive(amounts) && s.selectedDaxProfile == DaxProfile.MUSIC)
 
         _uiState.update {
             it.copy(
@@ -816,6 +865,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             repository.saveState(
                 isEnabled = s.isEnabled,
                 modeId = s.selectedMode.id,
+                profileId = s.selectedDaxProfile.id,
                 presetId = s.selectedPresetId,
                 gainsDb = s.gainsDb,
                 rightGainsDb = s.rightGainsDb,
@@ -945,6 +995,12 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 selectedMode = EngineMode.LEGACY
             )
         }
+        applyPresetOrContextLoad()
+    }
+
+    fun selectDaxProfile(profile: DaxProfile) {
+        _uiState.update { it.copy(selectedDaxProfile = profile) }
+        saveCurrentDeviceMemory()
         applyPresetOrContextLoad()
     }
 

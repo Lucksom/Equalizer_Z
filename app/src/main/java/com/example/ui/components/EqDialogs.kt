@@ -72,6 +72,7 @@ import androidx.core.content.ContextCompat
 import com.example.audio.AutoEq
 import com.example.audio.DeviceDiagnostics
 import com.example.audio.Dsp
+import com.example.audio.EqMath
 import com.example.audio.IndexEntry
 import com.example.model.EqConstants
 import com.example.model.HeadphoneProfile
@@ -1034,6 +1035,17 @@ fun SoundCalibrationSheet(
                                     }
                                 }
                             }
+
+                            val earStepCsv = remember(activeEarOffsets) {
+                                EqMath.formatCustomizedSoundStepsCsv(activeEarOffsets)
+                            }
+                            Text(
+                                text = "CustomizedSoundModel Steps (INIT=-42dB, DIV=3dB): [$earStepCsv]",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
@@ -1585,7 +1597,13 @@ fun SettingsAndDiagnosticsSheet(
                         color = MaterialTheme.colorScheme.primary
                     )
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    DiagnosticRow("Active OperatingMode", diagnostics.activeOperatingMode.name)
                     DiagnosticRow("DynamicsProcessing API 28+", if (diagnostics.dynamicsProcessingSupported) "Active (${diagnostics.activeRenderBandCount} bands)" else "Basic Engine Fallback")
+                    DiagnosticRow("OEM Hardware DAX Bridge", when {
+                        diagnostics.hardwareDaxActive -> "Active (96-Byte 20-Band GEQ)"
+                        diagnostics.hardwareDaxDetected -> "Detected (9d4921da-8225-4f29...)"
+                        else -> "Not Present on Device"
+                    })
                     DiagnosticRow("Avg Binder Write Cost", String.format(Locale.US, "%.2f ms", diagnostics.avgBinderWriteCostMs))
                     DiagnosticRow("Virtualizer Support", if (diagnostics.virtualizerSupported) "Supported" else "May Not Apply on Route")
                     DiagnosticRow("Dolby Props Detected", if (diagnostics.dolbyPropsDetected) "Detected (dolby.bass/deepbass)" else "Not Present")

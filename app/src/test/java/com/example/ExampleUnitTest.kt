@@ -394,4 +394,43 @@ class ExampleUnitTest {
         assertEquals(3.8f, mbcBlended.ratio[4], 0.01f)
         assertEquals(-11f, mbcBlended.baseThresholdDb[4], 0.01f)
     }
+
+    @Test
+    fun v6MasterEqEngine_matchesDaxAndMathSpec() {
+        // 1. Verify 20-Band Bark/ERB frequencies from dax-default.xml
+        assertEquals(20, com.example.audio.EqMath.DAX_20_HZ.size)
+        assertEquals(47.0, com.example.audio.EqMath.DAX_20_HZ[0], 0.01)
+        assertEquals(19688.0, com.example.audio.EqMath.DAX_20_HZ[19], 0.01)
+
+        // 2. Verify 10-to-20 Band Quarter-dB Quantization & Midpoint Mapping (GeqView.java)
+        val sliders10 = doubleArrayOf(3.5, 4.5, 2.5, -2.5, -1.5, 0.0, 1.0, 2.5, 2.5, 1.5)
+        val dax20Int = com.example.audio.EqMath.sliders10ToDax20Int(sliders10)
+        assertEquals(20, dax20Int.size)
+        assertEquals(56, dax20Int[0])  // 3.5 * 16 = 56
+        assertEquals(64, dax20Int[1])  // midpoint(3.5, 4.5) = 4.0 * 16 = 64
+        assertEquals(72, dax20Int[2])  // 4.5 * 16 = 72
+        assertEquals(24, dax20Int[18]) // 1.5 * 16 = 24
+        assertEquals(24, dax20Int[19]) // duplicated band 18 -> 24
+
+        // 3. Verify 96-byte Little-Endian OEM DAX packet layout
+        val pkt96 = com.example.audio.OemDaxBridge.buildGeq96BytePacket(dax20Int)
+        assertEquals(96, pkt96.size)
+        val pkt12 = com.example.audio.OemDaxBridge.buildProfile12BytePacket(2)
+        assertEquals(12, pkt12.size)
+
+        // 4. Verify 7-Band Cascaded High-Shelf Biquad Math (EqualizerView.java)
+        val flat7 = DoubleArray(7) { 0.0 }
+        assertEquals(0.0, com.example.audio.EqMath.evaluateCascaded7BandDb(flat7, 1000.0), 0.01)
+
+        // 5. Verify Personal Hearing Compensation (CustomizedSoundModel.java: INIT=-42, DIV=3)
+        val zeroEar = listOf(0f, 0f, 0f, 0f, 0f, 0f)
+        val steps = com.example.audio.EqMath.earDbToCustomizedSoundSteps(zeroEar)
+        assertTrue(steps.all { it == 14 }) // (0 - (-42)) / 3 = 14
+
+        // 6. Verify 4 Acoustic Profiles (Dynamic, Movie, Music, Voice)
+        assertEquals(4, com.example.audio.DaxProfile.entries.size)
+        assertEquals(0.75, com.example.audio.DaxProfile.MOVIE.ieqAmountSpk, 0.001)
+        assertEquals(6, com.example.audio.DaxProfile.VOICE.dialogSteps)
+    }
 }
+

@@ -5,17 +5,24 @@ import android.util.Base64
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.room.Room
+import com.example.audio.DaxProfile
+import com.example.audio.EqMath
 import com.example.model.DeviceProfileMemory
 import com.example.model.EngineMode
 import com.example.model.EqConstants
 import com.example.model.PersonalHearingCurve
 import com.example.model.PresetConfig
 import com.example.model.SectionWidths
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 private val Context.eqDataStore by preferencesDataStore(name = "audio_eq_preferences")
@@ -23,6 +30,7 @@ private val Context.eqDataStore by preferencesDataStore(name = "audio_eq_prefere
 data class PersistedEqPreferences(
     val isEnabled: Boolean = true,
     val selectedModeId: String = EngineMode.LEGACY.id,
+    val selectedProfileId: Int = DaxProfile.MUSIC.id, // v6 Section 4 Acoustic Profile (0=Dynamic, 1=Movie, 2=Music, 3=Voice)
     val selectedPresetId: String = "percussion_clarity",
     val gainsDb: List<Float> = EqConstants.BUILT_IN_PRESETS.first { it.id == "percussion_clarity" }.gainsDb,
     val rightGainsDb: List<Float>? = null, // Independent Right channel 10-band EQ when splitLREnabled is true (F4)
@@ -36,9 +44,9 @@ data class PersistedEqPreferences(
     val usbBitPerfectEnabled: Boolean = false, // F7
     val selectedHeadphoneProfileId: String = "none",
     val headphoneStrength: Float = 0.8f,
-    val headphoneFullRange: Boolean = false, // Section 16.4 Full range (+10 dB boost limit)
-    val tiltBassDb: Float = 0.0f, // Section 16.4 & F3 (-6..+6 dB)
-    val tiltTrebleDb: Float = 0.0f, // Section 16.4 & F3 (-4..+4 dB)
+    val headphoneFullRange: Boolean = false,
+    val tiltBassDb: Float = 0.0f,
+    val tiltTrebleDb: Float = 0.0f,
     val customAutoEqName: String = "",
     val customAutoEqSource: String = "",
     val customAutoEqPath: String = "",
@@ -47,8 +55,8 @@ data class PersistedEqPreferences(
     val speakerCalStrength: Float = 0.7f,
     val speakerMeas31Csv: String = "",
     val speakerValid31Csv: String = "",
-    val hearingCurve: PersonalHearingCurve = PersonalHearingCurve(), // F5
-    val deviceMemories: Map<String, DeviceProfileMemory> = emptyMap(), // F2
+    val hearingCurve: PersonalHearingCurve = PersonalHearingCurve(),
+    val deviceMemories: Map<String, DeviceProfileMemory> = emptyMap(),
     val compatibility10Band: Boolean = false,
     val transientMode: Boolean = false,
     val enhancerEnabledFlags: List<Boolean> = listOf(false, false, false, false),
@@ -59,6 +67,11 @@ data class PersistedEqPreferences(
 )
 
 class EqRepository(private val context: Context) {
+
+    // Master SQLite Database (equalizer.db — v6 Section 8)
+    val sqliteHelper: EqualizerDatabaseHelper = EqualizerDatabaseHelper.getInstance(context)
+
+    private val sqlitePresetsTrigger = MutableStateFlow(0L)
 
     private val database: EqDatabase by lazy {
         Room.databaseBuilder(
@@ -73,6 +86,7 @@ class EqRepository(private val context: Context) {
     private object Keys {
         val IS_ENABLED = booleanPreferencesKey("is_enabled")
         val MODE_ID = stringPreferencesKey("mode_id")
+        val PROFILE_ID = intPreferencesKey("dax_profile_id")
         val PRESET_ID = stringPreferencesKey("preset_id")
         val GAINS_CSV = stringPreferencesKey("gains_csv")
         val RIGHT_GAINS_CSV = stringPreferencesKey("right_gains_csv")
@@ -151,6 +165,7 @@ class EqRepository(private val context: Context) {
         PersistedEqPreferences(
             isEnabled = prefs[Keys.IS_ENABLED] ?: true,
             selectedModeId = prefs[Keys.MODE_ID] ?: EngineMode.LEGACY.id,
+            selectedProfileId = (prefs[Keys.PROFILE_ID] ?: DaxProfile.MUSIC.id).coerceIn(0, 3),
             selectedPresetId = prefs[Keys.PRESET_ID] ?: defaultPreset.id,
             gainsDb = gains,
             rightGainsDb = rightGains,
@@ -192,8 +207,16 @@ class EqRepository(private val context: Context) {
         )
     }
 
-    val customPresetsFlow: Flow<List<PresetConfig>> = dao.getAllCustomPresets().map { entities ->
-        entities.map { entity ->
+    val customPresetsFlow: Flow<List<PresetConfig>> = combine(
+        dao.getAllCustomPresets(),
+        sqlitePresetsTrigger
+    ) { entities, _ ->
+        val sqliteAll = try {
+            sqliteHelper.getAllPresets().filter { !it.isBuiltIn }
+        } catch (_: Throwable) {
+            emptyList()
+        }
+        val roomPresets = entities.map { entity ->
             val gains = entity.gainsCsv.split(",")
                 .mapNotNull { it.toFloatOrNull() }
                 .let { if (it.size == 10) it else List(10) { 0f } }
@@ -213,11 +236,13 @@ class EqRepository(private val context: Context) {
                 isBuiltIn = false
             )
         }
+        (roomPresets + sqliteAll).distinctBy { it.name }
     }
 
     suspend fun saveState(
         isEnabled: Boolean,
         modeId: String,
+        profileId: Int = DaxProfile.MUSIC.id,
         presetId: String,
         gainsDb: List<Float>,
         rightGainsDb: List<Float>?,
@@ -250,6 +275,7 @@ class EqRepository(private val context: Context) {
         context.eqDataStore.edit { prefs ->
             prefs[Keys.IS_ENABLED] = isEnabled
             prefs[Keys.MODE_ID] = modeId
+            prefs[Keys.PROFILE_ID] = profileId.coerceIn(0, 3)
             prefs[Keys.PRESET_ID] = presetId
             prefs[Keys.GAINS_CSV] = gainsDb.joinToString(",")
             if (rightGainsDb != null) {
@@ -284,6 +310,12 @@ class EqRepository(private val context: Context) {
     }
 
     suspend fun saveHearingCurve(curve: PersonalHearingCurve) {
+        withContext(Dispatchers.IO) {
+            try {
+                sqliteHelper.savePersonalHearingCalibration(curve)
+            } catch (_: Throwable) {
+            }
+        }
         context.eqDataStore.edit { prefs ->
             prefs[Keys.HEARING_ENABLED] = curve.enabled
             prefs[Keys.HEARING_LEFT_CSV] = curve.leftEarDb.joinToString(",") { "%.2f".format(Locale.US, it) }
@@ -292,7 +324,17 @@ class EqRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveDeviceMemory(memory: DeviceProfileMemory) {
+    suspend fun saveDeviceMemory(
+        memory: DeviceProfileMemory,
+        activeProfileId: Int = DaxProfile.MUSIC.id,
+        volumeContourOn: Boolean = true
+    ) {
+        withContext(Dispatchers.IO) {
+            try {
+                sqliteHelper.saveDeviceRoutingMemory(memory, activeProfileId, volumeContourOn)
+            } catch (_: Throwable) {
+            }
+        }
         context.eqDataStore.edit { prefs ->
             val current = decodeDeviceMemories(prefs[Keys.DEVICE_MEMORIES_RAW] ?: "").toMutableMap()
             current[memory.deviceKey] = memory
@@ -306,6 +348,13 @@ class EqRepository(private val context: Context) {
         valid: BooleanArray,
         strength: Float
     ) {
+        withContext(Dispatchers.IO) {
+            try {
+                val corr31 = EqMath.computeSpeakerCalibration31(measDb, valid, strength.toDouble())
+                sqliteHelper.saveSpeakerCalibration(enabled, measDb, valid, corr31, strength)
+            } catch (_: Throwable) {
+            }
+        }
         context.eqDataStore.edit { prefs ->
             prefs[Keys.SPEAKER_CAL_ENABLED] = enabled
             prefs[Keys.SPEAKER_CAL_STRENGTH] = strength
@@ -329,9 +378,23 @@ class EqRepository(private val context: Context) {
         bassBoostStrength: Int,
         virtualizerStrength: Int
     ) {
+        val cleanName = name.trim().ifEmpty { "My Custom EQ" }
+        withContext(Dispatchers.IO) {
+            try {
+                sqliteHelper.saveCustomPreset(
+                    name = cleanName,
+                    gains10Db = gainsDb,
+                    highPassHz = highPassHz,
+                    bassBoostStrength = bassBoostStrength,
+                    virtualizerStrength = virtualizerStrength
+                )
+                sqlitePresetsTrigger.value = System.currentTimeMillis()
+            } catch (_: Throwable) {
+            }
+        }
         dao.insertPreset(
             CustomPresetEntity(
-                name = name.trim().ifEmpty { "My Custom EQ" },
+                name = cleanName,
                 gainsCsv = gainsDb.joinToString(","),
                 preampDb = preampDb,
                 highPassHz = highPassHz,
@@ -346,6 +409,13 @@ class EqRepository(private val context: Context) {
     }
 
     suspend fun deleteCustomPreset(presetId: String) {
+        withContext(Dispatchers.IO) {
+            try {
+                sqliteHelper.deleteCustomPreset(presetId)
+                sqlitePresetsTrigger.value = System.currentTimeMillis()
+            } catch (_: Throwable) {
+            }
+        }
         val numericId = presetId.removePrefix("user_").toIntOrNull() ?: return
         dao.deletePresetById(numericId)
     }
@@ -372,7 +442,8 @@ class EqRepository(private val context: Context) {
                 encodeB64(m.presetId),
                 m.intensity.toString(),
                 m.tiltBassDb.toString(),
-                m.tiltTrebleDb.toString()
+                m.tiltTrebleDb.toString(),
+                m.daxProfileId.toString()
             ).joinToString("|")
         }
     }
@@ -399,7 +470,8 @@ class EqRepository(private val context: Context) {
                 presetId = decodeB64(p[10]).ifEmpty { "percussion_clarity" },
                 intensity = p[11].toFloatOrNull() ?: 1.0f,
                 tiltBassDb = p[12].toFloatOrNull() ?: 0.0f,
-                tiltTrebleDb = p[13].toFloatOrNull() ?: 0.0f
+                tiltTrebleDb = p[13].toFloatOrNull() ?: 0.0f,
+                daxProfileId = p.getOrNull(14)?.toIntOrNull() ?: DaxProfile.MUSIC.id
             )
         }
         return out

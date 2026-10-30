@@ -7,11 +7,9 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.media.audiofx.AudioEffect
-import android.media.audiofx.BassBoost
 import android.media.audiofx.DynamicsProcessing
 import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
-import android.media.audiofx.Virtualizer
 import android.os.Build
 import androidx.core.content.ContextCompat
 import com.example.model.CapabilityLevel
@@ -23,6 +21,7 @@ import com.example.model.OutputRoute
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
+import kotlin.math.max
 
 data class DeviceDiagnostics(
     val nativeEqBandCount: Int = 5,
@@ -51,21 +50,27 @@ data class DeviceDiagnostics(
     val btDisableAbsVolActive: Boolean = false,
     val virtualizerSupported: Boolean = true,
     val dolbyPropsDetected: Boolean = false,
+    val hardwareDaxDetected: Boolean = false,
+    val hardwareDaxActive: Boolean = false,
+    val activeOperatingMode: OperatingMode = OperatingMode.LEGACY_TIER2_DP,
     val avgBinderWriteCostMs: Double = 0.0
 )
 
 /**
- * AudioEngineController updated for Audio EQ Deep Optimization v5 + Enhancers Spec (APK-only):
- * - Hosts per-session `EqEngine` (own HandlerThread, 31-band FastRender PCHIP pre-EQ + 6-band MBC ceilings + limiter backstop, adaptive ~33 Hz delta writes, L/R channels)
- * - Hosts per-session `VirtualizerFx` (Binaural on headphones / Transaural on speaker for Surround Audio) and `BassBoostFx` (Legacy Tier 1 only)
- * - Hosts `DolbyControl` (`dolby.deepbass` and `dolby.bass` coalesced background shell runner with `restore()`)
- * - Falls back cleanly to Legacy Tier 1 (`Equalizer` + `BassBoostFx` + `VirtualizerFx`) using band-averaged 31-band curves (`AutoEq.map31ToNativeBands`)
- *   when `DynamicsProcessing` is unavailable, and forces `BassBoost = 0` whenever `DynamicsProcessing` is active
+ * AudioEngineController wired to Equalizer Master Database & Engineering Specification (v6):
+ * - Hosts `MasterEqController` (`MasterEqEngine.kt`) per active audio session (and Global Session 0 for Root/Shizuku)
+ * - Supports all 3 Operating Modes:
+ *   1. `ROOT_GLOBAL` (Global Session 0 `DynamicsProcessing` + Optional OEM Hardware Bridge `9d4921da-8225-4f29-aefa-39537a04bcaa`)
+ *   2. `SHIZUKU_GLOBAL` (Global Session 0 `DynamicsProcessing` + `dumpsys media.audio_flinger`)
+ *   3. `LEGACY_TIER2_DP` / `LEGACY_TIER1_NATIVE` (Per-app `audioSessionId` via `ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION`)
+ * - Executes `MasterEqController.loadFullState(state, glideMs = 250.0)` on Profile, Preset, Route, AutoEq, or Intensity change
+ * - Executes `MasterEqController.updateSlidersOrVolume(state, glideMs = 60.0)` while dragging sliders or changing system volume
  */
 class AudioEngineController(private val context: Context) {
 
     private class SessionEffectBundle(
         val sessionId: Int,
+        val masterController: MasterEqController,
         var v5Engine: EqEngine? = null,
         var equalizer: Equalizer? = null,
         var bassBoostFx: BassBoostFx? = null,
@@ -73,6 +78,7 @@ class AudioEngineController(private val context: Context) {
         var loudnessEnhancer: LoudnessEnhancer? = null
     ) {
         fun release() {
+            try { masterController.release() } catch (_: Exception) {}
             try { v5Engine?.release() } catch (_: Exception) {}
             try { equalizer?.release() } catch (_: Exception) {}
             try { bassBoostFx?.release() } catch (_: Exception) {}
@@ -100,6 +106,7 @@ class AudioEngineController(private val context: Context) {
         correction31 = DoubleArray(31),
         enhancer31 = DoubleArray(31)
     )
+    private var lastDaxProfile: DaxProfile = DaxProfile.MUSIC
     private var lastMbc: MbcConfig = EqConstants.DEFAULT_MBC_CONFIG
     private var lastRouteBaseDb: Float = -3.0f
     private var lastLimiterDb: Float = -1.0f
@@ -109,6 +116,7 @@ class AudioEngineController(private val context: Context) {
     private var lastDolbyDeepBass: Boolean = false
     private var lastBassBoostStrength: Int = 150
     private var lastVirtualizerStrength: Int = 150
+    private var lastTier1Native5Db: FloatArray = FloatArray(5)
     private var lastEnabled: Boolean = true
     private var lastAbCompare: Boolean = false
     private var currentMode: EngineMode = EngineMode.LEGACY
@@ -119,6 +127,8 @@ class AudioEngineController(private val context: Context) {
     var currentInputGainDb: Float = -3.0f
         private set
     var currentMakeupGainDb: Float = 0.0f
+        private set
+    var currentCeilingLoadDb: Float = 0.0f
         private set
 
     var diagnostics: DeviceDiagnostics = DeviceDiagnostics()
@@ -167,6 +177,13 @@ class AudioEngineController(private val context: Context) {
 
     fun getCurrentRoute(): OutputRoute = detectCurrentRoute(audioManager)
 
+    fun getCurrentAudioRoute(): AudioRoute = when (getCurrentRoute()) {
+        OutputRoute.SPEAKER -> AudioRoute.SPEAKER
+        OutputRoute.WIRED -> AudioRoute.WIRED
+        OutputRoute.BLUETOOTH -> AudioRoute.BLUETOOTH
+        OutputRoute.USB -> AudioRoute.USB
+    }
+
     fun getCurrentVolumeRatio(): Double {
         return try {
             val maxV = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
@@ -199,6 +216,18 @@ class AudioEngineController(private val context: Context) {
             activeBundles.clear()
             existingSessions.forEach { attachToSessionIfNeeded(it) }
             loadAllSessions(glideMs = 250.0)
+        }
+    }
+
+    private fun resolvePreferredOperatingMode(): OperatingMode {
+        return when (currentMode) {
+            EngineMode.ROOT -> OperatingMode.ROOT_GLOBAL
+            EngineMode.ADB_SHIZUKU -> OperatingMode.SHIZUKU_GLOBAL
+            EngineMode.LEGACY -> if (diagnostics.dynamicsProcessingSupported) {
+                OperatingMode.LEGACY_TIER2_DP
+            } else {
+                OperatingMode.LEGACY_TIER1_NATIVE
+            }
         }
     }
 
@@ -340,6 +369,10 @@ class AudioEngineController(private val context: Context) {
             .takeIf { it.isNotEmpty() }
             ?.average() ?: 0.0
         val dolbyDetected = if (hasSu || dumpGranted) dolbyControl.detect() else diagnostics.dolbyPropsDetected
+        val hwDaxSupported = OemDaxBridge.isHardwareDaxSupported()
+        val hwDaxActive = activeBundles.values.any { it.masterController.oemBridgeActive }
+        val activeOpMode = activeBundles.values.firstOrNull()?.masterController?.activeMode
+            ?: if (dpOk) OperatingMode.LEGACY_TIER2_DP else OperatingMode.LEGACY_TIER1_NATIVE
 
         diagnostics = DeviceDiagnostics(
             nativeEqBandCount = nativeBands,
@@ -362,6 +395,9 @@ class AudioEngineController(private val context: Context) {
             btDisableAbsVolActive = diagnostics.btDisableAbsVolActive,
             virtualizerSupported = virtSupported,
             dolbyPropsDetected = dolbyDetected,
+            hardwareDaxDetected = hwDaxSupported,
+            hardwareDaxActive = hwDaxActive,
+            activeOperatingMode = activeOpMode,
             avgBinderWriteCostMs = avgWriteMs
         )
 
@@ -371,16 +407,16 @@ class AudioEngineController(private val context: Context) {
             mode = EngineMode.LEGACY,
             level = CapabilityLevel.AVAILABLE,
             summaryText = if (dpOk) {
-                "Legacy Global ($dpBandCount-Band PCHIP + 6-Band Ceilings)"
+                "Legacy Tier 2 ($dpBandCount-Band DP + 6-Band MBC + Limiter)"
             } else {
-                "Basic Engine (Tier 1 · $nativeBands-Band Native EQ · Approximate)"
+                "Legacy Tier 1 ($nativeBands-Band Native EQ + BassBoost)"
             },
             detailReason = buildString {
-                append("Works globally across apps without ADB, Shizuku, or Root. ")
+                append("Standard App UID (Section 1.1): attaches to per-app audioSessionId via ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION without ADB or Root. ")
                 if (dpOk) {
-                    append("Using v5 $dpBandCount-band PCHIP renderer, 6-band boost-tracking MBC ceilings (90..20k Hz), and -1 dB limiter.")
+                    append("Using Tier 2 31-band PCHIP pre-EQ, 20-band IEQ profile targets, 6-band MBC ceilings, and -1 dB limiter.")
                 } else {
-                    append("DynamicsProcessing unavailable; using Tier 1 Basic Engine ($nativeBands-band native Equalizer band-averaged + BassBoost).")
+                    append("Using Tier 1 5-band native Equalizer (capped at +4 dB) + BassBoost + Virtualizer.")
                 }
             },
             setupSteps = emptyList(),
@@ -391,24 +427,24 @@ class AudioEngineController(private val context: Context) {
             ModeStatusInfo(
                 mode = EngineMode.ADB_SHIZUKU,
                 level = CapabilityLevel.AVAILABLE,
-                summaryText = "ADB / Shizuku active ($dpBandCount-Band Renderer)",
+                summaryText = "Shizuku / ADB Global (Session 0 + audio_flinger)",
                 detailReason = buildString {
-                    append("Scanning dumpsys media.audio_flinger for all active player sessions with $dpBandCount-band PCHIP pre-EQ, L/R channel control, and 6-band ceilings.")
+                    append("Shell UID 2000 (Section 1.2): attaches DynamicsProcessing(0, 0, cfg) to Global Audio Session 0 and polls dumpsys media.audio_flinger.")
                     if (btCodec != null) append(" Detected BT codec: $btCodec.")
                 },
                 setupSteps = listOf(
                     "Permission android.permission.DUMP is granted.",
-                    "Throttled delta-only binder writes (~33 updates/sec)."
+                    "Global Session 0 + throttled delta-only binder writes (~33 Hz)."
                 ),
                 activeSessionsCount = activeBundles.size.coerceAtLeast(1)
             )
         } else {
-            val shizukuNote = if (shizukuPresent) "Shizuku installed, but shell/DUMP not active" else "Shizuku not running"
+            val shizukuNote = if (shizukuPresent) "Shizuku installed, grant shell/DUMP" else "Shizuku not running"
             ModeStatusInfo(
                 mode = EngineMode.ADB_SHIZUKU,
                 level = CapabilityLevel.REQUIRES_PERMISSION,
                 summaryText = "Requires permission ($shizukuNote · Using Legacy fallback)",
-                detailReason = "Start Shizuku or grant DUMP permission once via ADB to discover all active sessions and read Bluetooth codec headroom. Falling back to Legacy Global until granted.",
+                detailReason = "Start Shizuku or grant DUMP permission once via ADB to attach to Global Session 0 and read Bluetooth codec headroom. Falling back to Legacy until granted.",
                 setupSteps = listOf(
                     "1. Start Shizuku (Wireless Debugging) or connect phone to PC with USB Debugging.",
                     "2. Run one-time ADB command:\nadb shell pm grant $pkgName android.permission.DUMP"
@@ -421,11 +457,20 @@ class AudioEngineController(private val context: Context) {
             ModeStatusInfo(
                 mode = EngineMode.ROOT,
                 level = CapabilityLevel.AVAILABLE,
-                summaryText = "Root Helper active (APK-only su session & BT control)",
-                detailReason = "Root su binary detected. APK-only helper runs global session discovery, start-on-boot, codec readout, and Bluetooth absolute-volume control without modifying /system or /vendor.",
+                summaryText = buildString {
+                    append("Root Global (Session 0")
+                    if (hwDaxSupported) append(" + OEM 20-Band Bridge")
+                    append(")")
+                },
+                detailReason = buildString {
+                    append("Superuser RAM Helper (Section 1.3 & Section 7): Global Session 0 DynamicsProcessing + boot persistence.")
+                    if (hwDaxSupported) {
+                        append(" OEM Hardware DAX Effect (9d4921da-8225-4f29-aefa-39537a04bcaa) detected: 96-byte 20-band GEQ packet bridge active.")
+                    }
+                },
                 setupSteps = listOf(
-                    "APK-only mode (v5 Section 18): No system/vendor files are flashed or modified.",
-                    "Uses su helper for session discovery, Start-on-Boot (F12), and Bluetooth absolute-volume toggle."
+                    "100% APK-only, RAM-only execution (Section 1.3): /system and /vendor are never modified.",
+                    "Uses su helper for Global Session 0, OEM 96-byte GEQ bridge, and Bluetooth absolute-volume toggle."
                 ),
                 activeSessionsCount = activeBundles.size.coerceAtLeast(1)
             )
@@ -434,10 +479,10 @@ class AudioEngineController(private val context: Context) {
                 mode = EngineMode.ROOT,
                 level = CapabilityLevel.REQUIRES_PERMISSION,
                 summaryText = "Requires root access (APK-only · Using Legacy fallback)",
-                detailReason = "No su binary detected. Root mode in v5 is strictly APK-only (no flashing or /vendor edits) and uses su to launch the session helper on boot and control Bluetooth absolute volume.",
+                detailReason = "No su binary detected. Root mode in v6 is strictly APK-only (RAM-only, zero flashing) and attaches Global Session 0 + optional OEM 20-band hardware bridge.",
                 setupSteps = listOf(
                     "1. Grant su access in Magisk, KernelSU, or APatch if your device is rooted.",
-                    "2. Zero-flash APK-only architecture: never touches /system or /vendor partitions."
+                    "2. 100% APK-only, RAM-only execution: never touches /system or /vendor partitions."
                 ),
                 activeSessionsCount = activeBundles.size
             )
@@ -450,11 +495,6 @@ class AudioEngineController(private val context: Context) {
         )
     }
 
-    /**
-     * APK-only Root helper action (v5 Section 18.2):
-     * Toggles Bluetooth "Disable absolute volume" via `su` so the Section 7 software-volume contour
-     * receives volume-scaled audio on Bluetooth headphones.
-     */
     fun toggleRootBluetoothDisableAbsoluteVolume(disableAbsVol: Boolean): Result<String> {
         return try {
             val propVal = if (disableAbsVol) "true" else "false"
@@ -484,15 +524,56 @@ class AudioEngineController(private val context: Context) {
         }
     }
 
+    private fun buildMasterEngineState(
+        enabled: Boolean,
+        flatBypass: Boolean,
+        daxProfile: DaxProfile,
+        layers: Layers,
+        mbc: MbcConfig,
+        tier1Native5Db: FloatArray,
+        bassBoostStrength: Int
+    ): EngineState {
+        val opMode = resolvePreferredOperatingMode()
+        val audioRoute = getCurrentAudioRoute()
+        val volRatio = getCurrentVolumeRatio()
+        val mbcSettings = MbcSettings(
+            attackMs = mbc.attackMs.clone(),
+            releaseMs = mbc.releaseMs.clone(),
+            ratio = mbc.ratio.clone(),
+            baseThresholdDb = mbc.baseThresholdDb.clone(),
+            kneeDb = mbc.kneeDb.clone()
+        )
+        val hearing31 = DoubleArray(31) { i ->
+            0.5 * (layers.hearingLeft31.getOrElse(i) { 0.0 } + layers.hearingRight31.getOrElse(i) { 0.0 })
+        }
+        return EngineState(
+            enabled = enabled,
+            flatBypass = flatBypass,
+            mode = opMode,
+            route = audioRoute,
+            profile = daxProfile,
+            userSliders10Db = layers.userDb.clone(),
+            intensity = layers.intensity,
+            volumeContourOn = layers.contourDb.any { kotlin.math.abs(it) > 0.001 },
+            volumeRatio = volRatio,
+            correction31Db = layers.correction31.clone(),
+            mbc = mbcSettings,
+            tier1Native5Db = tier1Native5Db.clone(),
+            tier1BassBoost = bassBoostStrength.coerceIn(0, 1000).toShort(),
+            enhancer31Db = layers.enhancer31.clone(),
+            hearing31Db = hearing31
+        )
+    }
+
     /**
-     * Called on preset, route, headphone profile, speaker calibration, intensity, or enhancer COMMIT.
-     * Recomputes `inputDb`, `makeupDb`, and `EnhancerMbc.blend`, applies `VirtualizerFx`, `BassBoostFx` (Tier 1),
-     * and `DolbyControl`, and glides over 250 ms.
+     * Section 9 & Section 10 Step 3 — Called on Profile, Preset, Route, AutoEq, Intensity, or Enhancer COMMIT:
+     * Recomputes `inputGainDb` and `makeupDb` via `EqMath` and `MasterEqController.loadFullState(newState, glideMs = 250.0)`.
      */
     fun loadEngineState(
         mode: EngineMode,
         enabled: Boolean,
         abCompare: Boolean,
+        daxProfile: DaxProfile = DaxProfile.MUSIC,
         layers: Layers,
         mbc: MbcConfig,
         routeBaseDb: Float,
@@ -501,6 +582,7 @@ class AudioEngineController(private val context: Context) {
         enhancerAmounts: DoubleArray = DoubleArray(4),
         dolbyControlActive: Boolean = false,
         dolbyDeepBass: Boolean = false,
+        tier1Native5Db: FloatArray = FloatArray(5),
         bassBoostStrength: Int = 0,
         virtualizerStrength: Int = 0,
         internalSessionId: Int = 0
@@ -508,26 +590,46 @@ class AudioEngineController(private val context: Context) {
         currentMode = mode
         lastEnabled = enabled && !(usbBitPerfectEnabled && getCurrentRoute() == OutputRoute.USB)
         lastAbCompare = abCompare
+        lastDaxProfile = daxProfile
         lastLayers = layers
         lastEnhancerAmounts = enhancerAmounts.copyOf()
         lastDolbyControlActive = dolbyControlActive
         lastDolbyDeepBass = dolbyDeepBass
 
-        // Enhancers Section 3.1: Blend MBC parameters with active enhancer amounts on commit
         lastMbc = EnhancerMbc.blend(mbc, lastEnhancerAmounts)
         lastRouteBaseDb = routeBaseDb
         lastLimiterDb = limiterDb
 
-        // Enhancers Section 3 Rule 4: Flat + enhancers must keep the chain ON
         val anyEnhancerOn = EnhancerMixer.anyActive(lastEnhancerAmounts)
-        lastFlatBypass = flatBypass && !anyEnhancerOn
+        lastFlatBypass = flatBypass && !anyEnhancerOn && daxProfile == DaxProfile.MUSIC
 
+        lastTier1Native5Db = tier1Native5Db.copyOf()
         lastBassBoostStrength = bassBoostStrength
-        lastVirtualizerStrength = virtualizerStrength
+        lastVirtualizerStrength = max(virtualizerStrength, daxProfile.virtualizerStrength.toInt())
 
-        val base31 = Dsp.computeEffective31(layers, withContour = false, channel = 0)
-        currentInputGainDb = routeBaseDb - kotlin.math.max(0.0, (layers.correction31.maxOrNull() ?: 0.0) - 3.0).toFloat()
-        currentMakeupGainDb = if (lastFlatBypass) 0f else (-currentInputGainDb - Dsp.pinkGainDb(base31)).coerceIn(0.0, 4.0).toFloat()
+        // Compute exact v6 EqMath inputGainDb, makeupDb, and ceilingLoadDb synchronously for immediate UI feedback
+        val masterState = buildMasterEngineState(
+            enabled = lastEnabled && !lastAbCompare,
+            flatBypass = lastFlatBypass,
+            daxProfile = lastDaxProfile,
+            layers = lastLayers,
+            mbc = lastMbc,
+            tier1Native5Db = lastTier1Native5Db,
+            bassBoostStrength = lastBassBoostStrength
+        )
+        val corrPeak = masterState.correction31Db.maxOrNull() ?: 0.0
+        currentInputGainDb = masterState.route.baseInputGainDb - max(0.0, corrPeak - 3.0).toFloat()
+        val noContour31 = EqMath.computeEffective31(masterState, includeContour = false)
+        val levelerBonus = if (masterState.profile.levelerOn) 1.0 else 0.0
+        currentMakeupGainDb = if (masterState.flatBypass) {
+            0f
+        } else {
+            (-currentInputGainDb - EqMath.pinkGainDb(noContour31) + levelerBonus)
+                .coerceIn(0.0, 4.0)
+                .toFloat()
+        }
+        val eff31WithContour = EqMath.computeEffective31(masterState, includeContour = true)
+        currentCeilingLoadDb = EqMath.computeCeilingLoadDb(eff31WithContour)
 
         ensureTargetSessionsAttached(internalSessionId)
         loadAllSessions(glideMs = 250.0)
@@ -541,33 +643,48 @@ class AudioEngineController(private val context: Context) {
     }
 
     /**
-     * Called on slider drags, enhancer drags, and volume contour ticks (v5 Section 9 `update` & Enhancers `onDrag`).
-     * Never modifies `inputDb`, `makeupDb`, MBC, or side effects (`Virtualizer`, `BassBoost`, `Dolby`) and glides over 60 ms.
+     * Section 9 & Section 10 Step 4 — Called while dragging any of the 10 sliders or changing system volume:
+     * Freezes `makeupDb` and `inputGainDb` and calls `MasterEqController.updateSlidersOrVolume(newState, glideMs = 60.0)`.
      */
     fun updateSlidersOrContourFast(
         enabled: Boolean,
         abCompare: Boolean,
+        daxProfile: DaxProfile = lastDaxProfile,
         layers: Layers,
         flatBypass: Boolean,
         enhancerAmounts: DoubleArray = lastEnhancerAmounts,
+        tier1Native5Db: FloatArray = lastTier1Native5Db,
         internalSessionId: Int = 0
     ) {
         lastEnabled = enabled && !(usbBitPerfectEnabled && getCurrentRoute() == OutputRoute.USB)
         lastAbCompare = abCompare
+        lastDaxProfile = daxProfile
         lastLayers = layers
         lastEnhancerAmounts = enhancerAmounts.copyOf()
+        lastTier1Native5Db = tier1Native5Db.copyOf()
         val anyEnhancerOn = EnhancerMixer.anyActive(lastEnhancerAmounts)
-        lastFlatBypass = flatBypass && !anyEnhancerOn
+        lastFlatBypass = flatBypass && !anyEnhancerOn && daxProfile == DaxProfile.MUSIC
+
+        val masterState = buildMasterEngineState(
+            enabled = lastEnabled && !lastAbCompare,
+            flatBypass = lastFlatBypass,
+            daxProfile = lastDaxProfile,
+            layers = lastLayers,
+            mbc = lastMbc,
+            tier1Native5Db = lastTier1Native5Db,
+            bassBoostStrength = lastBassBoostStrength
+        )
+        val eff31 = EqMath.computeEffective31(masterState, includeContour = true)
+        currentCeilingLoadDb = EqMath.computeCeilingLoadDb(eff31)
 
         ensureTargetSessionsAttached(internalSessionId)
         for (bundle in activeBundles.values) {
+            bundle.masterController.updateSlidersOrVolume(masterState, glideMs = 60.0)
             val v5 = bundle.v5Engine
-            if (v5 != null) {
+            if (v5 != null && (layers.rightUserDb != null || kotlin.math.abs(layers.balanceDb) > 0.05f)) {
                 v5.setEnabled(lastEnabled && !lastFlatBypass)
                 v5.setAbCompareMode(lastAbCompare)
                 v5.update(lastLayers, glideMs = 60.0)
-            } else {
-                applyTier1FallbackToBundle(bundle, commitSideEffects = false)
             }
         }
     }
@@ -586,7 +703,11 @@ class AudioEngineController(private val context: Context) {
         if ((currentMode == EngineMode.ADB_SHIZUKU && diagnostics.dumpPermissionGranted) ||
             (currentMode == EngineMode.ROOT && diagnostics.rootSuBinaryDetected)
         ) {
-            targetSessions.addAll(discoverSessionsViaDumpsys(useSu = currentMode == EngineMode.ROOT && diagnostics.rootSuBinaryDetected))
+            targetSessions.addAll(
+                discoverSessionsViaDumpsys(
+                    useSu = currentMode == EngineMode.ROOT && diagnostics.rootSuBinaryDetected
+                )
+            )
         }
         for (sId in targetSessions) {
             attachToSessionIfNeeded(sId)
@@ -596,15 +717,21 @@ class AudioEngineController(private val context: Context) {
     private fun attachToSessionIfNeeded(sessionId: Int) {
         if (activeBundles.containsKey(sessionId)) return
 
+        val preferredOpMode = resolvePreferredOperatingMode()
+        val masterController = MasterEqController(sessionId)
+        masterController.start(preferredOpMode)
+
         var v5Engine: EqEngine? = null
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val candidate = EqEngine(
-                sessionId = sessionId,
-                compatibility10Band = compatibility10Band,
-                transientMode = transientMode
-            )
-            if (candidate.start()) {
-                v5Engine = candidate
+        if (compatibility10Band || transientMode) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val candidate = EqEngine(
+                    sessionId = sessionId,
+                    compatibility10Band = compatibility10Band,
+                    transientMode = transientMode
+                )
+                if (candidate.start()) {
+                    v5Engine = candidate
+                }
             }
         }
 
@@ -623,30 +750,40 @@ class AudioEngineController(private val context: Context) {
             null
         }
 
-        if (v5Engine != null || eq != null) {
-            activeBundles[sessionId] = SessionEffectBundle(
-                sessionId = sessionId,
-                v5Engine = v5Engine,
-                equalizer = eq,
-                bassBoostFx = bbFx,
-                virtualizerFx = virtFx,
-                loudnessEnhancer = le
-            )
-        } else {
-            bbFx.release()
-            virtFx.release()
-            try { le?.release() } catch (_: Throwable) {}
-        }
+        activeBundles[sessionId] = SessionEffectBundle(
+            sessionId = sessionId,
+            masterController = masterController,
+            v5Engine = v5Engine,
+            equalizer = eq,
+            bassBoostFx = bbFx,
+            virtualizerFx = virtFx,
+            loudnessEnhancer = le
+        )
     }
 
     private fun loadAllSessions(glideMs: Double) {
         val isSmallSpeaker = getCurrentRoute() == OutputRoute.SPEAKER
-        val surroundAmount = lastEnhancerAmounts.getOrElse(Enhancer.SURROUND.ordinal) { 0.0 }
+        val surroundAmount = max(
+            lastEnhancerAmounts.getOrElse(Enhancer.SURROUND.ordinal) { 0.0 },
+            lastDaxProfile.virtualizerStrength / 1000.0
+        )
         val activeGate = lastEnabled && !lastFlatBypass && !lastAbCompare
 
+        val masterState = buildMasterEngineState(
+            enabled = lastEnabled && !lastAbCompare,
+            flatBypass = lastFlatBypass,
+            daxProfile = lastDaxProfile,
+            layers = lastLayers,
+            mbc = lastMbc,
+            tier1Native5Db = lastTier1Native5Db,
+            bassBoostStrength = lastBassBoostStrength
+        )
+
         for (bundle in activeBundles.values) {
+            bundle.masterController.loadFullState(masterState, glideMs = glideMs)
+
             val v5 = bundle.v5Engine
-            if (v5 != null) {
+            if (v5 != null && (lastLayers.rightUserDb != null || kotlin.math.abs(lastLayers.balanceDb) > 0.05f)) {
                 v5.setEnabled(lastEnabled)
                 v5.setAbCompareMode(lastAbCompare)
                 v5.load(
@@ -657,17 +794,19 @@ class AudioEngineController(private val context: Context) {
                     flatBypass = lastFlatBypass,
                     glideMs = glideMs
                 )
-                currentInputGainDb = v5.inputDb
-                currentMakeupGainDb = v5.makeupDb
+            }
 
-                // v5 Section 13 & Enhancers Section 4.2: When DynamicsProcessing is active, disable native Equalizer and set BassBoost to 0
+            if (bundle.masterController.activeMode != OperatingMode.LEGACY_TIER1_NATIVE) {
                 try { bundle.equalizer?.enabled = false } catch (_: Throwable) {}
                 bundle.bassBoostFx?.apply(0.0, enabledGate = false)
-
-                // Enhancers Section 4.1: Surround VirtualizerFx applied on commit
                 bundle.virtualizerFx?.apply(surroundAmount, small = isSmallSpeaker, enabledGate = activeGate)
             } else {
-                applyTier1FallbackToBundle(bundle, commitSideEffects = true)
+                val deepBassAmount = max(
+                    lastEnhancerAmounts.getOrElse(Enhancer.DEEP_BASS.ordinal) { 0.0 },
+                    lastBassBoostStrength / 1000.0
+                )
+                bundle.bassBoostFx?.apply(deepBassAmount, enabledGate = activeGate)
+                bundle.virtualizerFx?.apply(surroundAmount, small = isSmallSpeaker, enabledGate = activeGate)
             }
 
             bundle.loudnessEnhancer?.let { le ->
@@ -676,51 +815,6 @@ class AudioEngineController(private val context: Context) {
                     le.setTargetGain(0)
                 } catch (_: Throwable) {}
             }
-        }
-    }
-
-    /**
-     * Legacy Tier 1 fallback (v5 Section 13, 16.4 & Enhancers Section 4.2) when `DynamicsProcessing` fails on a session:
-     * Reads each native band's edges with `getBandFreqRange()` (millihertz) and uses the mean of the 31-band
-     * `effective31` curve (including `enhancer31`) over that band (`AutoEq.map31ToNativeBands`), capped at +4 dB,
-     * plus `BassBoostFx` (`600 * deepBassAmount`) and `VirtualizerFx` (`Surround`).
-     */
-    private fun applyTier1FallbackToBundle(bundle: SessionEffectBundle, commitSideEffects: Boolean) {
-        val active = lastEnabled && !lastFlatBypass && !lastAbCompare
-        val eq = bundle.equalizer
-        if (eq != null) {
-            try {
-                eq.enabled = active
-                if (active) {
-                    val bandCount = eq.numberOfBands.toInt()
-                    val range = eq.bandLevelRange
-                    val minMb = range?.getOrNull(0)?.toInt() ?: -1500
-                    val maxMb = range?.getOrNull(1)?.toInt() ?: 1500
-
-                    val bandRanges = (0 until bandCount).map { b ->
-                        val r = try { eq.getBandFreqRange(b.toShort()) } catch (_: Throwable) { null }
-                        if (r != null && r.size >= 2) intArrayOf(r[0], r[1]) else intArrayOf(30_000, 20_000_000)
-                    }
-
-                    val effective31 = Dsp.computeEffective31(lastLayers, withContour = true, channel = 0)
-                    val mappedNativeDb = AutoEq.map31ToNativeBands(effective31, bandRanges)
-
-                    for (b in 0 until bandCount) {
-                        val targetDb = mappedNativeDb.getOrElse(b) { 0f }.coerceIn(-12f, 4f)
-                        val targetMb = (targetDb * 100f).toInt().coerceIn(minMb, maxMb).toShort()
-                        eq.setBandLevel(b.toShort(), targetMb)
-                    }
-                }
-            } catch (_: Throwable) {
-            }
-        }
-
-        if (commitSideEffects) {
-            val isSmallSpeaker = getCurrentRoute() == OutputRoute.SPEAKER
-            val deepBassAmount = lastEnhancerAmounts.getOrElse(Enhancer.DEEP_BASS.ordinal) { 0.0 }
-            val surroundAmount = lastEnhancerAmounts.getOrElse(Enhancer.SURROUND.ordinal) { 0.0 }
-            bundle.bassBoostFx?.apply(deepBassAmount, enabledGate = active)
-            bundle.virtualizerFx?.apply(surroundAmount, small = isSmallSpeaker, enabledGate = active)
         }
     }
 
@@ -760,9 +854,6 @@ class AudioEngineController(private val context: Context) {
         return discovered
     }
 
-    /**
-     * Reads active Bluetooth codec and sample rate from dumpsys (v5 Section 17.2 F10).
-     */
     private fun readBluetoothCodecFromDumpsys(useSu: Boolean = false): String? {
         return try {
             val cmd = if (useSu) arrayOf("su", "-c", "dumpsys bluetooth_manager")

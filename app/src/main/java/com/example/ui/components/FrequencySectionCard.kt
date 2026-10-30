@@ -88,6 +88,7 @@ import kotlin.math.exp
 fun UnifiedEqualizerCard(
     presets: List<PresetConfig>,
     selectedPresetId: String,
+    selectedDaxProfile: com.example.audio.DaxProfile = com.example.audio.DaxProfile.MUSIC,
     targetGainsDb: List<Float>,
     splitLREnabled: Boolean = false,
     editingRightChannel: Boolean = false,
@@ -102,6 +103,7 @@ fun UnifiedEqualizerCard(
     ceilingLoadDb: Float,
     activeCalibrationLabel: String?,
     isEnabled: Boolean,
+    onSelectDaxProfile: (com.example.audio.DaxProfile) -> Unit = {},
     onSelectPreset: (PresetConfig) -> Unit,
     onDeleteCustomPreset: (String) -> Unit,
     onSelectEditingChannel: (Boolean) -> Unit = {},
@@ -217,7 +219,7 @@ fun UnifiedEqualizerCard(
                     )
                 }
 
-                // v5 Section 3 Headroom Meter (ceilingLoad = max(0, max(effective) - 3) dB, warn > 4 dB)
+                // v6 Section 3.1 Rule 3 Headroom Meter (ceilingLoadDb = max(0, max(effective) - 3) dB, warn > 4 dB)
                 val isCeilingWarn = ceilingLoadDb > 4.0f
                 val meterBg by animateColorAsState(
                     targetValue = if (isCeilingWarn) {
@@ -264,6 +266,93 @@ fun UnifiedEqualizerCard(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
+
+            // v6 Section 4: The 4 Acoustic Profiles (0: Dynamic, 1: Video / Movie, 2: Music, 3: Voice)
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("dax_profile_selector_bar")
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Acoustic Profile (dax-default.xml)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        val ieqLabel = when (selectedDaxProfile.ieqTargetId) {
+                            "ieq_balanced" -> "IEQ Balanced"
+                            "ieq_warm" -> "IEQ Warm"
+                            else -> "Pure Curve"
+                        }
+                        val dlgSteps = if (activeRoute == OutputRoute.SPEAKER) {
+                            selectedDaxProfile.dialogStepsSpk
+                        } else {
+                            selectedDaxProfile.dialogStepsHp
+                        }
+                        val lvlLabel = if (selectedDaxProfile.levelerOn) "Leveler ON" else "Leveler OFF"
+                        Text(
+                            text = "$ieqLabel · Dlg +${String.format(Locale.US, "%.1f", dlgSteps * 0.45)} dB · $lvlLabel",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        com.example.audio.DaxProfile.entries.forEach { prof ->
+                            val selected = prof == selectedDaxProfile
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { onSelectDaxProfile(prof) }
+                                    .testTag("dax_profile_${prof.id}"),
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (selected) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainerHigh
+                                }
+                            ) {
+                                Text(
+                                    text = if (prof == com.example.audio.DaxProfile.MOVIE) "Movie" else prof.displayName,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(vertical = 7.dp, horizontal = 4.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Preset Chips (Flat, Balanced Deep, Bass Boost, Vocal Clarity, Percussion Clarity, Cinema, + Saved)
             FlowRow(
