@@ -35,7 +35,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.model.OutputRoute
 import com.example.ui.components.AbxBlindTestSheet
-import com.example.ui.components.EnhancersCard
+import com.example.ui.components.DolbyBoseDspCard
 import com.example.ui.components.ModeSelectorCard
 import com.example.ui.components.RootWarningDialog
 import com.example.ui.components.SavePresetDialog
@@ -101,9 +101,11 @@ fun AudioEqScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // 1. Top Bar Header + Settings Icon
+                // 1. Top Bar Header + Interactive Enable/Disable Power Icon + Settings Icon
                 item {
                     TopBarHeader(
+                        isEnabled = state.isEnabled,
+                        onTogglePower = { viewModel.setPowerEnabled(it) },
                         onOpenSettings = { viewModel.openSettingsSheet() }
                     )
                 }
@@ -148,9 +150,12 @@ fun AudioEqScreen(
                         activeStatus = state.activeStatus,
                         diagnostics = state.diagnostics,
                         startOnBoot = state.startOnBoot,
+                        shizukuState = state.shizukuState,
+                        shizukuPrivilege = state.shizukuPrivilege,
                         onSelectMode = { viewModel.selectMode(it) },
                         onToggleStartOnBoot = { viewModel.setStartOnBoot(it) },
-                        onToggleRootBtAbsVol = { viewModel.toggleRootBluetoothAbsVolume(it) }
+                        onToggleRootBtAbsVol = { viewModel.toggleRootBluetoothAbsVolume(it) },
+                        onShizukuAction = { viewModel.handleShizukuAction() }
                     )
                 }
 
@@ -190,27 +195,22 @@ fun AudioEqScreen(
                     )
                 }
 
-                // 4. Audio Enhancers Card (Enable Deeper Bass, Surround Audio, Enhance Beats, Enhance Vocal + 6.0 dB Headroom Budget)
+                // 4. Dolby & Bose Non-Root DSP Card (Bose Profiles Dynamic & Balanced, IEQ Detailed/Balanced/Warm/Custom, Dialogue Enhancer, Bass Enhancer with Virtual Bass Harmonic Synthesis)
                 item {
-                    EnhancersCard(
-                        enhancers = state.enhancers,
-                        enhancerPeakDb = state.enhancerPeakDb,
-                        enhancerScale = state.enhancerScale,
-                        enhancerAbBypass = state.enhancerAbBypass,
-                        activeRoute = state.activeRoute,
-                        isLegacyTier1 = state.diagnostics.isLegacyTier1BasicEngine,
-                        virtualizerSupported = state.diagnostics.virtualizerSupported,
-                        dolbyDetected = state.diagnostics.dolbyPropsDetected,
-                        tryDolbyControl = state.tryDolbyControl,
-                        dolbyDeepBass = state.dolbyDeepBass,
+                    DolbyBoseDspCard(
+                        config = state.dolbyBoseConfig,
                         isEnabled = state.isEnabled && !state.diagnostics.usbBitPerfectActive,
-                        onToggleEnhancer = { e, on -> viewModel.toggleEnhancer(e, on) },
-                        onDragEnhancer = { e, pct -> viewModel.dragEnhancerAmount(e, pct) },
-                        onCommitEnhancers = { viewModel.commitEnhancers() },
-                        onToggleAbBypass = { viewModel.setEnhancerAbBypass(it) },
-                        onResetEnhancers = { viewModel.resetEnhancers() },
-                        onToggleDolbyDeepBass = { viewModel.setDolbyDeepBass(it) },
-                        onResetDolby = { viewModel.resetDolbyControl() }
+                        onSelectBoseProfile = { viewModel.selectBoseProfile(it) },
+                        onSelectIeqPreset = { viewModel.selectIeqPreset(it) },
+                        onIeqAmountChange = { viewModel.updateIeqAmount(it) },
+                        onIeqCustomBandChange = { idx, db -> viewModel.updateIeqCustomBand(idx, db) },
+                        onResetIeqCustomBands = { flat -> viewModel.resetIeqCustomBands(flat) },
+                        onToggleDialogueEnhancer = { viewModel.setDialogueEnhancerEnabled(it) },
+                        onDialogueAmountChange = { viewModel.updateDialogueAmount(it) },
+                        onDialogueDuckingChange = { viewModel.updateDialogueDucking(it) },
+                        onToggleBassEnhancer = { viewModel.setBassEnhancerEnabled(it) },
+                        onToggleVirtualBass = { viewModel.setVirtualBassEnabled(it) },
+                        onResetDolbyBose = { viewModel.resetDolbyBoseDsp() }
                     )
                 }
 
@@ -304,7 +304,6 @@ fun AudioEqScreen(
             startOnBoot = state.startOnBoot,
             compatibility10Band = state.compatibility10Band,
             transientMode = state.transientMode,
-            tryDolbyControl = state.tryDolbyControl,
             onHighPassChange = { viewModel.updateHighPassHz(it) },
             onToggleSplitLR = { viewModel.setSplitLREnabled(it) },
             onBalanceChange = { viewModel.updateBalanceDb(it) },
@@ -312,7 +311,6 @@ fun AudioEqScreen(
             onToggleStartOnBoot = { viewModel.setStartOnBoot(it) },
             onToggleCompatibility10Band = { viewModel.setCompatibility10Band(it) },
             onToggleTransientMode = { viewModel.setTransientMode(it) },
-            onToggleTryDolbyControl = { viewModel.setTryDolbyControl(it) },
             onDismiss = { viewModel.dismissSettingsSheet() }
         )
     }

@@ -1298,7 +1298,6 @@ fun SettingsAndDiagnosticsSheet(
     startOnBoot: Boolean,
     compatibility10Band: Boolean,
     transientMode: Boolean,
-    tryDolbyControl: Boolean = false,
     onHighPassChange: (Float) -> Unit,
     onToggleSplitLR: (Boolean) -> Unit,
     onBalanceChange: (Float) -> Unit,
@@ -1306,7 +1305,6 @@ fun SettingsAndDiagnosticsSheet(
     onToggleStartOnBoot: (Boolean) -> Unit,
     onToggleCompatibility10Band: (Boolean) -> Unit,
     onToggleTransientMode: (Boolean) -> Unit,
-    onToggleTryDolbyControl: (Boolean) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1514,31 +1512,6 @@ fun SettingsAndDiagnosticsSheet(
                             modifier = Modifier.testTag("transient_mode_switch")
                         )
                     }
-
-                    HorizontalDivider()
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Try Dolby Control (Experimental)",
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                            Text(
-                                text = "Exposes RAM-only dolby.deepbass & dolby.bass in Enhancers card on Root/ADB",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = tryDolbyControl,
-                            onCheckedChange = onToggleTryDolbyControl,
-                            modifier = Modifier.testTag("try_dolby_control_switch")
-                        )
-                    }
                 }
             }
 
@@ -1606,11 +1579,10 @@ fun SettingsAndDiagnosticsSheet(
                     })
                     DiagnosticRow("Avg Binder Write Cost", String.format(Locale.US, "%.2f ms", diagnostics.avgBinderWriteCostMs))
                     DiagnosticRow("Virtualizer Support", if (diagnostics.virtualizerSupported) "Supported" else "May Not Apply on Route")
-                    DiagnosticRow("Dolby Props Detected", if (diagnostics.dolbyPropsDetected) "Detected (dolby.bass/deepbass)" else "Not Present")
                     DiagnosticRow("Legacy Tier 1 Native Bands", "${diagnostics.nativeEqBandCount} bands (${diagnostics.nativeBandCentersHz.joinToString("/")} Hz)")
                     DiagnosticRow("Global Session 0 Mix", if (diagnostics.globalSession0Supported) "Supported" else "Restricted by OEM")
                     DiagnosticRow("ADB DUMP Permission", if (diagnostics.dumpPermissionGranted) "Granted" else "Not Granted")
-                    DiagnosticRow("Shizuku Package", if (diagnostics.shizukuInstalled) "Installed" else "Not Installed")
+                    DiagnosticRow("Shizuku Service", "${diagnostics.shizukuState.name} (${diagnostics.shizukuPrivilege})")
                     DiagnosticRow("Root su Binary", if (diagnostics.rootSuBinaryDetected) "Detected (APK-Only Helper)" else "Not Found")
                     DiagnosticRow("Connected Device Key", diagnostics.connectedDeviceKey)
                     DiagnosticRow("Bluetooth Codec (F10)", diagnostics.bluetoothCodecSummary ?: "Standard / Not Active")

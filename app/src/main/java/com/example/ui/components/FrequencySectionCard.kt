@@ -22,18 +22,19 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -219,47 +220,93 @@ fun UnifiedEqualizerCard(
                     )
                 }
 
-                // v6 Section 3.1 Rule 3 Headroom Meter (ceilingLoadDb = max(0, max(effective) - 3) dB, warn > 4 dB)
-                val isCeilingWarn = ceilingLoadDb > 4.0f
-                val meterBg by animateColorAsState(
-                    targetValue = if (isCeilingWarn) {
-                        MaterialTheme.colorScheme.errorContainer
-                    } else {
-                        MaterialTheme.colorScheme.secondaryContainer
-                    },
-                    label = "headroomMeterBg"
-                )
-                val meterContent by animateColorAsState(
-                    targetValue = if (isCeilingWarn) {
-                        MaterialTheme.colorScheme.onErrorContainer
-                    } else {
-                        MaterialTheme.colorScheme.onSecondaryContainer
-                    },
-                    label = "headroomMeterContent"
-                )
-
-                Surface(
-                    shape = RoundedCornerShape(999.dp),
-                    color = meterBg,
-                    contentColor = meterContent,
-                    modifier = Modifier.testTag("headroom_ceiling_meter")
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    // v6 Section 3.1 Rule 3 Headroom Meter (ceilingLoadDb = max(0, max(effective) - 3) dB, warn > 4 dB)
+                    val isCeilingWarn = ceilingLoadDb > 4.0f
+                    val meterBg by animateColorAsState(
+                        targetValue = if (isCeilingWarn) {
+                            MaterialTheme.colorScheme.errorContainer
+                        } else {
+                            MaterialTheme.colorScheme.secondaryContainer
+                        },
+                        label = "headroomMeterBg"
+                    )
+                    val meterContent by animateColorAsState(
+                        targetValue = if (isCeilingWarn) {
+                            MaterialTheme.colorScheme.onErrorContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        },
+                        label = "headroomMeterContent"
+                    )
+
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = meterBg,
+                        contentColor = meterContent,
+                        modifier = Modifier.testTag("headroom_ceiling_meter")
                     ) {
-                        if (isCeilingWarn) {
-                            Icon(
-                                imageVector = Icons.Default.Warning,
-                                contentDescription = "High ceiling load warning",
-                                modifier = Modifier.height(14.dp)
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            if (isCeilingWarn) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = "High ceiling load warning",
+                                    modifier = Modifier.height(14.dp)
+                                )
+                            }
+                            Text(
+                                text = "Ceiling ${String.format(Locale.US, "%.1f", ceilingLoadDb)} dB",
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1
                             )
                         }
-                        Text(
-                            text = "Ceiling ${String.format(Locale.US, "%.1f", ceilingLoadDb)} dB",
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1
+                    }
+
+                    // Interactive Enable / Disable Power Icon Button at the top of the Equalizer Card
+                    val powerBtnBg by animateColorAsState(
+                        targetValue = if (isEnabled) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerHighest
+                        },
+                        label = "eqPowerBtnBg"
+                    )
+                    val powerBtnTint by animateColorAsState(
+                        targetValue = if (isEnabled) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        label = "eqPowerBtnTint"
+                    )
+
+                    IconButton(
+                        onClick = { onToggleEnabled(!isEnabled) },
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(powerBtnBg)
+                            .border(
+                                width = 1.dp,
+                                color = if (isEnabled) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.outlineVariant
+                                },
+                                shape = CircleShape
+                            )
+                            .testTag("global_power_switch")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PowerSettingsNew,
+                            contentDescription = if (isEnabled) "Disable Equalizer" else "Enable Equalizer",
+                            tint = powerBtnTint
                         )
                     }
                 }
@@ -763,35 +810,22 @@ fun UnifiedEqualizerCard(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Footer: Enabled Checkbox Toggle + Reset Button (matching equalizer.html footer)
+            // Footer: Status Indicator + Reset Button
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .clickable { onToggleEnabled(!isEnabled) }
-                        .padding(end = 12.dp, top = 4.dp, bottom = 4.dp)
-                        .testTag("global_power_switch"),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = isEnabled,
-                        onCheckedChange = onToggleEnabled,
-                        colors = CheckboxDefaults.colors(
-                            checkedColor = MaterialTheme.colorScheme.primary,
-                            uncheckedColor = MaterialTheme.colorScheme.outline
-                        )
-                    )
-                    Text(
-                        text = if (isEnabled) "Enabled" else "Bypassed",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("power_status_text")
-                    )
-                }
+                Text(
+                    text = if (isEnabled) "Equalizer Active" else "Equalizer Bypassed",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isEnabled) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.testTag("power_status_text")
+                )
 
                 OutlinedButton(
                     onClick = onResetFlat,

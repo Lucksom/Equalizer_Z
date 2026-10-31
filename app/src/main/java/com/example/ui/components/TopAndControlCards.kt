@@ -17,9 +17,13 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.border
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Card
@@ -38,6 +42,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -47,9 +53,33 @@ import com.example.model.PresetConfig
 
 @Composable
 fun TopBarHeader(
+    isEnabled: Boolean = true,
+    onTogglePower: (Boolean) -> Unit = {},
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val powerBg by animateColorAsState(
+        targetValue = if (isEnabled) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        label = "topPowerBg"
+    )
+    val powerTint by animateColorAsState(
+        targetValue = if (isEnabled) {
+            MaterialTheme.colorScheme.onPrimary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        label = "topPowerTint"
+    )
+    val powerScale by animateFloatAsState(
+        targetValue = if (isEnabled) 1.0f else 0.94f,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = 500f),
+        label = "topPowerScale"
+    )
+
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -57,7 +87,7 @@ fun TopBarHeader(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = stringResource(R.string.app_name),
                 style = MaterialTheme.typography.headlineLarge,
@@ -70,19 +100,50 @@ fun TopBarHeader(
             )
         }
 
-        IconButton(
-            onClick = onOpenSettings,
-            modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .testTag("settings_button")
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Icon(
-                imageVector = Icons.Default.Settings,
-                contentDescription = stringResource(R.string.settings_title),
-                tint = MaterialTheme.colorScheme.onSurface
-            )
+            // Interactive Enable / Disable Power Icon Button at the top
+            IconButton(
+                onClick = { onTogglePower(!isEnabled) },
+                modifier = Modifier
+                    .size(48.dp)
+                    .scale(powerScale)
+                    .clip(CircleShape)
+                    .background(powerBg)
+                    .border(
+                        width = if (isEnabled) 2.dp else 1.dp,
+                        color = if (isEnabled) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.outlineVariant
+                        },
+                        shape = CircleShape
+                    )
+                    .testTag("top_power_icon_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PowerSettingsNew,
+                    contentDescription = if (isEnabled) "Disable Equalizer" else "Enable Equalizer",
+                    tint = powerTint
+                )
+            }
+
+            IconButton(
+                onClick = onOpenSettings,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .testTag("settings_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = stringResource(R.string.settings_title),
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+            }
         }
     }
 }

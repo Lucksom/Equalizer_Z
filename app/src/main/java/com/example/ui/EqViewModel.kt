@@ -6,21 +6,24 @@ import androidx.lifecycle.viewModelScope
 import com.example.audio.AudioEngineController
 import com.example.audio.AutoEq
 import com.example.audio.AutoEqRepo
+import com.example.audio.BoseProfile
 import com.example.audio.DaxProfile
 import com.example.audio.DeviceDiagnostics
+import com.example.audio.DolbyBoseDspConfig
+import com.example.audio.DolbyBoseDspMath
 import com.example.audio.Dsp
 import com.example.audio.DspReferenceMonitor
-import com.example.audio.Enhancer
-import com.example.audio.EnhancerItemState
-import com.example.audio.EnhancerMixer
 import com.example.audio.EqMath
 import com.example.audio.HearingTonePlayer
+import com.example.audio.IeqPreset
 import com.example.audio.IndexEntry
 import com.example.audio.Layers
 import com.example.audio.ReferenceSignalType
 import com.example.audio.SpeakerCalibrationRunner
 import com.example.audio.buildCurrentDeviceKey
 import com.example.data.EqRepository
+import com.example.shizuku.ShizukuManager
+import com.example.shizuku.ShizukuState
 import com.example.model.CapabilityLevel
 import com.example.model.DeviceProfileMemory
 import com.example.model.EngineMode
@@ -54,6 +57,7 @@ data class EqUiState(
     val isAbCompare: Boolean = false,
     val selectedMode: EngineMode = EngineMode.LEGACY,
     val selectedDaxProfile: DaxProfile = DaxProfile.MUSIC, // v6 Section 4 Acoustic Profile (0=Dynamic, 1=Movie, 2=Music, 3=Voice)
+    val dolbyBoseConfig: DolbyBoseDspConfig = DolbyBoseDspConfig(),
     val modeStatuses: Map<EngineMode, ModeStatusInfo> = emptyMap(),
     val presets: List<PresetConfig> = EqConstants.BUILT_IN_PRESETS,
     val selectedPresetId: String = "percussion_clarity",
@@ -104,13 +108,8 @@ data class EqUiState(
     val hearingCurve: PersonalHearingCurve = PersonalHearingCurve(), // F5
     val compatibility10Band: Boolean = false,
     val transientMode: Boolean = false,
-    val enhancers: List<EnhancerItemState> = Enhancer.entries.map { EnhancerItemState(it) },
-    val enhancerPeakDb: Float = 0.0f,
-    val enhancerScale: Float = 1.0f,
-    val enhancer31Db: List<Float> = List(31) { 0f },
-    val enhancerAbBypass: Boolean = false,
-    val tryDolbyControl: Boolean = false,
-    val dolbyDeepBass: Boolean = false,
+    val shizukuState: ShizukuState = ShizukuState.NOT_INSTALLED,
+    val shizukuPrivilege: String = "none",
     val isReferencePlaying: Boolean = false,
     val referenceSignal: ReferenceSignalType = ReferenceSignalType.TABLA_LOOP,
     val rootWarningAccepted: Boolean = false,
@@ -148,9 +147,6 @@ data class EqUiState(
 
     val isCeilingWarning: Boolean
         get() = ceilingLoadDb > 4.0f
-
-    val isEnhancerBudgetLimited: Boolean
-        get() = enhancerScale < 0.999f
 }
 
 class EqViewModel(application: Application) : AndroidViewModel(application) {
@@ -183,8 +179,30 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 activeRoute = initialRoute,
                 activeDeviceKey = initialDevKey,
                 currentVolumeRatio = initialVol.toFloat(),
+                shizukuState = ShizukuManager.state.value,
+                shizukuPrivilege = ShizukuManager.privilege(),
                 diagnostics = engineController.diagnostics
             )
+        }
+
+        // Observe Shizuku state transitions and auto-grant DUMP when Shizuku is READY
+        viewModelScope.launch {
+            ShizukuManager.state.collect { shizukuSt ->
+                val priv = ShizukuManager.privilege()
+                if (shizukuSt == ShizukuState.READY) {
+                    val pkg = getApplication<Application>().packageName
+                    ShizukuManager.exec("pm grant $pkg android.permission.DUMP; pm grant $pkg android.permission.PACKAGE_USAGE_STATS")
+                }
+                val statuses = engineController.probeCapabilities(dspMonitor.getAudioSessionId())
+                _uiState.update {
+                    it.copy(
+                        shizukuState = shizukuSt,
+                        shizukuPrivilege = priv,
+                        modeStatuses = statuses,
+                        diagnostics = engineController.diagnostics
+                    )
+                }
+            }
         }
 
         // Load AutoEq index on IO dispatcher
@@ -234,19 +252,12 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                         engineController.setUsbBitPerfectMode(true)
                     }
 
-                    val restoredEnhancers = Enhancer.entries.mapIndexed { idx, enh ->
-                        EnhancerItemState(
-                            enhancer = enh,
-                            enabled = prefs.enhancerEnabledFlags.getOrElse(idx) { false },
-                            sliderPercent = prefs.enhancerSliderPcts.getOrElse(idx) { 0f }
-                        )
-                    }
-
                     _uiState.update { current ->
                         current.copy(
                             isEnabled = prefs.isEnabled,
                             selectedMode = mode,
                             selectedDaxProfile = daxProf,
+                            dolbyBoseConfig = prefs.dolbyBoseConfig,
                             presets = allPresets,
                             selectedPresetId = prefs.selectedPresetId,
                             gainsDb = prefs.gainsDb,
@@ -281,9 +292,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                             deviceMemories = prefs.deviceMemories,
                             compatibility10Band = prefs.compatibility10Band,
                             transientMode = prefs.transientMode,
-                            enhancers = restoredEnhancers,
-                            tryDolbyControl = prefs.tryDolbyControl,
-                            dolbyDeepBass = prefs.dolbyDeepBass,
                             rootWarningAccepted = prefs.rootWarningAccepted
                         )
                     }
@@ -608,13 +616,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun getEffectiveEnhancerAmounts(state: EqUiState): DoubleArray {
-        if (state.enhancerAbBypass || state.isAbCompare) return DoubleArray(4)
-        return DoubleArray(4) { idx ->
-            state.enhancers.getOrNull(idx)?.effectiveAmount01 ?: 0.0
-        }
-    }
-
     private fun buildCurrentLayers(state: EqUiState): Layers {
         val userDb = DoubleArray(10) { i -> state.gainsDb.getOrElse(i) { 0f }.toDouble() }
         val rightUserDb = if (state.splitLREnabled) {
@@ -677,13 +678,9 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             DoubleArray(31)
         }
 
-        // Enhancers Section 3: Mix the 4 enhancers with the 6 dB budget (active even when preset is Flat!)
-        val amounts = getEffectiveEnhancerAmounts(state)
-        val enhancer31 = DoubleArray(31)
-        EnhancerMixer.mix(
-            amounts = amounts,
-            smallDriver = state.activeRoute == OutputRoute.SPEAKER,
-            out = enhancer31
+        val dolbyBose10 = DolbyBoseDspMath.computeComposite10BandDeltaDb(
+            config = state.dolbyBoseConfig,
+            userCustom10Db = userDb
         )
 
         return Layers(
@@ -692,28 +689,20 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             routeDb = routeDb,
             contourDb = contourDb,
             correction31 = correction31,
-            enhancer31 = enhancer31,
             balanceDb = if (isFlat) 0f else state.balanceDb,
             rightUserDb = rightUserDb,
             hearingLeft31 = hearingLeft31,
-            hearingRight31 = hearingRight31
+            hearingRight31 = hearingRight31,
+            dolbyBose10Db = dolbyBose10
         )
     }
 
     /**
-     * Called on preset, route, headphone profile, speaker calibration, intensity, or enhancer COMMIT.
-     * Recomputes `inputGainDb`, `makeupGainDb`, and `EnhancerMbc.blend` and glides 250 ms.
+     * Called on preset, route, headphone profile, speaker calibration, or intensity COMMIT.
+     * Recomputes `inputGainDb` and `makeupGainDb` and glides 250 ms.
      */
     private fun applyPresetOrContextLoad(persistNow: Boolean = true) {
         val s = _uiState.value
-        val amounts = getEffectiveEnhancerAmounts(s)
-        val enh31 = DoubleArray(31)
-        val mixRes = EnhancerMixer.mix(
-            amounts = amounts,
-            smallDriver = s.activeRoute == OutputRoute.SPEAKER,
-            out = enh31
-        )
-
         val layers = buildCurrentLayers(s)
 
         val trimmedDb = if (s.selectedHeadphoneProfileId != "none" || abs(s.tiltBassDb) > 0.01f || abs(s.tiltTrebleDb) > 0.01f) {
@@ -729,7 +718,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         val matchedPreset = s.presets.find { it.id == s.selectedPresetId }
         val mbc = EqConstants.mbcForPreset(matchedPreset, s.nightModeEnabled)
         val flatBypass = matchedPreset?.bypassChain == true
-        val dolbyActive = s.tryDolbyControl || s.diagnostics.dolbyPropsDetected
         val tier1Native5 = matchedPreset?.legacyNativeDb?.toFloatArray()
             ?: EqConstants.convert10BandTo5BandNative(s.gainsDb).toFloatArray()
 
@@ -738,14 +726,12 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             enabled = s.isEnabled,
             abCompare = s.isAbCompare,
             daxProfile = s.selectedDaxProfile,
+            dolbyBoseConfig = s.dolbyBoseConfig,
             layers = layers,
             mbc = mbc,
             routeBaseDb = s.activeRoute.baseInputGainDb,
             limiterDb = s.activeRoute.limiterThresholdDb,
             flatBypass = flatBypass,
-            enhancerAmounts = amounts,
-            dolbyControlActive = dolbyActive,
-            dolbyDeepBass = s.dolbyDeepBass,
             tier1Native5Db = tier1Native5,
             bassBoostStrength = s.bassBoostStrength,
             virtualizerStrength = s.virtualizerStrength,
@@ -756,17 +742,14 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         val makeupGain = engineController.currentMakeupGainDb
         val ceilingLoad = engineController.currentCeilingLoadDb
 
-        syncReferenceMonitorDsp(s, layers, inGain, makeupGain, flatBypass && !EnhancerMixer.anyActive(amounts) && s.selectedDaxProfile == DaxProfile.MUSIC)
+        syncReferenceMonitorDsp(s, layers, inGain, makeupGain, flatBypass && s.selectedDaxProfile == DaxProfile.MUSIC)
 
         _uiState.update {
             it.copy(
                 inputGainDb = inGain,
                 makeupGainDb = makeupGain,
                 ceilingLoadDb = ceilingLoad,
-                headphoneTrimmedDb = trimmedDb,
-                enhancerPeakDb = mixRes.peakDb.toFloat(),
-                enhancerScale = mixRes.scale.toFloat(),
-                enhancer31Db = enh31.map { v -> v.toFloat() }
+                headphoneTrimmedDb = trimmedDb
             )
         }
 
@@ -776,19 +759,11 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Fast path for continuous slider drags, enhancer drags (`onDrag`), and volume contour steps:
+     * Fast path for continuous slider drags and volume contour steps:
      * Freezes `inputGainDb`, `makeupGainDb`, and MBC parameters, glides 60 ms, and never calls `probeCapabilities()`.
      */
     private fun applySliderOrContourFast(persistNow: Boolean = true) {
         val s = _uiState.value
-        val amounts = getEffectiveEnhancerAmounts(s)
-        val enh31 = DoubleArray(31)
-        val mixRes = EnhancerMixer.mix(
-            amounts = amounts,
-            smallDriver = s.activeRoute == OutputRoute.SPEAKER,
-            out = enh31
-        )
-
         val layers = buildCurrentLayers(s)
         val flatBypass = s.selectedPresetId == "flat"
         val tier1Native5 = EqConstants.convert10BandTo5BandNative(s.gainsDb).toFloatArray()
@@ -797,24 +772,19 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             enabled = s.isEnabled,
             abCompare = s.isAbCompare,
             daxProfile = s.selectedDaxProfile,
+            dolbyBoseConfig = s.dolbyBoseConfig,
             layers = layers,
             flatBypass = flatBypass,
-            enhancerAmounts = amounts,
             tier1Native5Db = tier1Native5,
             internalSessionId = dspMonitor.getAudioSessionId()
         )
 
         val ceilingLoad = engineController.currentCeilingLoadDb
 
-        syncReferenceMonitorDsp(s, layers, s.inputGainDb, s.makeupGainDb, flatBypass && !EnhancerMixer.anyActive(amounts) && s.selectedDaxProfile == DaxProfile.MUSIC)
+        syncReferenceMonitorDsp(s, layers, s.inputGainDb, s.makeupGainDb, flatBypass && s.selectedDaxProfile == DaxProfile.MUSIC)
 
         _uiState.update {
-            it.copy(
-                ceilingLoadDb = ceilingLoad,
-                enhancerPeakDb = mixRes.peakDb.toFloat(),
-                enhancerScale = mixRes.scale.toFloat(),
-                enhancer31Db = enh31.map { v -> v.toFloat() }
-            )
+            it.copy(ceilingLoadDb = ceilingLoad)
         }
 
         if (persistNow) {
@@ -829,18 +799,23 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         makeupDb: Float,
         flatBypass: Boolean
     ) {
-        val sliderRenderIndices = intArrayOf(2, 5, 8, 11, 14, 17, 20, 23, 26, 29)
         val effective10 = List(10) { i ->
-            val enhAtBand = layers.enhancer31.getOrElse(sliderRenderIndices[i]) { 0.0 }
-            (layers.userDb[i] * layers.intensity + layers.routeDb[i] + layers.contourDb[i] + enhAtBand).toFloat()
+            (layers.userDb[i] * layers.intensity +
+                layers.dolbyBose10Db.getOrElse(i) { 0.0 } +
+                layers.routeDb[i] +
+                layers.contourDb[i]).toFloat()
         }
         val effectiveHpf = if (s.activeRoute == OutputRoute.SPEAKER) {
             max(s.highPassHz, OutputRoute.SPEAKER.rootHighPassHz)
         } else {
             s.highPassHz
         }
-        val effectiveHarmonicMix = s.bassHarmonicMixDb?.let { baseMix ->
-            baseMix + s.activeRoute.harmonicMixDeltaDb
+        val effectiveHarmonicMix = if (s.dolbyBoseConfig.bassEnhancerEnabled && s.dolbyBoseConfig.virtualBassEnabled) {
+            -6.0f + s.activeRoute.harmonicMixDeltaDb
+        } else {
+            s.bassHarmonicMixDb?.let { baseMix ->
+                baseMix + s.activeRoute.harmonicMixDeltaDb
+            }
         }
 
         dspMonitor.updateDspState(
@@ -890,10 +865,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 speakerCalStrength = s.speakerCalStrength,
                 compatibility10Band = s.compatibility10Band,
                 transientMode = s.transientMode,
-                enhancerEnabledFlags = s.enhancers.map { it.enabled },
-                enhancerSliderPcts = s.enhancers.map { it.sliderPercent },
-                tryDolbyControl = s.tryDolbyControl,
-                dolbyDeepBass = s.dolbyDeepBass
+                dolbyBoseConfig = s.dolbyBoseConfig
             )
         }
     }
@@ -999,9 +971,176 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectDaxProfile(profile: DaxProfile) {
-        _uiState.update { it.copy(selectedDaxProfile = profile) }
+        _uiState.update { cur ->
+            val updatedDolby = DolbyBoseDspMath.defaultConfigForDaxProfile(
+                profile = profile,
+                currentBose = cur.dolbyBoseConfig.boseProfile
+            )
+            cur.copy(
+                selectedDaxProfile = profile,
+                dolbyBoseConfig = updatedDolby
+            )
+        }
         saveCurrentDeviceMemory()
         applyPresetOrContextLoad()
+    }
+
+    // --- Dolby Atmos (DAP) & Bose MiSound DSP Controls ---
+
+    fun selectIeqPreset(preset: IeqPreset) {
+        _uiState.update { cur ->
+            val nextAmount = if (preset == IeqPreset.CUSTOM && cur.dolbyBoseConfig.ieqPreset != IeqPreset.CUSTOM) {
+                preset.defaultAmount
+            } else if (cur.dolbyBoseConfig.ieqPreset == IeqPreset.CUSTOM && preset != IeqPreset.CUSTOM) {
+                preset.defaultAmount
+            } else {
+                cur.dolbyBoseConfig.ieqAmount
+            }
+            cur.copy(
+                dolbyBoseConfig = cur.dolbyBoseConfig.copy(
+                    ieqPreset = preset,
+                    ieqAmount = nextAmount
+                )
+            )
+        }
+        applyPresetOrContextLoad()
+    }
+
+    fun updateIeqAmount(amount: Int) {
+        val clamped = amount.coerceIn(0, 16)
+        _uiState.update { cur ->
+            cur.copy(
+                dolbyBoseConfig = cur.dolbyBoseConfig.copy(ieqAmount = clamped)
+            )
+        }
+        applyPresetOrContextLoad()
+    }
+
+    fun updateIeqCustomBand(bandIndex: Int, gainDb: Float) {
+        if (bandIndex !in 0 until 10) return
+        val clamped = (kotlin.math.round(gainDb * 2f) / 2f).coerceIn(-12f, 12f)
+        _uiState.update { cur ->
+            val currentList = cur.dolbyBoseConfig.ieqCustom10Db
+            val updated = MutableList(10) { i -> currentList.getOrElse(i) { 0f } }
+            updated[bandIndex] = clamped
+            cur.copy(
+                dolbyBoseConfig = cur.dolbyBoseConfig.copy(
+                    ieqPreset = IeqPreset.CUSTOM,
+                    ieqCustom10Db = updated
+                )
+            )
+        }
+        applySliderOrContourFast()
+    }
+
+    fun resetIeqCustomBands(flat: Boolean = true) {
+        val target = if (flat) {
+            List(10) { 0f }
+        } else {
+            DolbyBoseDspMath.IEQ_CUSTOM_DEFAULT_10.toList()
+        }
+        _uiState.update { cur ->
+            cur.copy(
+                dolbyBoseConfig = cur.dolbyBoseConfig.copy(
+                    ieqPreset = IeqPreset.CUSTOM,
+                    ieqCustom10Db = target
+                )
+            )
+        }
+        applyPresetOrContextLoad()
+    }
+
+    fun setDialogueEnhancerEnabled(enabled: Boolean) {
+        _uiState.update { cur ->
+            val nextAmount = if (enabled && cur.dolbyBoseConfig.dialogueAmount == 0) 5 else cur.dolbyBoseConfig.dialogueAmount
+            cur.copy(
+                dolbyBoseConfig = cur.dolbyBoseConfig.copy(
+                    dialogueEnhancerEnabled = enabled,
+                    dialogueAmount = nextAmount
+                )
+            )
+        }
+        applyPresetOrContextLoad()
+    }
+
+    fun updateDialogueAmount(amount: Int) {
+        val clamped = amount.coerceIn(0, 16)
+        _uiState.update { cur ->
+            cur.copy(
+                dolbyBoseConfig = cur.dolbyBoseConfig.copy(
+                    dialogueEnhancerEnabled = clamped > 0,
+                    dialogueAmount = clamped
+                )
+            )
+        }
+        applyPresetOrContextLoad()
+    }
+
+    fun updateDialogueDucking(ducking: Int) {
+        val clamped = ducking.coerceIn(0, 8)
+        _uiState.update { cur ->
+            cur.copy(
+                dolbyBoseConfig = cur.dolbyBoseConfig.copy(dialogueDucking = clamped)
+            )
+        }
+        applyPresetOrContextLoad()
+    }
+
+    fun setBassEnhancerEnabled(enabled: Boolean) {
+        _uiState.update { cur ->
+            cur.copy(
+                dolbyBoseConfig = cur.dolbyBoseConfig.copy(
+                    bassEnhancerEnabled = enabled,
+                    virtualBassEnabled = if (enabled) cur.dolbyBoseConfig.virtualBassEnabled else false
+                )
+            )
+        }
+        applyPresetOrContextLoad()
+    }
+
+    fun setVirtualBassEnabled(enabled: Boolean) {
+        _uiState.update { cur ->
+            cur.copy(
+                dolbyBoseConfig = cur.dolbyBoseConfig.copy(
+                    bassEnhancerEnabled = if (enabled) true else cur.dolbyBoseConfig.bassEnhancerEnabled,
+                    virtualBassEnabled = enabled
+                )
+            )
+        }
+        applyPresetOrContextLoad()
+    }
+
+    fun selectBoseProfile(profile: BoseProfile) {
+        _uiState.update { cur ->
+            cur.copy(
+                dolbyBoseConfig = cur.dolbyBoseConfig.copy(boseProfile = profile)
+            )
+        }
+        applyPresetOrContextLoad()
+    }
+
+    fun resetDolbyBoseDsp() {
+        _uiState.update { cur ->
+            cur.copy(
+                dolbyBoseConfig = DolbyBoseDspMath.defaultConfigForDaxProfile(
+                    profile = cur.selectedDaxProfile,
+                    currentBose = BoseProfile.OFF
+                )
+            )
+        }
+        applyPresetOrContextLoad()
+    }
+
+    fun attachExternalAudioSession(sessionId: Int) {
+        if (sessionId <= 0) return
+        engineController.attachExternalSession(sessionId)
+        val statuses = engineController.probeCapabilities(dspMonitor.getAudioSessionId())
+        _uiState.update {
+            it.copy(
+                modeStatuses = statuses,
+                diagnostics = engineController.diagnostics
+            )
+        }
     }
 
     fun selectPreset(preset: PresetConfig) {
@@ -1441,112 +1580,41 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(showCalibrationSheet = false) }
     }
 
-    // =========================================================================
-    // Enhancers: Deeper Bass, Surround Audio, Enhance Beats, Enhance Vocal
-    // =========================================================================
-
-    /**
-     * Switch toggle for one of the 4 enhancers (Enhancers Spec Section 6):
-     * Defaults: all off, slider set to 60% when first switched on if currently at 0%.
-     * Commits immediately (recomputes makeup, MBC blend, Virtualizer, BassBoost, Dolby).
-     */
-    fun toggleEnhancer(enhancer: Enhancer, enabled: Boolean) {
-        _uiState.update { state ->
-            val updated = state.enhancers.map { item ->
-                if (item.enhancer == enhancer) {
-                    val newPct = if (enabled && item.sliderPercent < 1f) 60f else item.sliderPercent
-                    item.copy(enabled = enabled, sliderPercent = newPct)
-                } else {
-                    item
+    fun handleShizukuAction() {
+        ShizukuManager.refresh()
+        val state = ShizukuManager.state.value
+        when (state) {
+            ShizukuState.NEEDS_PERMISSION -> ShizukuManager.requestPermission()
+            ShizukuState.DENIED_PERMANENTLY,
+            ShizukuState.NOT_RUNNING -> ShizukuManager.openShizukuApp()
+            ShizukuState.NOT_INSTALLED -> ShizukuManager.openShizukuDownloadPage()
+            ShizukuState.READY -> {
+                viewModelScope.launch {
+                    val pkg = getApplication<Application>().packageName
+                    val res = ShizukuManager.exec("pm grant $pkg android.permission.DUMP; pm grant $pkg android.permission.PACKAGE_USAGE_STATS")
+                    val statuses = engineController.probeCapabilities(dspMonitor.getAudioSessionId())
+                    _uiState.update {
+                        it.copy(
+                            shizukuState = ShizukuManager.state.value,
+                            shizukuPrivilege = ShizukuManager.privilege(),
+                            modeStatuses = statuses,
+                            diagnostics = engineController.diagnostics,
+                            statusBannerMessage = if (res.isSuccess) {
+                                "Granted DUMP permission via Shizuku (${ShizukuManager.privilege()})"
+                            } else {
+                                "Shizuku connected (${ShizukuManager.privilege()})"
+                            }
+                        )
+                    }
+                    applyPresetOrContextLoad(persistNow = false)
                 }
             }
-            state.copy(enhancers = updated)
-        }
-        applyPresetOrContextLoad()
-    }
-
-    /**
-     * Slider drag event (`onDrag` while moving, Enhancers Spec Section 3 Rule 5 & Section 6):
-     * Updates EQ curve only (60 ms glide). No MBC, no makeup, and no Virtualizer/BassBoost/Dolby effect calls.
-     */
-    fun dragEnhancerAmount(enhancer: Enhancer, percent: Float) {
-        val clamped = percent.coerceIn(0f, 100f)
-        _uiState.update { state ->
-            val currentItem = state.enhancers.find { it.enhancer == enhancer }
-            if (currentItem != null && abs(currentItem.sliderPercent - clamped) < 0.2f) {
-                return@update state
-            }
-            val updated = state.enhancers.map { item ->
-                if (item.enhancer == enhancer) {
-                    item.copy(
-                        enabled = clamped > 0.5f,
-                        sliderPercent = clamped
-                    )
-                } else {
-                    item
+            ShizukuState.UNSUPPORTED_VERSION -> {
+                _uiState.update {
+                    it.copy(statusBannerMessage = "Please update Shizuku to v11 or newer")
                 }
             }
-            state.copy(enhancers = updated)
         }
-        applySliderOrContourFast(persistNow = false)
-    }
-
-    /**
-     * Slider release event (`onCommit` on `onValueChangeFinished`, Enhancers Spec Section 3 Rule 5 & Section 6):
-     * Recomputes makeup gain and MBC parameters, applies Virtualizer/BassBoost/Dolby side effects (250 ms glide),
-     * and persists state.
-     */
-    fun commitEnhancers() {
-        applyPresetOrContextLoad(persistNow = true)
-    }
-
-    /**
-     * A/B button on the Enhancers card (Enhancers Spec Section 6):
-     * Compares with all enhancers at 0 at matched loudness (keeps `inputGainDb` and `makeupGainDb` frozen).
-     */
-    fun setEnhancerAbBypass(bypass: Boolean) {
-        _uiState.update { it.copy(enhancerAbBypass = bypass) }
-        applySliderOrContourFast(persistNow = false)
-    }
-
-    /**
-     * Reset button on the Enhancers card: sets all 4 enhancers to 0 / off and restores Dolby properties.
-     */
-    fun resetEnhancers() {
-        engineController.restoreDolbyProperties()
-        _uiState.update { state ->
-            state.copy(
-                enhancers = Enhancer.entries.map { EnhancerItemState(it, enabled = false, sliderPercent = 0f) },
-                enhancerAbBypass = false,
-                dolbyDeepBass = false,
-                statusBannerMessage = "All enhancers reset to off"
-            )
-        }
-        applyPresetOrContextLoad(persistNow = true)
-    }
-
-    fun setTryDolbyControl(enabled: Boolean) {
-        if (!enabled) {
-            engineController.restoreDolbyProperties()
-        }
-        _uiState.update { it.copy(tryDolbyControl = enabled) }
-        applyPresetOrContextLoad(persistNow = true)
-    }
-
-    fun setDolbyDeepBass(enabled: Boolean) {
-        _uiState.update { it.copy(dolbyDeepBass = enabled) }
-        applyPresetOrContextLoad(persistNow = true)
-    }
-
-    fun resetDolbyControl() {
-        engineController.restoreDolbyProperties()
-        _uiState.update {
-            it.copy(
-                dolbyDeepBass = false,
-                statusBannerMessage = "Restored original Dolby property values"
-            )
-        }
-        applyPresetOrContextLoad(persistNow = true)
     }
 
     fun clearStatusBanner() {

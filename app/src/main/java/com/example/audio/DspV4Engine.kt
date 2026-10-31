@@ -254,13 +254,14 @@ object Dsp {
         val hearing31 = if (channel == 1) layers.hearingRight31 else layers.hearingLeft31
         val slider = DoubleArray(10) {
             uDb[it] * layers.intensity +
+                layers.dolbyBose10Db.getOrElse(it) { 0.0 } +
                 layers.routeDb[it] +
                 (if (withContour) layers.contourDb[it] else 0.0)
         }
         val taste = DoubleArray(31)
         FastRender.render(slider, taste)
         return DoubleArray(31) {
-            (taste[it] + layers.correction31[it] + layers.enhancer31[it] + hearing31[it]).coerceIn(-15.0, 10.0)
+            (taste[it] + layers.correction31[it] + hearing31[it]).coerceIn(-15.0, 15.0)
         }
     }
 
@@ -382,21 +383,21 @@ class Layers(
     routeDb: DoubleArray,
     contourDb: DoubleArray,
     correction31: DoubleArray = DoubleArray(31),
-    enhancer31: DoubleArray = DoubleArray(31),
     val balanceDb: Float = 0f, // -6..+6 dB (F4)
     rightUserDb: DoubleArray? = null, // Independent Right channel 10-band EQ (F4)
     hearingLeft31: DoubleArray = DoubleArray(31), // Personal hearing curve Left (F5)
-    hearingRight31: DoubleArray = DoubleArray(31) // Personal hearing curve Right (F5)
+    hearingRight31: DoubleArray = DoubleArray(31), // Personal hearing curve Right (F5)
+    dolbyBose10Db: DoubleArray = DoubleArray(10) // Dolby DAP (IEQ + Bass + Dialogue) + Bose Profile 10-band delta
 ) {
     // Defensive copies: the UI may reuse its arrays, and EqEngine reads these on its own HandlerThread.
     val userDb: DoubleArray = userDb.copyOf()
     val routeDb: DoubleArray = routeDb.copyOf()
     val contourDb: DoubleArray = contourDb.copyOf()
     val correction31: DoubleArray = correction31.copyOf()
-    val enhancer31: DoubleArray = enhancer31.copyOf()
     val rightUserDb: DoubleArray? = rightUserDb?.copyOf()
     val hearingLeft31: DoubleArray = hearingLeft31.copyOf()
     val hearingRight31: DoubleArray = hearingRight31.copyOf()
+    val dolbyBose10Db: DoubleArray = dolbyBose10Db.copyOf()
 
     fun hasIndependentChannels(): Boolean {
         return abs(balanceDb) > 0.02f ||
@@ -533,7 +534,7 @@ class EqEngine(
         }
         FastRender.render(sliderScratch, tasteScratch)
         for (i in 0 until 31) {
-            out[i] = (tasteScratch[i] + l.correction31[i] + l.enhancer31[i] + hearing31[i]).coerceIn(-15.0, 10.0)
+            out[i] = (tasteScratch[i] + l.correction31[i] + hearing31[i]).coerceIn(-15.0, 10.0)
         }
     }
 
@@ -542,8 +543,7 @@ class EqEngine(
     }
 
     /**
-     * Preset, route, profile, intensity, or enhancer COMMIT. Never while a slider is being dragged.
-     * `m` already includes the enhancer MBC blend (`EnhancerMbc.blend`).
+     * Preset, route, profile, or intensity COMMIT. Never while a slider is being dragged.
      */
     fun load(
         l: Layers,
@@ -558,7 +558,7 @@ class EqEngine(
         val sliderTmp = DoubleArray(10) { uDb[it] * l.intensity + l.routeDb[it] }
         FastRender.render(sliderTmp, base)
         for (i in 0 until 31) {
-            base[i] = (base[i] + l.correction31[i] + l.enhancer31[i] + l.hearingLeft31[i]).coerceIn(-15.0, 10.0)
+            base[i] = (base[i] + l.correction31[i] + l.hearingLeft31[i]).coerceIn(-15.0, 10.0)
         }
         var corrMax = 0.0
         for (v in l.correction31) corrMax = max(corrMax, v)

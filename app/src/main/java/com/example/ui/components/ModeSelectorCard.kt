@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
@@ -49,11 +50,13 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import android.content.Context
 import com.example.R
 import com.example.audio.DeviceDiagnostics
 import com.example.model.CapabilityLevel
 import com.example.model.EngineMode
 import com.example.model.ModeStatusInfo
+import com.example.shizuku.ShizukuState
 
 /**
  * Top Horizontal Engine Mode Selector Bar with 3 profiles (v5 APK-only):
@@ -67,9 +70,12 @@ fun ModeSelectorCard(
     activeStatus: ModeStatusInfo,
     diagnostics: DeviceDiagnostics,
     startOnBoot: Boolean,
+    shizukuState: ShizukuState = ShizukuState.NOT_INSTALLED,
+    shizukuPrivilege: String = "none",
     onSelectMode: (EngineMode) -> Unit,
     onToggleStartOnBoot: (Boolean) -> Unit,
     onToggleRootBtAbsVol: (Boolean) -> Unit,
+    onShizukuAction: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showSetupDetails by remember { mutableStateOf(false) }
@@ -236,6 +242,29 @@ fun ModeSelectorCard(
                         }
 
                         if (selectedMode == EngineMode.ADB_SHIZUKU) {
+                            val shizukuButtonText = when (shizukuState) {
+                                ShizukuState.NOT_INSTALLED -> "Install Shizuku (Zero-PC Setup)"
+                                ShizukuState.NOT_RUNNING -> "Open & Start Shizuku"
+                                ShizukuState.UNSUPPORTED_VERSION -> "Update Shizuku App"
+                                ShizukuState.NEEDS_PERMISSION -> "Grant Shizuku Permission"
+                                ShizukuState.DENIED_PERMANENTLY -> "Re-allow in Shizuku App"
+                                ShizukuState.READY -> "Shizuku Ready ($shizukuPrivilege) · Grant DUMP"
+                            }
+                            Button(
+                                onClick = onShizukuAction,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("shizuku_action_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Security,
+                                    contentDescription = shizukuButtonText,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.size(8.dp))
+                                Text(shizukuButtonText)
+                            }
+
                             val adbCmd = "adb shell pm grant ${context.packageName} android.permission.DUMP"
                             FilledTonalButton(
                                 onClick = {

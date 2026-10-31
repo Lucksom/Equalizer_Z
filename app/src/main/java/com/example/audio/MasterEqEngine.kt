@@ -181,8 +181,8 @@ data class EngineState(
     val mbc: MbcSettings = EqMath.DEFAULT_MBC,
     val tier1Native5Db: FloatArray = FloatArray(5),
     val tier1BassBoost: Short = 0,
-    val enhancer31Db: DoubleArray = DoubleArray(31), // Optional additive 31-band enhancer layer
-    val hearing31Db: DoubleArray = DoubleArray(31)   // Personal Hearing Compensation (CustomizedSoundModel)
+    val hearing31Db: DoubleArray = DoubleArray(31), // Personal Hearing Compensation (CustomizedSoundModel)
+    val dolbyBoseConfig: DolbyBoseDspConfig = DolbyBoseDspConfig()
 )
 
 // ============================================================================
@@ -622,11 +622,11 @@ object EqMath {
     }
 
     /**
-     * Section 3.1 & Section 9 Master 3-Layer Signal Chain:
-     * Combines User 10-band Sliders (x Intensity), Profile IEQ (20-band -> 31-band),
-     * Profile Dialog Enhancer (800-4500 Hz Hann bell), Route Offsets, ISO-226 Volume Contour,
-     * Voice sub-80 Hz cut, Correction31 (AutoEq / Speaker Cal), Personal Hearing, and Enhancers,
-     * clamped to [-15.0, +10.0] dB.
+     * Section 3.1 & Section 9 Master Signal Chain + Dolby DAP & Bose MiSound DSP:
+     * Combines User 10-band Sliders (x Intensity), Dolby IEQ (ieq_detailed, ieq_balanced, ieq_warm, ieq_custom),
+     * Bass Enhancer (+ Virtual Bass Harmonic Synthesis), Dialogue Enhancer (1-4 kHz Formant Peaking + <=180 Hz Ambient Ducking),
+     * Bose Profile (Dynamic & Balanced), Route Offsets, ISO-226 Volume Contour,
+     * Correction31 (AutoEq / Speaker Cal), and Personal Hearing, clamped to [-15.0, +15.0] dB.
      */
     fun computeEffective31(s: EngineState, includeContour: Boolean): DoubleArray {
         if (s.flatBypass) return DoubleArray(31)
@@ -642,31 +642,25 @@ object EqMath {
             s.route.offsets10Db
         }
 
+        // Composite 10-band delta from Dolby IEQ + Bass Enhancer (Virtual Bass) + Dialogue Enhancer + Bose Profile
+        val dolbyBose10 = DolbyBoseDspMath.computeComposite10BandDeltaDb(
+            config = s.dolbyBoseConfig,
+            userCustom10Db = s.userSliders10Db
+        )
+
         val combined10 = DoubleArray(10) { i ->
-            s.userSliders10Db.getOrElse(i) { 0.0 } * s.intensity + route10[i] + contour10[i]
+            s.userSliders10Db.getOrElse(i) { 0.0 } * s.intensity +
+                dolbyBose10[i] +
+                route10[i] +
+                contour10[i]
         }
-        val user31 = interp10To31(combined10)
+        val userAndDsp31 = interp10To31(combined10)
 
-        // Add Profile IEQ layer (interpolated from 20-band Bark table)
-        val ieqAmount = if (s.route == AudioRoute.SPEAKER) {
-            s.profile.ieqAmountSpk
-        } else {
-            s.profile.ieqAmountHp
-        }
-        val ieq31 = s.profile.ieqCurveDb?.let { curve20 ->
-            val scaled20 = DoubleArray(20) { curve20[it] * ieqAmount }
-            interp20To31(scaled20)
-        } ?: DoubleArray(31)
-
-        // Add Dialog Enhancer, Voice low-cut, Correction31, Hearing31, and Enhancer31
-        val dialogSteps = s.profile.dialogStepsFor(s.route)
         return DoubleArray(31) { i ->
             val f = RENDER_31_HZ[i]
-            val dialogDb = dialogEnhancerDb(f, dialogSteps)
-            val voiceLowCut = if (!s.profile.virtualBassSpk && f < 80.0) -4.0 else 0.0
-            val taste = user31[i] + ieq31[i] + dialogDb + voiceLowCut +
-                s.enhancer31Db.getOrElse(i) { 0.0 } + s.hearing31Db.getOrElse(i) { 0.0 }
-            (taste + s.correction31Db.getOrElse(i) { 0.0 }).coerceIn(-15.0, 10.0)
+            val voiceLowCut = if (!s.profile.virtualBassSpk && !s.dolbyBoseConfig.bassEnhancerEnabled && f < 80.0) -4.0 else 0.0
+            val taste = userAndDsp31[i] + voiceLowCut + s.hearing31Db.getOrElse(i) { 0.0 }
+            (taste + s.correction31Db.getOrElse(i) { 0.0 }).coerceIn(-15.0, 15.0)
         }
     }
 
@@ -1001,10 +995,13 @@ class MasterEqController(private val sessionId: Int) {
     fun loadFullState(state: EngineState, glideMs: Double = 250.0) {
         handler.post {
             activeState = state
-            val corrPeak = state.correction31Db.maxOrNull() ?: 0.0
-            inputGainDb = state.route.baseInputGainDb - max(0.0, corrPeak - 3.0).toFloat()
-
             val noContour31 = EqMath.computeEffective31(state, includeContour = false)
+            val maxPosGain = (noContour31.maxOrNull() ?: 0.0).toFloat()
+            val antiClipHeadroomDb = DolbyBoseDspMath.computeSafeHeadroomDb(maxPosGain)
+            val corrPeak = state.correction31Db.maxOrNull() ?: 0.0
+            val routeInDb = state.route.baseInputGainDb - max(0.0, corrPeak - 3.0).toFloat()
+            inputGainDb = min(routeInDb, antiClipHeadroomDb).coerceAtLeast(-11.0f)
+
             val levelerBonus = if (state.profile.levelerOn) 1.0 else 0.0
             makeupDb = if (state.flatBypass) {
                 0f
@@ -1058,25 +1055,62 @@ class MasterEqController(private val sessionId: Int) {
                         true,
                         true,
                         0,
-                        1f,
-                        50f,
-                        20f,
-                        state.route.limiterThresholdDb,
+                        1.0f,  // 1 ms instantaneous peak catch
+                        60.0f, // 60 ms transparent recovery
+                        10.0f, // 10:1 brickwall ceiling
+                        min(state.route.limiterThresholdDb, -0.8f),
                         0f
                     )
                 )
                 val m = mbc
                 if (m != null) {
+                    val cfg = state.dolbyBoseConfig
+                    val ieqStrength = cfg.ieqAmount.coerceIn(0, 16) / 16.0f
+                    val deFactor = if (cfg.dialogueEnhancerEnabled) {
+                        cfg.dialogueAmount.coerceIn(0, 16) / 16.0f
+                    } else 0f
                     val levelerShift = if (state.profile.levelerOn) 1.5f else 0.0f
+
                     for (i in 0 until 6) {
                         val meanBoost = max(0.0, EqMath.MBC_RANGES[i].map { eff31[it] }.average()).toFloat()
                         val b = m.getBand(i)
-                        b.attackTime = state.mbc.attackMs[i]
-                        b.releaseTime = state.mbc.releaseMs[i]
-                        b.ratio = state.mbc.ratio[i]
-                        b.threshold = state.mbc.baseThresholdDb[i] + meanBoost - levelerShift
-                        b.kneeWidth = state.mbc.kneeDb[i]
-                        b.postGain = makeupDb
+                        when {
+                            // Stage 2: Virtual Bass Mix Window (90-359 Hz -> MBC band 1): Fast harmonic density compression
+                            cfg.bassEnhancerEnabled && cfg.virtualBassEnabled && i == 1 -> {
+                                b.attackTime = 4.0f
+                                b.releaseTime = 75.0f
+                                b.ratio = 2.8f
+                                b.threshold = -20.0f + meanBoost * 0.5f
+                                b.kneeWidth = 6.0f
+                                b.noiseGateThreshold = -70.0f
+                                b.expanderRatio = 1.0f
+                                b.preGain = 1.5f
+                                b.postGain = 2.2f + makeupDb * 0.5f
+                            }
+                            // Stage 2: Dialogue Formant Band (359-5747 Hz -> MBC bands 2 & 3): Upward vocal expansion
+                            deFactor > 0f && (i == 2 || i == 3) -> {
+                                b.attackTime = 2.5f
+                                b.releaseTime = 55.0f
+                                b.ratio = 1.0f + (0.8f * deFactor)
+                                b.threshold = -26.0f
+                                b.kneeWidth = 8.0f
+                                b.noiseGateThreshold = -65.0f
+                                b.expanderRatio = 1.0f
+                                b.preGain = 0.0f
+                                b.postGain = (3.2f * deFactor) + makeupDb
+                            }
+                            else -> {
+                                b.attackTime = state.mbc.attackMs[i]
+                                b.releaseTime = state.mbc.releaseMs[i]
+                                b.ratio = max(state.mbc.ratio[i], 1.0f + 0.4f * ieqStrength)
+                                b.threshold = state.mbc.baseThresholdDb[i] + meanBoost - levelerShift
+                                b.kneeWidth = state.mbc.kneeDb[i]
+                                b.noiseGateThreshold = -80.0f
+                                b.expanderRatio = 1.0f
+                                b.preGain = 0.0f
+                                b.postGain = makeupDb
+                            }
+                        }
                         m.setBand(i, b)
                         writtenMbc[i] = b.threshold
                     }

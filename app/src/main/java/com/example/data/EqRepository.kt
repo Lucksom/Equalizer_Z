@@ -8,8 +8,11 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.audio.BoseProfile
 import com.example.audio.DaxProfile
+import com.example.audio.DolbyBoseDspConfig
 import com.example.audio.EqMath
+import com.example.audio.IeqPreset
 import com.example.model.DeviceProfileMemory
 import com.example.model.EngineMode
 import com.example.model.EqConstants
@@ -58,11 +61,8 @@ data class PersistedEqPreferences(
     val deviceMemories: Map<String, DeviceProfileMemory> = emptyMap(),
     val compatibility10Band: Boolean = false,
     val transientMode: Boolean = false,
-    val enhancerEnabledFlags: List<Boolean> = listOf(false, false, false, false),
-    val enhancerSliderPcts: List<Float> = listOf(0f, 0f, 0f, 0f),
-    val tryDolbyControl: Boolean = false,
-    val dolbyDeepBass: Boolean = false,
-    val rootWarningAccepted: Boolean = false
+    val rootWarningAccepted: Boolean = false,
+    val dolbyBoseConfig: DolbyBoseDspConfig = DolbyBoseDspConfig()
 )
 
 class EqRepository(private val context: Context) {
@@ -107,11 +107,16 @@ class EqRepository(private val context: Context) {
         val DEVICE_MEMORIES_RAW = stringPreferencesKey("device_memories_raw")
         val COMPAT_10_BAND = booleanPreferencesKey("compatibility_10_band")
         val TRANSIENT_MODE = booleanPreferencesKey("transient_mode")
-        val ENHANCER_ENABLED_CSV = stringPreferencesKey("enhancer_enabled_csv")
-        val ENHANCER_PCT_CSV = stringPreferencesKey("enhancer_pct_csv")
-        val TRY_DOLBY_CONTROL = booleanPreferencesKey("try_dolby_control")
-        val DOLBY_DEEP_BASS = booleanPreferencesKey("dolby_deep_bass")
         val ROOT_WARNING_ACCEPTED = booleanPreferencesKey("root_warning_accepted")
+        val IEQ_PRESET_ID = stringPreferencesKey("dolby_ieq_preset_id")
+        val IEQ_AMOUNT = intPreferencesKey("dolby_ieq_amount")
+        val IEQ_CUSTOM_10_CSV = stringPreferencesKey("dolby_ieq_custom_10_csv")
+        val DIALOGUE_ENABLED = booleanPreferencesKey("dolby_dialogue_enabled")
+        val DIALOGUE_AMOUNT = intPreferencesKey("dolby_dialogue_amount")
+        val DIALOGUE_DUCKING = intPreferencesKey("dolby_dialogue_ducking")
+        val BASS_ENHANCER_ENABLED = booleanPreferencesKey("dolby_bass_enhancer_enabled")
+        val VIRTUAL_BASS_ENABLED = booleanPreferencesKey("dolby_virtual_bass_enabled")
+        val BOSE_PROFILE_ID = stringPreferencesKey("bose_profile_id")
     }
 
     val preferencesFlow: Flow<PersistedEqPreferences> = context.eqDataStore.data.map { prefs ->
@@ -139,17 +144,13 @@ class EqRepository(private val context: Context) {
             ?.takeIf { it.size == 6 }
             ?: List(6) { 0f }
 
+        val ieqCustom10 = prefs[Keys.IEQ_CUSTOM_10_CSV]
+            ?.split(",")
+            ?.mapNotNull { it.toFloatOrNull() }
+            ?.takeIf { it.size == 10 }
+            ?: listOf(2.5f, 2.0f, 1.0f, 0.0f, -0.5f, 0.5f, 1.5f, 2.0f, 1.5f, 1.0f)
+
         val deviceMap = decodeDeviceMemories(prefs[Keys.DEVICE_MEMORIES_RAW] ?: "")
-        val enhEnabled = prefs[Keys.ENHANCER_ENABLED_CSV]
-            ?.split(",")
-            ?.map { it == "1" }
-            ?.takeIf { it.size == 4 }
-            ?: listOf(false, false, false, false)
-        val enhPcts = prefs[Keys.ENHANCER_PCT_CSV]
-            ?.split(",")
-            ?.mapNotNull { it.toFloatOrNull()?.coerceIn(0f, 100f) }
-            ?.takeIf { it.size == 4 }
-            ?: listOf(0f, 0f, 0f, 0f)
 
         PersistedEqPreferences(
             isEnabled = prefs[Keys.IS_ENABLED] ?: true,
@@ -188,11 +189,18 @@ class EqRepository(private val context: Context) {
             deviceMemories = deviceMap,
             compatibility10Band = prefs[Keys.COMPAT_10_BAND] ?: false,
             transientMode = prefs[Keys.TRANSIENT_MODE] ?: false,
-            enhancerEnabledFlags = enhEnabled,
-            enhancerSliderPcts = enhPcts,
-            tryDolbyControl = prefs[Keys.TRY_DOLBY_CONTROL] ?: false,
-            dolbyDeepBass = prefs[Keys.DOLBY_DEEP_BASS] ?: false,
-            rootWarningAccepted = prefs[Keys.ROOT_WARNING_ACCEPTED] ?: false
+            rootWarningAccepted = prefs[Keys.ROOT_WARNING_ACCEPTED] ?: false,
+            dolbyBoseConfig = DolbyBoseDspConfig(
+                ieqPreset = IeqPreset.fromId(prefs[Keys.IEQ_PRESET_ID] ?: IeqPreset.BALANCED.id),
+                ieqAmount = (prefs[Keys.IEQ_AMOUNT] ?: 14).coerceIn(0, 16),
+                ieqCustom10Db = ieqCustom10,
+                dialogueEnhancerEnabled = prefs[Keys.DIALOGUE_ENABLED] ?: true,
+                dialogueAmount = (prefs[Keys.DIALOGUE_AMOUNT] ?: 5).coerceIn(0, 16),
+                dialogueDucking = (prefs[Keys.DIALOGUE_DUCKING] ?: 2).coerceIn(0, 8),
+                bassEnhancerEnabled = prefs[Keys.BASS_ENHANCER_ENABLED] ?: true,
+                virtualBassEnabled = prefs[Keys.VIRTUAL_BASS_ENABLED] ?: true,
+                boseProfile = BoseProfile.fromId(prefs[Keys.BOSE_PROFILE_ID] ?: BoseProfile.OFF.id)
+            )
         )
     }
 
@@ -232,10 +240,7 @@ class EqRepository(private val context: Context) {
         speakerCalStrength: Float,
         compatibility10Band: Boolean,
         transientMode: Boolean,
-        enhancerEnabledFlags: List<Boolean> = listOf(false, false, false, false),
-        enhancerSliderPcts: List<Float> = listOf(0f, 0f, 0f, 0f),
-        tryDolbyControl: Boolean = false,
-        dolbyDeepBass: Boolean = false
+        dolbyBoseConfig: DolbyBoseDspConfig = DolbyBoseDspConfig()
     ) {
         context.eqDataStore.edit { prefs ->
             prefs[Keys.IS_ENABLED] = isEnabled
@@ -267,10 +272,15 @@ class EqRepository(private val context: Context) {
             prefs[Keys.SPEAKER_CAL_STRENGTH] = speakerCalStrength
             prefs[Keys.COMPAT_10_BAND] = compatibility10Band
             prefs[Keys.TRANSIENT_MODE] = transientMode
-            prefs[Keys.ENHANCER_ENABLED_CSV] = enhancerEnabledFlags.joinToString(",") { if (it) "1" else "0" }
-            prefs[Keys.ENHANCER_PCT_CSV] = enhancerSliderPcts.joinToString(",") { "%.1f".format(Locale.US, it) }
-            prefs[Keys.TRY_DOLBY_CONTROL] = tryDolbyControl
-            prefs[Keys.DOLBY_DEEP_BASS] = dolbyDeepBass
+            prefs[Keys.IEQ_PRESET_ID] = dolbyBoseConfig.ieqPreset.id
+            prefs[Keys.IEQ_AMOUNT] = dolbyBoseConfig.ieqAmount.coerceIn(0, 16)
+            prefs[Keys.IEQ_CUSTOM_10_CSV] = dolbyBoseConfig.ieqCustom10Db.joinToString(",")
+            prefs[Keys.DIALOGUE_ENABLED] = dolbyBoseConfig.dialogueEnhancerEnabled
+            prefs[Keys.DIALOGUE_AMOUNT] = dolbyBoseConfig.dialogueAmount.coerceIn(0, 16)
+            prefs[Keys.DIALOGUE_DUCKING] = dolbyBoseConfig.dialogueDucking.coerceIn(0, 8)
+            prefs[Keys.BASS_ENHANCER_ENABLED] = dolbyBoseConfig.bassEnhancerEnabled
+            prefs[Keys.VIRTUAL_BASS_ENABLED] = dolbyBoseConfig.virtualBassEnabled
+            prefs[Keys.BOSE_PROFILE_ID] = dolbyBoseConfig.boseProfile.id
         }
     }
 

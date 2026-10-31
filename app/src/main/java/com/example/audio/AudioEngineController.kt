@@ -17,6 +17,8 @@ import com.example.model.EqConstants
 import com.example.model.MbcConfig
 import com.example.model.ModeStatusInfo
 import com.example.model.OutputRoute
+import com.example.shizuku.ShizukuManager
+import com.example.shizuku.ShizukuState
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -39,6 +41,8 @@ data class DeviceDiagnostics(
     val globalSession0Supported: Boolean = false,
     val dumpPermissionGranted: Boolean = false,
     val shizukuInstalled: Boolean = false,
+    val shizukuState: ShizukuState = ShizukuState.NOT_INSTALLED,
+    val shizukuPrivilege: String = "none",
     val rootSuBinaryDetected: Boolean = false,
     val activeSessions: List<Int> = emptyList(),
     val connectedProductName: String? = null,
@@ -48,7 +52,6 @@ data class DeviceDiagnostics(
     val bluetoothCodecSummary: String? = null,
     val btDisableAbsVolActive: Boolean = false,
     val virtualizerSupported: Boolean = true,
-    val dolbyPropsDetected: Boolean = false,
     val hardwareDaxDetected: Boolean = false,
     val hardwareDaxActive: Boolean = false,
     val activeOperatingMode: OperatingMode = OperatingMode.LEGACY_TIER2_DP,
@@ -60,7 +63,7 @@ data class DeviceDiagnostics(
  * - Hosts `MasterEqController` (`MasterEqEngine.kt`) per active audio session (and Global Session 0 for Root/Shizuku)
  * - Supports all 3 Operating Modes:
  *   1. `ROOT_GLOBAL` (Global Session 0 `DynamicsProcessing` + Optional OEM Hardware Bridge `9d4921da-8225-4f29-aefa-39537a04bcaa`)
- *   2. `SHIZUKU_GLOBAL` (Global Session 0 `DynamicsProcessing` + `dumpsys media.audio_flinger`)
+ *   2. `SHIZUKU_GLOBAL` (Global Session 0 `DynamicsProcessing` + `dumpsys media.audio_flinger` via Shizuku UserService or DUMP permission)
  *   3. `LEGACY_TIER2_DP` / `LEGACY_TIER1_NATIVE` (Per-app `audioSessionId` via `ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION`)
  * - Executes `MasterEqController.loadFullState(state, glideMs = 250.0)` on Profile, Preset, Route, AutoEq, or Intensity change
  * - Executes `MasterEqController.updateSlidersOrVolume(state, glideMs = 60.0)` while dragging sliders or changing system volume
@@ -89,26 +92,19 @@ class AudioEngineController(private val context: Context) {
     private val broadcastSessions = mutableSetOf<Int>()
     private var receiverRegistered = false
 
-    val dolbyControl = DolbyControl { cmd ->
-        runShellCommand(cmd, useSu = diagnostics.rootSuBinaryDetected)
-    }
-
     private var lastLayers: Layers = Layers(
         userDb = DoubleArray(10),
         intensity = 1.0,
         routeDb = DoubleArray(10),
         contourDb = DoubleArray(10),
-        correction31 = DoubleArray(31),
-        enhancer31 = DoubleArray(31)
+        correction31 = DoubleArray(31)
     )
     private var lastDaxProfile: DaxProfile = DaxProfile.MUSIC
+    private var lastDolbyBoseConfig: DolbyBoseDspConfig = DolbyBoseDspConfig()
     private var lastMbc: MbcConfig = EqConstants.DEFAULT_MBC_CONFIG
     private var lastRouteBaseDb: Float = -3.0f
     private var lastLimiterDb: Float = -1.0f
     private var lastFlatBypass: Boolean = false
-    private var lastEnhancerAmounts: DoubleArray = DoubleArray(4)
-    private var lastDolbyControlActive: Boolean = false
-    private var lastDolbyDeepBass: Boolean = false
     private var lastBassBoostStrength: Int = 150
     private var lastVirtualizerStrength: Int = 150
     private var lastTier1Native5Db: FloatArray = FloatArray(5)
@@ -208,6 +204,13 @@ class AudioEngineController(private val context: Context) {
     }
 
     fun getAudioManager(): AudioManager = audioManager
+
+    fun attachExternalSession(sessionId: Int) {
+        if (sessionId <= 0) return
+        broadcastSessions.add(sessionId)
+        attachToSessionIfNeeded(sessionId)
+        loadAllSessions(glideMs = 250.0)
+    }
 
     fun setUsbBitPerfectMode(enabled: Boolean): Boolean {
         val applied = UsbBitPerfectHelper.setBitPerfectEnabled(audioManager, enabled)
@@ -370,17 +373,18 @@ class AudioEngineController(private val context: Context) {
         val dpOk = cachedDpOk
         val dpBandCount = if (compatibility10Band) 10 else cachedDpBandCount
 
+        ShizukuManager.refresh()
+        val shizukuState = ShizukuManager.state.value
+        val shizukuPriv = ShizukuManager.privilege()
+        val shizukuReady = shizukuState == ShizukuState.READY
+
         val dumpGranted = ContextCompat.checkSelfPermission(
             context,
             android.Manifest.permission.DUMP
         ) == PackageManager.PERMISSION_GRANTED
 
-        val shizukuPresent = try {
-            context.packageManager.getPackageInfo("moe.shizuku.privileged.api", 0)
-            true
-        } catch (_: Exception) {
-            false
-        }
+        val shizukuPresent = ShizukuManager.isShizukuAppInstalled(context) ||
+            shizukuState != ShizukuState.NOT_INSTALLED
 
         val suPaths = listOf(
             "/system/bin/su",
@@ -390,12 +394,12 @@ class AudioEngineController(private val context: Context) {
             "/data/local/bin/su",
             "/debug_ramdisk/su"
         )
-        val hasSu = suPaths.any { File(it).exists() }
+        val hasSu = suPaths.any { File(it).exists() } || shizukuPriv == "root"
 
         val prodName = detectConnectedDeviceProductName(audioManager)
         val devKey = buildCurrentDeviceKey(audioManager)
         val bitPerfectSupported = UsbBitPerfectHelper.isBitPerfectSupported(audioManager)
-        val btCodec = if (dumpGranted || hasSu) readBluetoothCodecFromDumpsys(hasSu) else null
+        val btCodec = if (dumpGranted || hasSu || shizukuReady) readBluetoothCodecFromDumpsys(hasSu) else null
 
         val virtSupported = activeBundles.values.firstNotNullOfOrNull { it.virtualizerFx }
             ?.supported(isSmallRoute)
@@ -404,7 +408,6 @@ class AudioEngineController(private val context: Context) {
             .filter { it > 0.0 }
             .takeIf { it.isNotEmpty() }
             ?.average() ?: 0.0
-        val dolbyDetected = if (hasSu || dumpGranted) dolbyControl.detect() else diagnostics.dolbyPropsDetected
         val hwDaxSupported = OemDaxBridge.isHardwareDaxSupported()
         val hwDaxActive = activeBundles.values.any { it.masterController.oemBridgeActive }
         val activeOpMode = activeBundles.values.firstOrNull()?.masterController?.activeMode
@@ -421,6 +424,8 @@ class AudioEngineController(private val context: Context) {
             globalSession0Supported = global0Ok,
             dumpPermissionGranted = dumpGranted,
             shizukuInstalled = shizukuPresent,
+            shizukuState = shizukuState,
+            shizukuPrivilege = shizukuPriv,
             rootSuBinaryDetected = hasSu,
             activeSessions = activeBundles.keys.toList(),
             connectedProductName = prodName,
@@ -430,7 +435,6 @@ class AudioEngineController(private val context: Context) {
             bluetoothCodecSummary = btCodec,
             btDisableAbsVolActive = diagnostics.btDisableAbsVolActive,
             virtualizerSupported = virtSupported,
-            dolbyPropsDetected = dolbyDetected,
             hardwareDaxDetected = hwDaxSupported,
             hardwareDaxActive = hwDaxActive,
             activeOperatingMode = activeOpMode,
@@ -459,31 +463,38 @@ class AudioEngineController(private val context: Context) {
             activeSessionsCount = activeBundles.size.coerceAtLeast(1)
         )
 
-        val adbStatus = if (dumpGranted) {
+        val adbStatus = if (shizukuReady || dumpGranted) {
+            val privTag = if (shizukuReady) "Shizuku ($shizukuPriv)" else "ADB DUMP"
             ModeStatusInfo(
                 mode = EngineMode.ADB_SHIZUKU,
                 level = CapabilityLevel.AVAILABLE,
-                summaryText = "Shizuku / ADB Global (Session 0 + audio_flinger)",
+                summaryText = "$privTag Global (Session 0 + audio_flinger)",
                 detailReason = buildString {
-                    append("Shell UID 2000 (Section 1.2): attaches DynamicsProcessing(0, 0, cfg) to Global Audio Session 0 and polls dumpsys media.audio_flinger.")
+                    append("Shell UID 2000 / Shizuku UserService (Section 1.2): attaches DynamicsProcessing(0, 0, cfg) to Global Audio Session 0 and polls dumpsys media.audio_flinger.")
                     if (btCodec != null) append(" Detected BT codec: $btCodec.")
                 },
                 setupSteps = listOf(
-                    "Permission android.permission.DUMP is granted.",
+                    if (shizukuReady) "Shizuku UserService connected ($shizukuPriv privilege)." else "Permission android.permission.DUMP is granted.",
                     "Global Session 0 + throttled delta-only binder writes (~33 Hz)."
                 ),
                 activeSessionsCount = activeBundles.size.coerceAtLeast(1)
             )
         } else {
-            val shizukuNote = if (shizukuPresent) "Shizuku installed, grant shell/DUMP" else "Shizuku not running"
+            val shizukuNote = when (shizukuState) {
+                ShizukuState.NEEDS_PERMISSION -> "Shizuku running — tap Grant Shizuku Permission"
+                ShizukuState.DENIED_PERMANENTLY -> "Shizuku denied — re-allow in Shizuku app"
+                ShizukuState.NOT_RUNNING -> "Shizuku installed — start Shizuku service"
+                ShizukuState.UNSUPPORTED_VERSION -> "Update Shizuku to v11+"
+                else -> "Shizuku not running"
+            }
             ModeStatusInfo(
                 mode = EngineMode.ADB_SHIZUKU,
                 level = CapabilityLevel.REQUIRES_PERMISSION,
                 summaryText = "Requires permission ($shizukuNote · Using Legacy fallback)",
-                detailReason = "Start Shizuku or grant DUMP permission once via ADB to attach to Global Session 0 and read Bluetooth codec headroom. Falling back to Legacy until granted.",
+                detailReason = "Grant Shizuku permission directly in-app or grant DUMP permission once via ADB to attach to Global Session 0 and read Bluetooth codec headroom.",
                 setupSteps = listOf(
-                    "1. Start Shizuku (Wireless Debugging) or connect phone to PC with USB Debugging.",
-                    "2. Run one-time ADB command:\nadb shell pm grant $pkgName android.permission.DUMP"
+                    "1. Open Shizuku and start the service (Wireless Debugging on Android 11+ or ADB).",
+                    "2. Tap 'Grant Shizuku Permission' below (or run: adb shell pm grant $pkgName android.permission.DUMP)."
                 ),
                 activeSessionsCount = activeBundles.size
             )
@@ -535,13 +546,19 @@ class AudioEngineController(private val context: Context) {
         return try {
             val propVal = if (disableAbsVol) "true" else "false"
             val settingVal = if (disableAbsVol) "1" else "0"
-            if (diagnostics.rootSuBinaryDetected) {
-                Runtime.getRuntime().exec(
-                    arrayOf(
-                        "su", "-c",
-                        "setprop persist.bluetooth.disableabsvol $propVal; settings put global bluetooth_disable_absolute_volume $settingVal"
-                    )
+            val cmd = "setprop persist.bluetooth.disableabsvol $propVal; settings put global bluetooth_disable_absolute_volume $settingVal"
+            if (ShizukuManager.state.value == ShizukuState.READY) {
+                ShizukuManager.execIfBound(cmd)
+                diagnostics = diagnostics.copy(btDisableAbsVolActive = disableAbsVol)
+                Result.success(
+                    if (disableAbsVol) {
+                        "Set persist.bluetooth.disableabsvol=true via Shizuku (software volume contour active on Bluetooth)."
+                    } else {
+                        "Restored default Bluetooth absolute volume behavior."
+                    }
                 )
+            } else if (diagnostics.rootSuBinaryDetected) {
+                Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
                 diagnostics = diagnostics.copy(btDisableAbsVolActive = disableAbsVol)
                 Result.success(
                     if (disableAbsVol) {
@@ -552,7 +569,7 @@ class AudioEngineController(private val context: Context) {
                 )
             } else {
                 Result.failure(
-                    IllegalStateException("Root su not available. Enable 'Disable absolute volume' in Android Developer Options.")
+                    IllegalStateException("Root su or Shizuku not available. Enable 'Disable absolute volume' in Android Developer Options.")
                 )
             }
         } catch (e: Exception) {
@@ -564,6 +581,7 @@ class AudioEngineController(private val context: Context) {
         enabled: Boolean,
         flatBypass: Boolean,
         daxProfile: DaxProfile,
+        dolbyBoseConfig: DolbyBoseDspConfig,
         layers: Layers,
         mbc: MbcConfig,
         tier1Native5Db: FloatArray,
@@ -596,13 +614,13 @@ class AudioEngineController(private val context: Context) {
             mbc = mbcSettings,
             tier1Native5Db = tier1Native5Db.clone(),
             tier1BassBoost = bassBoostStrength.coerceIn(0, 1000).toShort(),
-            enhancer31Db = layers.enhancer31.clone(),
-            hearing31Db = hearing31
+            hearing31Db = hearing31,
+            dolbyBoseConfig = dolbyBoseConfig
         )
     }
 
     /**
-     * Section 9 & Section 10 Step 3 — Called on Profile, Preset, Route, AutoEq, Intensity, or Enhancer COMMIT:
+     * Section 9 & Section 10 Step 3 — Called on Profile, Preset, Route, AutoEq, or Intensity COMMIT:
      * Recomputes `inputGainDb` and `makeupDb` via `EqMath` and `MasterEqController.loadFullState(newState, glideMs = 250.0)`.
      */
     fun loadEngineState(
@@ -610,14 +628,12 @@ class AudioEngineController(private val context: Context) {
         enabled: Boolean,
         abCompare: Boolean,
         daxProfile: DaxProfile = DaxProfile.MUSIC,
+        dolbyBoseConfig: DolbyBoseDspConfig = lastDolbyBoseConfig,
         layers: Layers,
         mbc: MbcConfig,
         routeBaseDb: Float,
         limiterDb: Float,
         flatBypass: Boolean,
-        enhancerAmounts: DoubleArray = DoubleArray(4),
-        dolbyControlActive: Boolean = false,
-        dolbyDeepBass: Boolean = false,
         tier1Native5Db: FloatArray = FloatArray(5),
         bassBoostStrength: Int = 0,
         virtualizerStrength: Int = 0,
@@ -627,35 +643,43 @@ class AudioEngineController(private val context: Context) {
         lastEnabled = enabled && !(usbBitPerfectEnabled && getCurrentRoute() == OutputRoute.USB)
         lastAbCompare = abCompare
         lastDaxProfile = daxProfile
+        lastDolbyBoseConfig = dolbyBoseConfig
         lastLayers = layers
-        lastEnhancerAmounts = enhancerAmounts.copyOf()
-        lastDolbyControlActive = dolbyControlActive
-        lastDolbyDeepBass = dolbyDeepBass
-
-        lastMbc = EnhancerMbc.blend(mbc, lastEnhancerAmounts)
+        lastMbc = mbc
         lastRouteBaseDb = routeBaseDb
         lastLimiterDb = limiterDb
-
-        val anyEnhancerOn = EnhancerMixer.anyActive(lastEnhancerAmounts)
-        lastFlatBypass = flatBypass && !anyEnhancerOn && daxProfile == DaxProfile.MUSIC
+        val anyDolbyBoseActive = dolbyBoseConfig.ieqPreset != IeqPreset.OFF ||
+            dolbyBoseConfig.dialogueEnhancerEnabled ||
+            dolbyBoseConfig.bassEnhancerEnabled ||
+            dolbyBoseConfig.boseProfile != BoseProfile.OFF
+        lastFlatBypass = flatBypass && daxProfile == DaxProfile.MUSIC && !anyDolbyBoseActive
 
         lastTier1Native5Db = tier1Native5Db.copyOf()
-        lastBassBoostStrength = bassBoostStrength
+        lastBassBoostStrength = if (dolbyBoseConfig.bassEnhancerEnabled) {
+            max(bassBoostStrength, 650)
+        } else {
+            bassBoostStrength
+        }
         lastVirtualizerStrength = max(virtualizerStrength, daxProfile.virtualizerStrength.toInt())
 
-        // Compute exact v6 EqMath inputGainDb, makeupDb, and ceilingLoadDb synchronously for immediate UI feedback
+        // Compute exact EqMath inputGainDb, makeupDb, and ceilingLoadDb synchronously for immediate UI feedback
         val masterState = buildMasterEngineState(
             enabled = lastEnabled && !lastAbCompare,
             flatBypass = lastFlatBypass,
             daxProfile = lastDaxProfile,
+            dolbyBoseConfig = lastDolbyBoseConfig,
             layers = lastLayers,
             mbc = lastMbc,
             tier1Native5Db = lastTier1Native5Db,
             bassBoostStrength = lastBassBoostStrength
         )
-        val corrPeak = masterState.correction31Db.maxOrNull() ?: 0.0
-        currentInputGainDb = masterState.route.baseInputGainDb - max(0.0, corrPeak - 3.0).toFloat()
         val noContour31 = EqMath.computeEffective31(masterState, includeContour = false)
+        val maxPosGain = (noContour31.maxOrNull() ?: 0.0).toFloat()
+        val antiClipHeadroomDb = DolbyBoseDspMath.computeSafeHeadroomDb(maxPosGain)
+        val corrPeak = masterState.correction31Db.maxOrNull() ?: 0.0
+        val routeInDb = masterState.route.baseInputGainDb - max(0.0, corrPeak - 3.0).toFloat()
+        currentInputGainDb = kotlin.math.min(routeInDb, antiClipHeadroomDb).coerceAtLeast(-11.0f)
+
         val levelerBonus = if (masterState.profile.levelerOn) 1.0 else 0.0
         currentMakeupGainDb = if (masterState.flatBypass) {
             0f
@@ -669,13 +693,6 @@ class AudioEngineController(private val context: Context) {
 
         ensureTargetSessionsAttached(internalSessionId)
         loadAllSessions(glideMs = 250.0)
-
-        if (lastDolbyControlActive) {
-            val deepBassAmt = if (lastEnabled && !lastAbCompare) {
-                lastEnhancerAmounts.getOrElse(Enhancer.DEEP_BASS.ordinal) { 0.0 }
-            } else 0.0
-            dolbyControl.apply(lastDolbyDeepBass && deepBassAmt > 0.0, deepBassAmt)
-        }
     }
 
     /**
@@ -686,25 +703,29 @@ class AudioEngineController(private val context: Context) {
         enabled: Boolean,
         abCompare: Boolean,
         daxProfile: DaxProfile = lastDaxProfile,
+        dolbyBoseConfig: DolbyBoseDspConfig = lastDolbyBoseConfig,
         layers: Layers,
         flatBypass: Boolean,
-        enhancerAmounts: DoubleArray = lastEnhancerAmounts,
         tier1Native5Db: FloatArray = lastTier1Native5Db,
         internalSessionId: Int = 0
     ) {
         lastEnabled = enabled && !(usbBitPerfectEnabled && getCurrentRoute() == OutputRoute.USB)
         lastAbCompare = abCompare
         lastDaxProfile = daxProfile
+        lastDolbyBoseConfig = dolbyBoseConfig
         lastLayers = layers
-        lastEnhancerAmounts = enhancerAmounts.copyOf()
         lastTier1Native5Db = tier1Native5Db.copyOf()
-        val anyEnhancerOn = EnhancerMixer.anyActive(lastEnhancerAmounts)
-        lastFlatBypass = flatBypass && !anyEnhancerOn && daxProfile == DaxProfile.MUSIC
+        val anyDolbyBoseActive = dolbyBoseConfig.ieqPreset != IeqPreset.OFF ||
+            dolbyBoseConfig.dialogueEnhancerEnabled ||
+            dolbyBoseConfig.bassEnhancerEnabled ||
+            dolbyBoseConfig.boseProfile != BoseProfile.OFF
+        lastFlatBypass = flatBypass && daxProfile == DaxProfile.MUSIC && !anyDolbyBoseActive
 
         val masterState = buildMasterEngineState(
             enabled = lastEnabled && !lastAbCompare,
             flatBypass = lastFlatBypass,
             daxProfile = lastDaxProfile,
+            dolbyBoseConfig = lastDolbyBoseConfig,
             layers = lastLayers,
             mbc = lastMbc,
             tier1Native5Db = lastTier1Native5Db,
@@ -725,10 +746,6 @@ class AudioEngineController(private val context: Context) {
         }
     }
 
-    fun restoreDolbyProperties() {
-        dolbyControl.restore()
-    }
-
     private fun ensureTargetSessionsAttached(internalSessionId: Int) {
         val targetSessions = mutableSetOf<Int>()
         targetSessions.add(0)
@@ -736,7 +753,8 @@ class AudioEngineController(private val context: Context) {
         if (internalSessionId > 0) {
             targetSessions.add(internalSessionId)
         }
-        if ((currentMode == EngineMode.ADB_SHIZUKU && diagnostics.dumpPermissionGranted) ||
+        val shizukuReady = ShizukuManager.state.value == ShizukuState.READY
+        if ((currentMode == EngineMode.ADB_SHIZUKU && (diagnostics.dumpPermissionGranted || shizukuReady)) ||
             (currentMode == EngineMode.ROOT && diagnostics.rootSuBinaryDetected)
         ) {
             targetSessions.addAll(
@@ -785,16 +803,14 @@ class AudioEngineController(private val context: Context) {
 
     private fun loadAllSessions(glideMs: Double) {
         val isSmallSpeaker = getCurrentRoute() == OutputRoute.SPEAKER
-        val surroundAmount = max(
-            lastEnhancerAmounts.getOrElse(Enhancer.SURROUND.ordinal) { 0.0 },
-            lastDaxProfile.virtualizerStrength / 1000.0
-        )
+        val surroundAmount = lastDaxProfile.virtualizerStrength / 1000.0
         val activeGate = lastEnabled && !lastFlatBypass && !lastAbCompare
 
         val masterState = buildMasterEngineState(
             enabled = lastEnabled && !lastAbCompare,
             flatBypass = lastFlatBypass,
             daxProfile = lastDaxProfile,
+            dolbyBoseConfig = lastDolbyBoseConfig,
             layers = lastLayers,
             mbc = lastMbc,
             tier1Native5Db = lastTier1Native5Db,
@@ -822,36 +838,37 @@ class AudioEngineController(private val context: Context) {
                 bundle.bassBoostFx?.apply(0.0, enabledGate = false)
                 bundle.virtualizerFx?.apply(surroundAmount, small = isSmallSpeaker, enabledGate = activeGate)
             } else {
-                val deepBassAmount = max(
-                    lastEnhancerAmounts.getOrElse(Enhancer.DEEP_BASS.ordinal) { 0.0 },
-                    lastBassBoostStrength / 1000.0
-                )
+                val deepBassAmount = lastBassBoostStrength / 1000.0
                 bundle.bassBoostFx?.apply(deepBassAmount, enabledGate = activeGate)
                 bundle.virtualizerFx?.apply(surroundAmount, small = isSmallSpeaker, enabledGate = activeGate)
             }
         }
     }
 
-    private fun runShellCommand(command: String, useSu: Boolean): String? {
-        return try {
-            val cmd = if (useSu) arrayOf("su", "-c", command) else arrayOf("sh", "-c", command)
-            val proc = Runtime.getRuntime().exec(cmd)
-            val out = proc.inputStream.bufferedReader().readText()
-            proc.waitFor()
-            out
-        } catch (_: Throwable) {
-            null
-        }
-    }
-
     private fun discoverSessionsViaDumpsys(useSu: Boolean = false): Set<Int> {
         val discovered = mutableSetOf<Int>()
+        val sessionRegex = Regex("""session(?:\s+id|\s*Id|:)?\s*[=:]?\s*(\d+)""", RegexOption.IGNORE_CASE)
         try {
+            val shizukuOutput = if (!useSu && ShizukuManager.state.value == ShizukuState.READY) {
+                ShizukuManager.execIfBound("dumpsys media.audio_flinger | head -c 200000")
+            } else null
+
+            if (shizukuOutput != null) {
+                shizukuOutput.lineSequence().forEach { line ->
+                    sessionRegex.findAll(line).forEach { match ->
+                        val id = match.groupValues.getOrNull(1)?.toIntOrNull()
+                        if (id != null && id > 0) {
+                            discovered.add(id)
+                        }
+                    }
+                }
+                return discovered
+            }
+
             val cmd = if (useSu) arrayOf("su", "-c", "dumpsys media.audio_flinger")
             else arrayOf("sh", "-c", "dumpsys media.audio_flinger")
             val proc = Runtime.getRuntime().exec(cmd)
             val reader = BufferedReader(InputStreamReader(proc.inputStream))
-            val sessionRegex = Regex("""session(?:\s+id|\s*Id|:)?\s*[=:]?\s*(\d+)""", RegexOption.IGNORE_CASE)
             var line: String? = reader.readLine()
             while (line != null) {
                 sessionRegex.findAll(line).forEach { match ->
@@ -869,12 +886,23 @@ class AudioEngineController(private val context: Context) {
     }
 
     private fun readBluetoothCodecFromDumpsys(useSu: Boolean = false): String? {
+        val codecRegex = Regex("""codecName\s*[:=]\s*([A-Za-z0-9_+-]+)""", RegexOption.IGNORE_CASE)
         return try {
+            val shizukuOutput = if (!useSu && ShizukuManager.state.value == ShizukuState.READY) {
+                ShizukuManager.execIfBound("dumpsys bluetooth_manager | head -c 120000")
+            } else null
+
+            if (shizukuOutput != null) {
+                for (line in shizukuOutput.lineSequence()) {
+                    val m = codecRegex.find(line)
+                    if (m != null) return m.groupValues[1]
+                }
+            }
+
             val cmd = if (useSu) arrayOf("su", "-c", "dumpsys bluetooth_manager")
             else arrayOf("sh", "-c", "dumpsys bluetooth_manager")
             val proc = Runtime.getRuntime().exec(cmd)
             val reader = BufferedReader(InputStreamReader(proc.inputStream))
-            val codecRegex = Regex("""codecName\s*[:=]\s*([A-Za-z0-9_+-]+)""", RegexOption.IGNORE_CASE)
             var found: String? = null
             var line: String? = reader.readLine()
             while (line != null) {
@@ -893,7 +921,6 @@ class AudioEngineController(private val context: Context) {
     }
 
     fun releaseAll() {
-        dolbyControl.restore()
         if (receiverRegistered) {
             try {
                 context.unregisterReceiver(audioSessionReceiver)
