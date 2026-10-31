@@ -6,6 +6,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.audioeq.shizuku.ShizukuManager
 import com.audioeq.ui.AudioEqScreen
@@ -18,8 +20,13 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val launchedSessionId = intent?.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, -1) ?: -1
         setContent {
-            AudioEqTheme {
-                val eqViewModel: EqViewModel = viewModel()
+            val eqViewModel: EqViewModel = viewModel()
+            val state by eqViewModel.uiState.collectAsStateWithLifecycle()
+
+            AudioEqTheme(
+                themeMode = state.themeMode,
+                seedHex = state.seedHex
+            ) {
                 LaunchedEffect(launchedSessionId) {
                     if (launchedSessionId > 0) {
                         eqViewModel.attachExternalAudioSession(launchedSessionId)

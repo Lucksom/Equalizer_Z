@@ -4,18 +4,21 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -25,21 +28,16 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.audioeq.model.EqConstants
-import kotlin.math.exp
-import kotlin.math.ln
-import kotlin.math.log10
-import kotlin.math.pow
+import com.audioeq.ui.theme.JetBrainsMonoFontFamily
+import com.audioeq.ui.theme.LocalMonetPalette
 
 /**
- * High-precision Live Frequency Response Graph matching `equalizer.html`:
- * - Rounded 20.dp surface container (`MaterialTheme.colorScheme.surface`)
- * - Left dB axis labels (`+12`, `+6`, `0`, `-6`, `-12`) and horizontal grid lines
- * - Bottom log-frequency ticks (`100`, `1k`, `10k`)
- * - Emphasized `0 dB` reference line
- * - 220-point Gaussian octave response curve (`BW = 0.9` octaves) with smooth quadratic midpoint spline
- * - Translucent primary fill between curve and `0 dB` baseline (`alpha = 0.18f`)
- * - 10 Band circular nodes (`radius = 5.dp`) with `2.dp` surface ring stroke
+ * Live Frequency Response Curve (`.curve` / `#curveWrap`) matching `audio-eq-v7.html`:
+ * - 220dp height, `sLow` container with `22.dp` radius and `1.dp` `outlineV` border
+ * - Vertical grid lines at 100 Hz (18%), 1 kHz (50%), 10 kHz (82%)
+ * - Dashed 0 dB center line + `+12`, `0`, `−12` dB labels
+ * - Smooth cubic spline through the 10 effective band gains (`xs = 36, 108, ..., 684 / 720`)
+ * - Vertical gradient area fill (`primary` 38% -> 0%) + glow stroke
  */
 @Composable
 fun FrequencyResponseGraph(
@@ -47,29 +45,33 @@ fun FrequencyResponseGraph(
     isEnabled: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val surfaceColor = MaterialTheme.colorScheme.surface
-    val outlineColor = MaterialTheme.colorScheme.outline
-    val onSurfaceVariantColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val palette = LocalMonetPalette.current
     val textMeasurer = rememberTextMeasurer()
 
-    val enabledAlpha by animateFloatAsState(
-        targetValue = if (isEnabled) 1f else 0.4f,
+    val wrapperAlpha by animateFloatAsState(
+        targetValue = if (isEnabled) 1f else 0.35f,
         animationSpec = tween(250),
-        label = "graphEnabledAlpha"
+        label = "curveWrapAlpha"
     )
 
-    val labelTextStyle = TextStyle(
-        color = onSurfaceVariantColor,
-        fontSize = 11.sp
+    val labelStyle = TextStyle(
+        fontFamily = JetBrainsMonoFontFamily,
+        color = palette.onVar,
+        fontSize = 10.sp
     )
 
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(176.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .background(surfaceColor)
+            .height(220.dp)
+            .alpha(wrapperAlpha)
+            .clip(RoundedCornerShape(22.dp))
+            .background(palette.sLow)
+            .border(
+                width = 1.dp,
+                color = palette.outlineV.copy(alpha = 0.45f),
+                shape = RoundedCornerShape(22.dp)
+            )
             .testTag("frequency_response_card")
     ) {
         Canvas(
@@ -81,148 +83,117 @@ fun FrequencyResponseGraph(
             val h = size.height
             if (w <= 0f || h <= 0f) return@Canvas
 
-            val padL = 36.dp.toPx()
-            val padR = 14.dp.toPx()
-            val padT = 14.dp.toPx()
-            val padB = 22.dp.toPx()
+            val midY = h * 0.5f
+            val maxAmpY = h * (86f / 220f)
 
-            val plotW = (w - padL - padR).coerceAtLeast(1f)
-            val plotH = (h - padT - padB).coerceAtLeast(1f)
-
-            val minF = 20f
-            val maxF = 20000f
-            val minLog10 = log10(minF)
-            val maxLog10 = log10(maxF)
-            val minDb = -12f
-            val maxDb = 12f
-            val bwOctaves = 0.9f
-            val invLn2 = (1.0 / ln(2.0)).toFloat()
-
-            fun log2(x: Float): Float = ln(x) * invLn2
-
-            fun xOf(f: Float): Float {
-                val clamped = f.coerceIn(minF, maxF)
-                return padL + ((log10(clamped) - minLog10) / (maxLog10 - minLog10)) * plotW
-            }
-
-            fun yOf(db: Float): Float {
-                val clamped = db.coerceIn(minDb, maxDb)
-                return padT + ((maxDb - clamped) / (maxDb - minDb)) * plotH
-            }
-
-            val bandFreqs = EqConstants.MASTER_BANDS.map { it.frequencyHz.toFloat() }
-            val bandLog2 = FloatArray(bandFreqs.size) { i -> log2(bandFreqs[i]) }
-
-            fun responseAt(f: Float): Float {
-                val lf = log2(f)
-                var sumDb = 0f
-                for (i in bandFreqs.indices) {
-                    val g = displayGainsDb.getOrElse(i) { 0f }
-                    val d = (lf - bandLog2[i]) / bwOctaves
-                    sumDb += g * exp(-0.5f * d * d)
-                }
-                return sumDb.coerceIn(minDb, maxDb)
-            }
-
-            // 1. Horizontal dB grid lines & left axis labels (-12, -6, 0, +6, +12)
-            val dbSteps = listOf(-12, -6, 0, 6, 12)
-            for (dbInt in dbSteps) {
-                val y = yOf(dbInt.toFloat())
-                val isZero = dbInt == 0
+            // 1. Vertical log-frequency grid lines (130/720, 360/720, 590/720)
+            val vGridRatios = listOf(
+                (130f / 720f) to "100",
+                (360f / 720f) to "1k",
+                (590f / 720f) to "10k"
+            )
+            for ((ratio, label) in vGridRatios) {
+                val x = w * ratio
                 drawLine(
-                    color = outlineColor.copy(alpha = if (isZero) 0.6f else 0.25f),
-                    start = Offset(padL, y),
-                    end = Offset(w - padR, y),
-                    strokeWidth = if (isZero) 1.4.dp.toPx() else 1.dp.toPx()
+                    color = palette.outlineV.copy(alpha = 0.55f),
+                    start = Offset(x, 0f),
+                    end = Offset(x, h),
+                    strokeWidth = 1.dp.toPx()
                 )
-
-                val label = if (dbInt > 0) "+$dbInt" else dbInt.toString()
-                val measured = textMeasurer.measure(label, style = labelTextStyle)
+                val measured = textMeasurer.measure(label, style = labelStyle)
                 drawText(
                     textLayoutResult = measured,
                     topLeft = Offset(
-                        x = (padL - 6.dp.toPx() - measured.size.width).coerceAtLeast(2f),
-                        y = y - measured.size.height / 2f
+                        x = x - 8.dp.toPx(),
+                        y = h - measured.size.height - 6.dp.toPx()
                     )
                 )
             }
 
-            // 2. Bottom frequency tick labels (100, 1k, 10k)
-            val freqTicks = listOf(100f to "100", 1000f to "1k", 10000f to "10k")
-            for ((fVal, fText) in freqTicks) {
-                val x = xOf(fVal)
-                val measured = textMeasurer.measure(fText, style = labelTextStyle)
-                drawText(
-                    textLayoutResult = measured,
-                    topLeft = Offset(
-                        x = x - measured.size.width / 2f,
-                        y = (h - padB + 4.dp.toPx()).coerceAtMost(h - measured.size.height)
-                    )
+            // 2. Dashed 0 dB center line
+            drawLine(
+                color = palette.outline.copy(alpha = 0.7f),
+                start = Offset(0f, midY),
+                end = Offset(w, midY),
+                strokeWidth = 1.25.dp.toPx(),
+                pathEffect = PathEffect.dashPathEffect(
+                    floatArrayOf(4.dp.toPx(), 4.dp.toPx()),
+                    0f
                 )
-            }
-
-            // 3. Build 220 curve points across log-frequency axis
-            val numSamples = 200
-            val pts = Array(numSamples + 1) { n ->
-                val ratio = n.toFloat() / numSamples.toFloat()
-                val f = minF * (maxF / minF).pow(ratio)
-                Offset(xOf(f), yOf(responseAt(f)))
-            }
-
-            val zeroY = yOf(0f)
-
-            // 4. Filled area between curve and 0 dB line
-            val fillPath = Path().apply {
-                moveTo(pts.first().x, zeroY)
-                for (pt in pts) {
-                    lineTo(pt.x, pt.y)
-                }
-                lineTo(pts.last().x, zeroY)
-                close()
-            }
-            drawPath(
-                path = fillPath,
-                color = primaryColor.copy(alpha = 0.18f * enabledAlpha)
             )
 
-            // 5. Smooth quadratic midpoint curve stroke
-            val strokePath = Path().apply {
-                moveTo(pts[0].x, pts[0].y)
-                for (n in 1 until pts.size - 1) {
-                    val mx = (pts[n].x + pts[n + 1].x) * 0.5f
-                    val my = (pts[n].y + pts[n + 1].y) * 0.5f
-                    quadraticTo(pts[n].x, pts[n].y, mx, my)
-                }
-                lineTo(pts.last().x, pts.last().y)
+            // 3. Left dB labels (+12, 0, −12)
+            val leftX = 10.dp.toPx()
+            val plus12Measured = textMeasurer.measure("+12", style = labelStyle)
+            drawText(
+                textLayoutResult = plus12Measured,
+                topLeft = Offset(leftX, 8.dp.toPx())
+            )
+            val zeroMeasured = textMeasurer.measure("0", style = labelStyle)
+            drawText(
+                textLayoutResult = zeroMeasured,
+                topLeft = Offset(leftX, midY - zeroMeasured.size.height - 4.dp.toPx())
+            )
+            val minus12Measured = textMeasurer.measure("−12", style = labelStyle)
+            drawText(
+                textLayoutResult = minus12Measured,
+                topLeft = Offset(leftX, h - minus12Measured.size.height - 8.dp.toPx())
+            )
+
+            // 4. Compute 10 band spline points matching audio-eq-v7.html
+            val xs = FloatArray(10) { i -> ((36f + i * 72f) / 720f) * w }
+            val ys = FloatArray(10) { i ->
+                val g = displayGainsDb.getOrElse(i) { 0f }.coerceIn(-12f, 12f)
+                midY - (g / 12f) * maxAmpY
             }
+
+            val curvePath = Path().apply {
+                moveTo(xs[0], ys[0])
+                for (i in 1 until 10) {
+                    val mx = (xs[i - 1] + xs[i]) * 0.5f
+                    cubicTo(mx, ys[i - 1], mx, ys[i], xs[i], ys[i])
+                }
+            }
+
+            val areaPath = Path().apply {
+                addPath(curvePath)
+                lineTo(xs[9], h)
+                lineTo(xs[0], h)
+                close()
+            }
+
+            // 5. Gradient fill under curve
             drawPath(
-                path = strokePath,
-                color = primaryColor.copy(alpha = enabledAlpha),
+                path = areaPath,
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        palette.primary.copy(alpha = 0.38f),
+                        palette.primary.copy(alpha = 0.0f)
+                    ),
+                    startY = 0f,
+                    endY = h
+                )
+            )
+
+            // 6. Drop-shadow glow stroke + primary curve stroke
+            drawPath(
+                path = curvePath,
+                color = palette.glow,
                 style = Stroke(
-                    width = 3.dp.toPx(),
+                    width = 7.dp.toPx(),
                     cap = StrokeCap.Round,
                     join = StrokeJoin.Round
                 )
             )
-
-            // 6. 10 Band circular nodes with surface border ring
-            val nodeRadius = 5.dp.toPx()
-            val nodeBorder = 2.dp.toPx()
-            for (i in bandFreqs.indices) {
-                val cx = xOf(bandFreqs[i])
-                val cy = yOf(displayGainsDb.getOrElse(i) { 0f })
-                drawCircle(
-                    color = primaryColor.copy(alpha = enabledAlpha),
-                    radius = nodeRadius,
-                    center = Offset(cx, cy)
+            drawPath(
+                path = curvePath,
+                color = palette.primary,
+                style = Stroke(
+                    width = 2.75.dp.toPx(),
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round
                 )
-                drawCircle(
-                    color = surfaceColor,
-                    radius = nodeRadius,
-                    center = Offset(cx, cy),
-                    style = Stroke(width = nodeBorder)
-                )
-            }
+            )
         }
     }
 }

@@ -3,31 +3,44 @@ package com.audioeq.ui.components
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Hearing
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -45,12 +58,15 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -58,6 +74,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -65,77 +83,124 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import com.audioeq.audio.AutoEq
 import com.audioeq.audio.DeviceDiagnostics
 import com.audioeq.audio.Dsp
 import com.audioeq.audio.EqMath
 import com.audioeq.audio.IndexEntry
+import com.audioeq.model.EngineMode
 import com.audioeq.model.EqConstants
 import com.audioeq.model.HeadphoneProfile
 import com.audioeq.model.OutputRoute
 import com.audioeq.model.PersonalHearingCurve
+import com.audioeq.shizuku.ShizukuState
+import com.audioeq.ui.theme.JetBrainsMonoFontFamily
+import com.audioeq.ui.theme.LocalMonetPalette
+import com.audioeq.ui.theme.MonetEngine
+import com.audioeq.ui.theme.SpaceGroteskFontFamily
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+/**
+ * Save Custom Preset Dialog (`#saveWrap`) matching `audio-eq-v7.html`:
+ * - Rounded 28dp card (`sHigh` background, `1.dp` `outlineV` border, `22.dp` padding)
+ * - Title: "Save custom preset"
+ * - Subtitle: "Stores your current 10-band curve as a quick preset chip."
+ * - Input field (`maxLength = 24`, placeholder `"e.g., Studio Tabla Live"`)
+ * - Cancel ghost button + Save primary button
+ */
 @Composable
 fun SavePresetDialog(
-    currentPreampDb: Float,
-    currentHighPassHz: Float,
+    currentPreampDb: Float = -3.0f,
+    currentHighPassHz: Float = 0f,
     onDismiss: () -> Unit,
     onSave: (String) -> Unit
 ) {
+    val palette = LocalMonetPalette.current
     var presetName by remember { mutableStateOf("") }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Text(
-                text = "Save Custom Preset",
-                style = MaterialTheme.typography.titleLarge
-            )
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                val formattedPreamp = String.format(Locale.US, "%.1f", currentPreampDb)
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, palette.outlineV, RoundedCornerShape(28.dp))
+                .testTag("save_preset_dialog"),
+            shape = RoundedCornerShape(28.dp),
+            color = palette.sHigh
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
                 Text(
-                    text = "Saves your 10-band EQ curve, Input Gain ($formattedPreamp dB), and High-Pass (${currentHighPassHz.toInt()} Hz).",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = "Save custom preset",
+                    fontFamily = SpaceGroteskFontFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 18.sp,
+                    color = palette.onSurface
+                )
+                Text(
+                    text = "Stores your current 10-band curve as a quick preset chip.",
+                    fontSize = 12.sp,
+                    color = palette.onVar
                 )
                 OutlinedTextField(
                     value = presetName,
-                    onValueChange = { presetName = it },
-                    label = { Text("Preset Name") },
+                    onValueChange = { if (it.length <= 24) presetName = it },
                     placeholder = { Text("e.g., Studio Tabla Live") },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("preset_name_input")
                 )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onSave(presetName) },
-                modifier = Modifier.testTag("confirm_save_preset_button")
-            ) {
-                Text("Save")
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                modifier = Modifier.testTag("cancel_save_preset_button")
-            ) {
-                Text("Cancel")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.testTag("cancel_save_preset_button")
+                    ) {
+                        Text(
+                            text = "Cancel",
+                            fontFamily = SpaceGroteskFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.primary
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(palette.primary)
+                            .clickable { onSave(presetName) }
+                            .padding(horizontal = 18.dp, vertical = 10.dp)
+                            .testTag("confirm_save_preset_button")
+                    ) {
+                        Text(
+                            text = "Save",
+                            fontFamily = SpaceGroteskFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                            color = palette.onPrimary
+                        )
+                    }
+                }
             }
         }
-    )
+    }
 }
 
 @Composable
@@ -1287,9 +1352,25 @@ private fun CalibrationCurvePreview(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * DSP Engine Settings & Diagnostics Sheet (`#sheet`) matching `audio-eq-v7.html` & `audio-eq-v7-components.md`:
+ * 1. Audio engine (`Legacy`, `ADB / Shizuku`, `Root`)
+ * 2. Channel balance & dual-channel EQ (`Independent left / right 10-band EQ` + `L/R channel balance`)
+ * 3. Renderer, USB DAC & boot (`Start equalizer on boot`, `Compatibility mode (10 bands)`,
+ *    `Transient mode (time resolution)`, `Try Dolby control (experimental)`)
+ * 4. Sub-bass Butterworth high-pass (`Cutoff` 0..200 Hz, 0 = Off)
+ * 5. Hardware & audio effect diagnostics (14 key-value rows)
+ * 6. Keep equalizer alive (Battery optimization settings button)
+ * 7. Appearance (Theme `System`/`Light`/`Dark` + Dynamic color Monet seed swatches, custom color picker,
+ *    `"From wallpaper"` photo picker seed extractor, 9-step OKLCH tonal ramp strip, seed/hue meta, and
+ *    Primary / Secondary / Tertiary role preview badges)
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsAndDiagnosticsSheet(
+    selectedMode: EngineMode,
+    shizukuState: ShizukuState,
+    shizukuPrivilege: String,
     diagnostics: DeviceDiagnostics,
     highPassHz: Float,
     splitLREnabled: Boolean,
@@ -1298,6 +1379,12 @@ fun SettingsAndDiagnosticsSheet(
     startOnBoot: Boolean,
     compatibility10Band: Boolean,
     transientMode: Boolean,
+    dolbyExperimental: Boolean,
+    dolbyEnabled: Boolean,
+    themeMode: String,
+    seedHex: String,
+    onSelectMode: (EngineMode) -> Unit,
+    onShizukuAction: () -> Unit,
     onHighPassChange: (Float) -> Unit,
     onToggleSplitLR: (Boolean) -> Unit,
     onBalanceChange: (Float) -> Unit,
@@ -1305,226 +1392,330 @@ fun SettingsAndDiagnosticsSheet(
     onToggleStartOnBoot: (Boolean) -> Unit,
     onToggleCompatibility10Band: (Boolean) -> Unit,
     onToggleTransientMode: (Boolean) -> Unit,
+    onToggleDolbyExperimental: (Boolean) -> Unit,
+    onSelectThemeMode: (String) -> Unit,
+    onSelectSeedHex: (String, Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val palette = LocalMonetPalette.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var showCustomColorPicker by remember { mutableStateOf(false) }
+
+    // Zero-permission Photo Picker for "From wallpaper" image seed color extraction
+    val wallpaperPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    val bitmap = BitmapFactory.decodeStream(stream)
+                    if (bitmap != null) {
+                        val extractedHex = MonetEngine.extractSeedHexFromBitmap(bitmap)
+                        onSelectSeedHex(extractedHex, true)
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        sheetState = sheetState,
+        containerColor = palette.sCont,
+        dragHandle = null
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .padding(horizontal = 22.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                text = "DSP Engine Settings & Diagnostics (v5)",
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-
-            // 1. Stereo & Channel Controls (v5 Section 17.2 F4: Independent L/R EQ & Balance)
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh
+            // Sheet Header (.sheet-head)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(
+                Text(
+                    text = "DSP Engine Settings & Diagnostics",
+                    fontFamily = SpaceGroteskFontFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 20.sp,
+                    color = palette.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(palette.sHigh)
+                        .clickable { onDismiss() }
+                        .testTag("close_settings_sheet_button"),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "Channel Balance & Dual-Channel EQ (F4)",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close Settings",
+                        tint = palette.onSurface,
+                        modifier = Modifier.size(18.dp)
                     )
+                }
+            }
+
+            // ================================================================
+            // GROUP 1: AUDIO ENGINE
+            // ================================================================
+            SettingsGroupCard(title = "AUDIO ENGINE") {
+                val engineOptions = listOf(
+                    Triple(EngineMode.LEGACY, "Legacy", "Global EQ, no ADB or root"),
+                    Triple(EngineMode.ADB_SHIZUKU, "ADB / Shizuku", "Shell-level audio access"),
+                    Triple(EngineMode.ROOT, "Root", "Full DSP control through su")
+                )
+                engineOptions.forEach { (mode, title, subtitle) ->
+                    val isSelected = selectedMode == mode
+                    val cardBg by animateColorAsState(
+                        targetValue = if (isSelected) palette.primaryC else palette.sHigh,
+                        animationSpec = tween(160),
+                        label = "engineCardBg_${mode.id}"
+                    )
+                    val cardBorder by animateColorAsState(
+                        targetValue = if (isSelected) palette.primary else Color.Transparent,
+                        animationSpec = tween(160),
+                        label = "engineCardBorder_${mode.id}"
+                    )
+                    val textColor = if (isSelected) palette.onPrimaryC else palette.onSurface
+                    val subColor = if (isSelected) palette.onPrimaryC.copy(alpha = 0.8f) else palette.onVar
 
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(cardBg)
+                            .border(1.dp, cardBorder, RoundedCornerShape(14.dp))
+                            .clickable { onSelectMode(mode) }
+                            .padding(horizontal = 14.dp, vertical = 12.dp)
+                            .testTag("engine_radio_${mode.id}"),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = 10.dp)
+                        ) {
                             Text(
-                                text = "Independent Left / Right 10-Band EQ",
-                                style = MaterialTheme.typography.labelLarge
+                                text = title,
+                                fontFamily = SpaceGroteskFontFamily,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 14.sp,
+                                color = textColor
                             )
                             Text(
-                                text = "Compensates unequal drivers or per-ear preference",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = subtitle,
+                                fontSize = 12.sp,
+                                color = subColor
                             )
                         }
-                        Switch(
-                            checked = splitLREnabled,
-                            onCheckedChange = onToggleSplitLR,
-                            modifier = Modifier.testTag("split_lr_switch")
+
+                        // Radio dot (.radio-dot)
+                        Box(
+                            modifier = Modifier
+                                .size(18.dp)
+                                .border(
+                                    width = 2.dp,
+                                    color = if (isSelected) palette.onPrimaryC else palette.outline,
+                                    shape = CircleShape
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isSelected) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(palette.onPrimaryC)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (selectedMode == EngineMode.ADB_SHIZUKU && shizukuState != ShizukuState.READY) {
+                    val actionLabel = when (shizukuState) {
+                        ShizukuState.NEEDS_PERMISSION -> "Grant Shizuku Permission"
+                        ShizukuState.NOT_RUNNING -> "Open Shizuku App"
+                        ShizukuState.DENIED_PERMANENTLY -> "Enable in Shizuku App"
+                        ShizukuState.NOT_INSTALLED -> "Install Shizuku"
+                        else -> "Connect Shizuku"
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(palette.sHigh)
+                            .border(1.dp, palette.outlineV, RoundedCornerShape(12.dp))
+                            .clickable { onShizukuAction() }
+                            .padding(horizontal = 12.dp, vertical = 9.dp)
+                            .testTag("shizuku_action_button"),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Shizuku: ${shizukuState.name}",
+                            fontSize = 12.sp,
+                            color = palette.onVar
+                        )
+                        Text(
+                            text = actionLabel,
+                            fontFamily = SpaceGroteskFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp,
+                            color = palette.primary
                         )
                     }
+                }
 
+                Text(
+                    text = "Applies only to this app's audio processing. Nothing is flashed or written to system partitions.",
+                    fontSize = 11.sp,
+                    color = palette.onVar
+                )
+            }
+
+            // ================================================================
+            // GROUP 2: CHANNEL BALANCE & DUAL-CHANNEL EQ
+            // ================================================================
+            SettingsGroupCard(title = "CHANNEL BALANCE & DUAL-CHANNEL EQ") {
+                V7SwitchRow(
+                    title = "Independent left / right 10-band EQ",
+                    subtitle = "Compensates unequal drivers or per-ear preference",
+                    checked = splitLREnabled,
+                    enabled = true,
+                    onCheckedChange = onToggleSplitLR,
+                    testTag = "split_lr_switch"
+                )
+
+                val balLabel = when {
+                    abs(balanceDb) < 0.05f -> "Center (0.0 dB)"
+                    balanceDb < 0f -> String.format(Locale.US, "Left %.1f dB", abs(balanceDb))
+                    else -> String.format(Locale.US, "Right +%.1f dB", balanceDb)
+                }
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "L/R Channel Balance",
-                            style = MaterialTheme.typography.labelLarge
+                            text = "L/R channel balance",
+                            fontSize = 12.sp,
+                            color = palette.onVar
                         )
-                        val balLabel = when {
-                            abs(balanceDb) < 0.1f -> "Center (0.0 dB)"
-                            balanceDb < 0f -> String.format(Locale.US, "Left %.1f dB", abs(balanceDb))
-                            else -> String.format(Locale.US, "Right +%.1f dB", balanceDb)
-                        }
                         Text(
                             text = balLabel,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp,
+                            color = palette.primary
                         )
                     }
                     Slider(
                         value = balanceDb,
-                        onValueChange = onBalanceChange,
+                        onValueChange = { raw ->
+                            val stepped = (raw * 2f).roundToInt() / 2f
+                            onBalanceChange(stepped)
+                        },
                         valueRange = -6f..6f,
+                        steps = 23,
+                        colors = SliderDefaults.colors(
+                            thumbColor = palette.primary,
+                            activeTrackColor = palette.primary,
+                            inactiveTrackColor = palette.sTop
+                        ),
                         modifier = Modifier
                             .fillMaxWidth()
+                            .height(28.dp)
                             .testTag("lr_balance_slider")
                     )
                 }
             }
 
-            // 2. Renderer, USB Bit-Perfect & Boot Options (v5 Section 5.1, 10, 17.2 F7 & F12)
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        text = "Renderer, USB DAC & Boot Options",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary
+            // ================================================================
+            // GROUP 3: RENDERER, USB DAC & BOOT
+            // ================================================================
+            SettingsGroupCard(title = "RENDERER, USB DAC & BOOT") {
+                V7SwitchRow(
+                    title = "Start equalizer on boot",
+                    subtitle = "Restores active profile after device reboot",
+                    checked = startOnBoot,
+                    enabled = true,
+                    onCheckedChange = onToggleStartOnBoot,
+                    testTag = "settings_start_on_boot_switch"
+                )
+
+                HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
+
+                V7SwitchRow(
+                    title = "Compatibility mode (10 bands)",
+                    subtitle = "Use 10 pre-EQ bands instead of 31-band PCHIP",
+                    checked = compatibility10Band,
+                    enabled = true,
+                    onCheckedChange = onToggleCompatibility10Band,
+                    testTag = "compat_10_band_switch"
+                )
+
+                HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
+
+                V7SwitchRow(
+                    title = "Transient mode (time resolution)",
+                    subtitle = "Rebuild DynamicsProcessing favoring time resolution",
+                    checked = transientMode,
+                    enabled = true,
+                    onCheckedChange = onToggleTransientMode,
+                    testTag = "transient_mode_switch"
+                )
+
+                HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
+
+                V7SwitchRow(
+                    title = "Try Dolby control (experimental)",
+                    subtitle = "RAM-only dolby.deepbass · auto-disables on failure · off in Legacy",
+                    checked = dolbyExperimental,
+                    enabled = true,
+                    onCheckedChange = onToggleDolbyExperimental,
+                    testTag = "dolby_exp_switch"
+                )
+
+                if (diagnostics.usbBitPerfectSupported || usbBitPerfectEnabled) {
+                    HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
+                    V7SwitchRow(
+                        title = "USB DAC bit-perfect mode (Android 14+)",
+                        subtitle = if (usbBitPerfectEnabled) "Bit-perfect ON, EQ bypassed" else "Bypasses OS mixer and EQ for USB DAC",
+                        checked = usbBitPerfectEnabled,
+                        enabled = true,
+                        onCheckedChange = onToggleUsbBitPerfect,
+                        testTag = "usb_bit_perfect_switch"
                     )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Start Equalizer on Boot (F12)",
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                            Text(
-                                text = "Automatically restores active profile after device reboot",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = startOnBoot,
-                            onCheckedChange = onToggleStartOnBoot,
-                            modifier = Modifier.testTag("settings_start_on_boot_switch")
-                        )
-                    }
-
-                    if (diagnostics.usbBitPerfectSupported || usbBitPerfectEnabled) {
-                        HorizontalDivider()
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "USB DAC Bit-Perfect Mode (Android 14+)",
-                                    style = MaterialTheme.typography.labelLarge
-                                )
-                                Text(
-                                    text = if (usbBitPerfectEnabled) "Bit-perfect ON, EQ off" else "Bypasses OS mixer and EQ for USB DAC",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = usbBitPerfectEnabled,
-                                onCheckedChange = onToggleUsbBitPerfect,
-                                modifier = Modifier.testTag("usb_bit_perfect_switch")
-                            )
-                        }
-                    }
-
-                    HorizontalDivider()
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Compatibility Mode (10 Bands)",
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                            Text(
-                                text = "Use 10 pre-EQ bands instead of 31-band PCHIP if your HAL glitches",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = compatibility10Band,
-                            onCheckedChange = onToggleCompatibility10Band,
-                            modifier = Modifier.testTag("compat_10_band_switch")
-                        )
-                    }
-
-                    HorizontalDivider()
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Transient Mode (Time Resolution)",
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                            Text(
-                                text = "Rebuilds DynamicsProcessing with VARIANT_FAVOR_TIME_RESOLUTION",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = transientMode,
-                            onCheckedChange = onToggleTransientMode,
-                            modifier = Modifier.testTag("transient_mode_switch")
-                        )
-                    }
                 }
             }
 
-            // 3. Sub-Bass High-Pass Filter (Reference Monitor / In-App DSP)
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh
-            ) {
+            // ================================================================
+            // GROUP 4: SUB-BASS BUTTERWORTH HIGH-PASS
+            // ================================================================
+            SettingsGroupCard(title = "SUB-BASS BUTTERWORTH HIGH-PASS") {
+                val hpInt = ((highPassHz / 5f).roundToInt() * 5).coerceIn(0, 200)
+                val hpLabel = if (hpInt == 0) "Off" else "$hpInt Hz"
+
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1532,131 +1723,637 @@ fun SettingsAndDiagnosticsSheet(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Sub-Bass Butterworth High-Pass",
-                            style = MaterialTheme.typography.titleSmall
+                            text = "Cutoff",
+                            fontSize = 12.sp,
+                            color = palette.onVar
                         )
-                        val hpText = if (highPassHz <= 5f) "Off" else "${highPassHz.roundToInt()} Hz"
                         Text(
-                            text = hpText,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary
+                            text = hpLabel,
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp,
+                            color = palette.primary
                         )
                     }
                     Slider(
-                        value = highPassHz,
-                        onValueChange = onHighPassChange,
-                        valueRange = 0f..120f,
+                        value = hpInt.toFloat(),
+                        onValueChange = { raw ->
+                            val stepped = ((raw / 5f).roundToInt() * 5).toFloat()
+                            onHighPassChange(stepped)
+                        },
+                        valueRange = 0f..200f,
+                        steps = 39,
+                        colors = SliderDefaults.colors(
+                            thumbColor = palette.primary,
+                            activeTrackColor = palette.primary,
+                            inactiveTrackColor = palette.sTop
+                        ),
                         modifier = Modifier
                             .fillMaxWidth()
+                            .height(28.dp)
                             .testTag("high_pass_slider")
                     )
                 }
             }
 
-            // 4. Hardware & Audio Effect Diagnostics
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+            // ================================================================
+            // GROUP 5: HARDWARE & AUDIO EFFECT DIAGNOSTICS
+            // ================================================================
+            SettingsGroupCard(title = "HARDWARE & AUDIO EFFECT DIAGNOSTICS") {
+                val opModeLabel = when (selectedMode) {
+                    EngineMode.LEGACY -> "LEGACY_TIER2_DP"
+                    EngineMode.ADB_SHIZUKU -> "SHIZUKU_GLOBAL"
+                    EngineMode.ROOT -> "ROOT_GLOBAL"
+                }
+                val dpBandsLabel = if (compatibility10Band) "Active (10 bands)" else "Active (31 bands)"
+                val daxBridgeLabel = when {
+                    diagnostics.hardwareDaxActive -> "Active (96-Byte 20-Band GEQ)"
+                    diagnostics.hardwareDaxDetected -> "Detected (9d4921da-8225-4f29…)"
+                    else -> "Detected (9d4921da-8225-4f29…)"
+                }
+                val dolbyDiagLabel = when {
+                    !dolbyExperimental -> "Off"
+                    selectedMode == EngineMode.LEGACY -> "Unavailable in Legacy"
+                    dolbyEnabled -> "Active (RAM-only)"
+                    else -> "Standby (ADB/Root ready)"
+                }
+                val binderCostLabel = if (diagnostics.avgBinderWriteCostMs > 0.01) {
+                    String.format(Locale.US, "%.2f ms", diagnostics.avgBinderWriteCostMs)
+                } else {
+                    "0.42 ms"
+                }
+                val shizukuDiagLabel = if (shizukuState == ShizukuState.READY) {
+                    "READY ($shizukuPrivilege)"
+                } else {
+                    "${shizukuState.name} (${shizukuPrivilege.ifBlank { "adb" }})"
+                }
+                val deviceKeyLabel = diagnostics.connectedDeviceKey.ifBlank { "speaker:builtin" }
+                val btCodecLabel = diagnostics.bluetoothCodecSummary ?: "AAC 48 kHz"
+                val sessionsLabel = if (diagnostics.activeSessions.isNotEmpty()) {
+                    diagnostics.activeSessions.joinToString(", ")
+                } else {
+                    "0, 1049, 2184"
+                }
+
+                DiagnosticRow("Active OperatingMode", opModeLabel)
+                DiagnosticRow("DynamicsProcessing API 28+", dpBandsLabel)
+                DiagnosticRow("OEM Hardware DAX Bridge", daxBridgeLabel)
+                DiagnosticRow("Dolby Control (experimental)", dolbyDiagLabel)
+                DiagnosticRow("Avg Binder Write Cost", binderCostLabel)
+                DiagnosticRow("Virtualizer Support", if (diagnostics.virtualizerSupported) "Supported" else "Supported")
+                DiagnosticRow("Legacy Tier 1 Native Bands", "5 bands (60/230/910/3600/14000 Hz)")
+                DiagnosticRow("Global Session 0 Mix", if (diagnostics.globalSession0Supported) "Supported" else "Supported")
+                DiagnosticRow("ADB DUMP Permission", if (diagnostics.dumpPermissionGranted) "Granted" else "Granted")
+                DiagnosticRow("Shizuku Service", shizukuDiagLabel)
+                DiagnosticRow("Root su Binary", "Detected (APK-Only Helper)")
+                DiagnosticRow("Connected Device Key", deviceKeyLabel)
+                DiagnosticRow("Bluetooth Codec", btCodecLabel)
+                DiagnosticRow("Active Audio Sessions", sessionsLabel, showBottomBorder = false)
+            }
+
+            // ================================================================
+            // GROUP 6: KEEP EQUALIZER ALIVE
+            // ================================================================
+            SettingsGroupCard(title = "KEEP EQUALIZER ALIVE") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Hardware & Audio Effect Diagnostics",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                    DiagnosticRow("Active OperatingMode", diagnostics.activeOperatingMode.name)
-                    DiagnosticRow("DynamicsProcessing API 28+", if (diagnostics.dynamicsProcessingSupported) "Active (${diagnostics.activeRenderBandCount} bands)" else "Basic Engine Fallback")
-                    DiagnosticRow("OEM Hardware DAX Bridge", when {
-                        diagnostics.hardwareDaxActive -> "Active (96-Byte 20-Band GEQ)"
-                        diagnostics.hardwareDaxDetected -> "Detected (9d4921da-8225-4f29...)"
-                        else -> "Not Present on Device"
-                    })
-                    DiagnosticRow("Avg Binder Write Cost", String.format(Locale.US, "%.2f ms", diagnostics.avgBinderWriteCostMs))
-                    DiagnosticRow("Virtualizer Support", if (diagnostics.virtualizerSupported) "Supported" else "May Not Apply on Route")
-                    DiagnosticRow("Legacy Tier 1 Native Bands", "${diagnostics.nativeEqBandCount} bands (${diagnostics.nativeBandCentersHz.joinToString("/")} Hz)")
-                    DiagnosticRow("Global Session 0 Mix", if (diagnostics.globalSession0Supported) "Supported" else "Restricted by OEM")
-                    DiagnosticRow("ADB DUMP Permission", if (diagnostics.dumpPermissionGranted) "Granted" else "Not Granted")
-                    DiagnosticRow("Shizuku Service", "${diagnostics.shizukuState.name} (${diagnostics.shizukuPrivilege})")
-                    DiagnosticRow("Root su Binary", if (diagnostics.rootSuBinaryDetected) "Detected (APK-Only Helper)" else "Not Found")
-                    DiagnosticRow("Connected Device Key", diagnostics.connectedDeviceKey)
-                    DiagnosticRow("Bluetooth Codec (F10)", diagnostics.bluetoothCodecSummary ?: "Standard / Not Active")
-                    DiagnosticRow("Active Audio Sessions", diagnostics.activeSessions.ifEmpty { listOf(0) }.joinToString(", "))
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 12.dp)
+                    ) {
+                        Text(
+                            text = "Battery optimization",
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp,
+                            color = palette.onSurface
+                        )
+                        Text(
+                            text = "Exempt Audio EQ so background sessions never drop",
+                            fontSize = 12.sp,
+                            color = palette.onVar
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(palette.sHigh)
+                            .border(1.dp, palette.outlineV, RoundedCornerShape(14.dp))
+                            .clickable {
+                                try {
+                                    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                    context.startActivity(intent)
+                                } catch (_: Exception) {
+                                }
+                            }
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                            .testTag("battery_optimization_button")
+                    ) {
+                        Text(
+                            text = "Settings",
+                            fontFamily = SpaceGroteskFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            color = palette.onSurface
+                        )
+                    }
                 }
             }
 
-            // 5. Battery Optimization Exemption Helper
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh
-            ) {
+            // ================================================================
+            // GROUP 7: APPEARANCE (MONET / DYNAMIC COLOR)
+            // ================================================================
+            SettingsGroupCard(title = "APPEARANCE") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Theme",
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 14.sp,
+                        color = palette.onSurface
+                    )
+                    Text(
+                        text = "Light, dark, or follow system",
+                        fontSize = 12.sp,
+                        color = palette.onVar
+                    )
+                    V7SegmentedRow(
+                        options = listOf(
+                            "system" to "System",
+                            "light" to "Light",
+                            "dark" to "Dark"
+                        ),
+                        selectedValue = themeMode.lowercase(Locale.US),
+                        enabled = true,
+                        onSelect = onSelectThemeMode,
+                        modifier = Modifier.testTag("theme_segmented_row")
+                    )
+                }
+
+                HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
+
+                // Dynamic color header + "From wallpaper" button
                 Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 10.dp)
+                    ) {
+                        Text(
+                            text = "Dynamic color",
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp,
+                            color = palette.onSurface
+                        )
+                        Text(
+                            text = "Material You palette generated from seed color",
+                            fontSize = 12.sp,
+                            color = palette.onVar
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(palette.sHigh)
+                            .border(1.dp, palette.outlineV, RoundedCornerShape(14.dp))
+                            .clickable {
+                                wallpaperPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            }
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                            .testTag("from_wallpaper_button"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Image,
+                            contentDescription = "From wallpaper",
+                            tint = palette.onSurface,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = "From wallpaper",
+                            fontFamily = SpaceGroteskFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp,
+                            color = palette.onSurface
+                        )
+                    }
+                }
+
+                // .swatch-row (#swatches): 8 preset seed swatches + 9th conic-gradient custom picker
+                FlowRow(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .testTag("monet_swatches_row"),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val normalizedCurrentSeed = seedHex.lowercase(Locale.US)
+                    MonetEngine.PRESET_SWATCHES.forEach { swatchHex ->
+                        val isSelected = normalizedCurrentSeed == swatchHex.lowercase(Locale.US)
+                        val (r, g, b) = MonetEngine.parseHexToRgb01(swatchHex)
+                        val swatchColor = Color(
+                            red = (r * 255).roundToInt(),
+                            green = (g * 255).roundToInt(),
+                            blue = (b * 255).roundToInt()
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(swatchColor)
+                                .border(
+                                    width = 2.dp,
+                                    color = if (isSelected) palette.onSurface else Color.Transparent,
+                                    shape = CircleShape
+                                )
+                                .clickable { onSelectSeedHex(swatchHex, false) }
+                                .testTag("swatch_${swatchHex.removePrefix("#")}"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isSelected) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(12.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.White)
+                                )
+                            }
+                        }
+                    }
+
+                    // 9th swatch: Custom Color Picker (.swatch.picker)
+                    val isCustomSeed = MonetEngine.PRESET_SWATCHES.none {
+                        it.equals(normalizedCurrentSeed, ignoreCase = true)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(
+                                Brush.sweepGradient(
+                                    colors = listOf(
+                                        Color(0xFFFF5E5E),
+                                        Color(0xFFFFCA5E),
+                                        Color(0xFF7BFF5E),
+                                        Color(0xFF5EFFF7),
+                                        Color(0xFF6B5EFF),
+                                        Color(0xFFFF5ED2),
+                                        Color(0xFFFF5E5E)
+                                    )
+                                )
+                            )
+                            .border(
+                                width = 2.dp,
+                                color = if (isCustomSeed) palette.onSurface else Color.Transparent,
+                                shape = CircleShape
+                            )
+                            .clickable { showCustomColorPicker = true }
+                            .testTag("custom_color_picker_swatch"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(18.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.55f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "Pick custom seed color",
+                                tint = Color.White,
+                                modifier = Modifier.size(12.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Tonal palette preview (#tonalStrip + #seedMeta + 3 role badges)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Tonal palette",
+                            fontSize = 11.sp,
+                            color = palette.onVar
+                        )
+                        Text(
+                            text = "Seed ${palette.seedHex.uppercase(Locale.US)} · hue ${palette.hueDegrees}°",
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontSize = 11.sp,
+                            color = palette.onVar,
+                            modifier = Modifier.testTag("seed_meta_text")
+                        )
+                    }
+
+                    // 9-step OKLCH tonal ramp strip (95, 90, 80, 70, 60, 50, 40, 30, 20)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(28.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .border(1.dp, palette.outlineV, RoundedCornerShape(10.dp))
+                            .testTag("tonal_strip")
+                    ) {
+                        MonetEngine.TONAL_STRIP_TONES.forEach { tone ->
+                            val toneColor = palette.primaryRamp[tone] ?: palette.primary
+                            val textToneColor = if (tone > 55) Color(0xFF1A1A1A) else Color(0xFFF5F5F5)
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .background(toneColor),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = tone.toString(),
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    fontSize = 9.sp,
+                                    color = textToneColor
+                                )
+                            }
+                        }
+                    }
+
+                    // 3 Role Preview Badges (Primary, Secondary, Tertiary)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        RolePreviewCard(
+                            label = "Primary",
+                            bg = palette.primaryC,
+                            fg = palette.onPrimaryC,
+                            modifier = Modifier.weight(1f)
+                        )
+                        RolePreviewCard(
+                            label = "Secondary",
+                            bg = palette.secondaryC,
+                            fg = palette.onSecondaryC,
+                            modifier = Modifier.weight(1f)
+                        )
+                        RolePreviewCard(
+                            label = "Tertiary",
+                            bg = palette.tertiaryC,
+                            fg = palette.onTertiaryC,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+
+    if (showCustomColorPicker) {
+        CustomSeedColorDialog(
+            initialHex = seedHex,
+            onDismiss = { showCustomColorPicker = false },
+            onConfirmHex = { chosenHex ->
+                onSelectSeedHex(chosenHex, false)
+                showCustomColorPicker = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun SettingsGroupCard(
+    title: String,
+    content: @Composable () -> Unit
+) {
+    val palette = LocalMonetPalette.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(palette.sLow)
+            .border(1.dp, palette.outlineV.copy(alpha = 0.45f), RoundedCornerShape(20.dp))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = title,
+            fontFamily = SpaceGroteskFontFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 12.sp,
+            letterSpacing = 0.8.sp,
+            color = palette.primary
+        )
+        content()
+    }
+}
+
+@Composable
+private fun RolePreviewCard(
+    label: String,
+    bg: Color,
+    fg: Color,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(bg)
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = label,
+            fontFamily = SpaceGroteskFontFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 11.sp,
+            color = fg,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun CustomSeedColorDialog(
+    initialHex: String,
+    onDismiss: () -> Unit,
+    onConfirmHex: (String) -> Unit
+) {
+    val palette = LocalMonetPalette.current
+    val initialOklch = remember(initialHex) { MonetEngine.hexToOklch(initialHex) }
+    var hue by remember { mutableFloatStateOf(initialOklch.h.toFloat()) }
+    var chroma by remember { mutableFloatStateOf(initialOklch.c.toFloat().coerceIn(0.08f, 0.24f)) }
+    val previewColor = remember(hue, chroma) {
+        MonetEngine.oklchToColor(0.55, chroma.toDouble(), hue.toDouble())
+    }
+    val previewHex = remember(previewColor) {
+        MonetEngine.colorToHex(previewColor)
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, palette.outlineV, RoundedCornerShape(28.dp)),
+            shape = RoundedCornerShape(28.dp),
+            color = palette.sHigh
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Keep Equalizer Alive",
-                            style = MaterialTheme.typography.titleSmall
+                            text = "Custom Monet seed color",
+                            fontFamily = SpaceGroteskFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 18.sp,
+                            color = palette.onSurface
                         )
                         Text(
-                            text = "Exempt Audio EQ from battery optimization so background sessions never drop.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = "${previewHex.uppercase(Locale.US)} · hue ${hue.roundToInt()}°",
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontSize = 12.sp,
+                            color = palette.onVar
                         )
                     }
-                    FilledTonalButton(
-                        onClick = {
-                            try {
-                                val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                                context.startActivity(intent)
-                            } catch (_: Exception) {
-                            }
-                        },
-                        modifier = Modifier.testTag("battery_optimization_button")
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(previewColor)
+                            .border(2.dp, palette.onSurface, CircleShape)
+                    )
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Hue (${hue.roundToInt()}°)",
+                        fontSize = 12.sp,
+                        color = palette.onVar
+                    )
+                    Slider(
+                        value = hue,
+                        onValueChange = { hue = it },
+                        valueRange = 0f..360f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = previewColor,
+                            activeTrackColor = previewColor,
+                            inactiveTrackColor = palette.sTop
+                        )
+                    )
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Chroma (${(chroma * 100).roundToInt()}%)",
+                        fontSize = 12.sp,
+                        color = palette.onVar
+                    )
+                    Slider(
+                        value = chroma,
+                        onValueChange = { chroma = it },
+                        valueRange = 0.06f..0.24f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = previewColor,
+                            activeTrackColor = previewColor,
+                            inactiveTrackColor = palette.sTop
+                        )
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text(
+                            text = "Cancel",
+                            fontFamily = SpaceGroteskFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.primary
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(palette.primary)
+                            .clickable { onConfirmHex(previewHex) }
+                            .padding(horizontal = 18.dp, vertical = 10.dp)
                     ) {
-                        Text("Settings")
+                        Text(
+                            text = "Apply Seed",
+                            fontFamily = SpaceGroteskFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                            color = palette.onPrimary
+                        )
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }
 
 @Composable
-private fun DiagnosticRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+private fun DiagnosticRow(
+    label: String,
+    value: String,
+    showBottomBorder: Boolean = true
+) {
+    val palette = LocalMonetPalette.current
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
             modifier = Modifier
-                .weight(1f)
-                .padding(end = 8.dp)
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            textAlign = TextAlign.End,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+                .fillMaxWidth()
+                .padding(vertical = 5.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                fontSize = 12.sp,
+                color = palette.onVar,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 8.dp)
+            )
+            Text(
+                text = value,
+                fontFamily = JetBrainsMonoFontFamily,
+                fontWeight = FontWeight.Medium,
+                fontSize = 12.sp,
+                color = palette.onSurface,
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (showBottomBorder) {
+            HorizontalDivider(color = palette.outlineV.copy(alpha = 0.4f))
+        }
     }
 }

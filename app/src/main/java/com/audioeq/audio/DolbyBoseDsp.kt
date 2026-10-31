@@ -46,15 +46,17 @@ enum class BoseProfile(
 }
 
 data class DolbyBoseDspConfig(
-    val ieqPreset: IeqPreset = IeqPreset.BALANCED,
-    val ieqAmount: Int = 14, // 0..16 (dap-default.xml default = 14 -> 87.5%)
+    val ieqPreset: IeqPreset = IeqPreset.OFF,
+    val ieqAmount: Int = 10, // 0..16 (v7 default = 10 -> 63%)
     val ieqCustom10Db: List<Float> = listOf(2.5f, 2.0f, 1.0f, 0.0f, -0.5f, 0.5f, 1.5f, 2.0f, 1.5f, 1.0f),
-    val dialogueEnhancerEnabled: Boolean = true,
-    val dialogueAmount: Int = 5, // 0..16 (dap-default.xml Movie/Dynamic default = 5)
-    val dialogueDucking: Int = 2, // dap-default.xml default = 2 (-2.0 dB * alpha_DE for f <= 180 Hz)
-    val bassEnhancerEnabled: Boolean = true,
-    val virtualBassEnabled: Boolean = true,
-    val boseProfile: BoseProfile = BoseProfile.OFF
+    val dialogueEnhancerEnabled: Boolean = false,
+    val dialogueAmount: Int = 8, // 0..16 (v7 default = 8)
+    val dialogueDucking: Int = 2, // 0, 2, or 4 dB for f <= 180 Hz
+    val bassEnhancerEnabled: Boolean = false,
+    val virtualBassEnabled: Boolean = false,
+    val boseProfile: BoseProfile = BoseProfile.OFF,
+    val dolbyExperimental: Boolean = false,
+    val dolbyEnabled: Boolean = false
 )
 
 object DolbyBoseDspMath {
@@ -183,6 +185,13 @@ object DolbyBoseDspMath {
             if (deFactor > 0f && i <= 2) {
                 val duckDb = config.dialogueDucking.toFloat() * deFactor
                 preGainDb -= duckDb
+            }
+
+            if (config.dolbyExperimental && config.dolbyEnabled) {
+                when (i) {
+                    0 -> preGainDb += 2.0f
+                    1 -> preGainDb += 1.5f
+                }
             }
 
             // Stage 3: Post-EQ (Bose Curve + Dialogue Formants)

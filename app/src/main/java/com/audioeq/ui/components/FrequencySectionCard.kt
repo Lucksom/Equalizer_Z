@@ -1,8 +1,9 @@
 package com.audioeq.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -12,833 +13,365 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.material.icons.filled.Speaker
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.audioeq.model.EqBandSpec
+import androidx.compose.ui.unit.sp
 import com.audioeq.model.EqConstants
-import com.audioeq.model.FrequencySection
 import com.audioeq.model.OutputRoute
-import com.audioeq.model.PresetConfig
+import com.audioeq.ui.theme.JetBrainsMonoFontFamily
+import com.audioeq.ui.theme.LocalMonetPalette
+import com.audioeq.ui.theme.SpaceGroteskFontFamily
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.exp
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
+
+private val FREQ_LABELS = listOf("31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k")
 
 /**
- * Unified 10-Band Equalizer Card updated for Deep Optimization v4:
- * - Header with "Equalizer", Active Route badge (`Speaker`, `Wired Headphones`, `Bluetooth`, `USB DAC`), and Headroom / Ceiling Load meter (`ceilingLoad = max(0, max(effective) - 3) dB`, warning above 4 dB)
- * - Preset Pills (`Flat`, `Balanced Deep`, `Bass Boost`, `Vocal Clarity`, `Percussion Clarity`, `Cinema`, plus custom presets)
- * - Live Frequency Response Graph (`equalizer.html` curve)
- * - True v4 Category Boundary Strip (`Bass 20–350 Hz`, `Mids 350 Hz–2.8 kHz`, `Treble 2.8–11 kHz`, `Air 11–20 kHz`)
- * - 10 Fluid Vertical Sliders (with raw pointer tracking so dragging never gets stuck)
- * - v4 Intensity Macro (`Light 0.6x`, `Standard 1.0x`, `Deep+ 1.3x`), `Volume Contour` toggle, `A/B Loudness Compare` button, and `Sound Calibration` launcher
- * - Footer with `Enabled` checkbox and `Reset` button
+ * Equalizer Card (`main#eq`) matching `audio-eq-v7.html`:
+ * 1. `eq-head`: 56x56dp `#power` button + "Equalizer" title & `#eqSub` + `.route` pill (`tertiaryC`)
+ * 2. `.headroom`: "Headroom" label + `.meter` fill bar + `#ceilText` dB readout (warns above 4.0 dB)
+ * 3. `.curve` (`#curveWrap`): 220dp live cubic-spline response curve with gradient area fill
+ * 4. `.zones`: Proportional `Bass` (1.9), `Mids` (2.6), `Treble` (2.4), `Air` (1.2) top-bordered strip
+ * 5. `.bands` (`#bands`): 10 vertical band sliders (`31`..`16k` Hz) with `.db` readout, bipolar `.rail-fill`,
+ *    `.knob` handle, smooth vertical pointer dragging, and double-tap to reset to 0.0 dB.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun UnifiedEqualizerCard(
-    presets: List<PresetConfig>,
-    selectedPresetId: String,
-    selectedDaxProfile: com.audioeq.audio.DaxProfile = com.audioeq.audio.DaxProfile.MUSIC,
-    targetGainsDb: List<Float>,
-    splitLREnabled: Boolean = false,
-    editingRightChannel: Boolean = false,
-    intensity: Float,
-    volumeContourEnabled: Boolean,
-    nightModeEnabled: Boolean = false,
-    usbBitPerfectActive: Boolean = false,
-    isAbCompare: Boolean,
-    activeRoute: OutputRoute,
-    inputGainDb: Float,
-    makeupGainDb: Float,
-    ceilingLoadDb: Float,
-    activeCalibrationLabel: String?,
+fun EqualizerCard(
     isEnabled: Boolean,
-    onSelectDaxProfile: (com.audioeq.audio.DaxProfile) -> Unit = {},
-    onSelectPreset: (PresetConfig) -> Unit,
-    onDeleteCustomPreset: (String) -> Unit,
-    onSelectEditingChannel: (Boolean) -> Unit = {},
-    onBandGainChange: (Int, Float) -> Unit,
-    onIntensityChange: (Float) -> Unit,
-    onToggleVolumeContour: (Boolean) -> Unit,
-    onToggleNightMode: (Boolean) -> Unit = {},
-    onToggleAbCompare: (Boolean) -> Unit,
-    onOpenAbxTest: () -> Unit = {},
-    onOpenCalibration: () -> Unit,
+    isAbCompare: Boolean,
+    usbBitPerfectActive: Boolean,
+    intensity: Float,
+    activeRoute: OutputRoute,
+    ceilingDb: Float,
+    sliderGainsDb: List<Float>,
+    effectiveGainsDb: List<Float>,
+    splitLREnabled: Boolean,
+    editingRightChannel: Boolean,
     onToggleEnabled: (Boolean) -> Unit,
-    onResetFlat: () -> Unit,
+    onSelectEditingChannel: (Boolean) -> Unit,
+    onBandGainChange: (Int, Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val displayGains = remember {
-        mutableStateListOf<Float>().apply {
-            for (i in 0 until 10) {
-                add(targetGainsDb.getOrElse(i) { 0f } * intensity)
-            }
-        }
-    }
-    val draggingBands = remember {
-        mutableStateListOf<Boolean>().apply {
-            repeat(10) { add(false) }
-        }
-    }
+    val palette = LocalMonetPalette.current
 
-    val currentTargetGains by rememberUpdatedState(targetGainsDb)
-    val currentIntensity by rememberUpdatedState(intensity)
-
-    // Frame-rate independent exponential smoothing loop matching equalizer.html: k = 1 - exp(-dt * 18)
-    LaunchedEffect(targetGainsDb, intensity) {
-        var lastNanos = withFrameNanos { it }
-        var moving = true
-        while (moving) {
-            val nowNanos = withFrameNanos { it }
-            val dt = ((nowNanos - lastNanos) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
-            lastNanos = nowNanos
-            val k = (1f - exp(-dt * 18f)).coerceIn(0.05f, 1f)
-
-            moving = false
-            for (i in 0 until 10) {
-                val target = currentTargetGains.getOrElse(i) { 0f }
-                if (draggingBands[i]) {
-                    displayGains[i] = target
-                } else {
-                    val diff = target - displayGains[i]
-                    if (abs(diff) > 0.005f) {
-                        displayGains[i] = displayGains[i] + diff * k
-                        moving = true
-                    } else {
-                        displayGains[i] = target
-                    }
-                }
-            }
-        }
-    }
-
-    val bandsAlpha by animateFloatAsState(
-        targetValue = if (isEnabled && !isAbCompare && !usbBitPerfectActive) 1f else 0.45f,
-        animationSpec = tween(250),
-        label = "bandsAlpha"
+    val powerBg by animateColorAsState(
+        targetValue = if (isEnabled) palette.primary else palette.sHigh,
+        animationSpec = tween(220),
+        label = "eqPowerBg"
+    )
+    val powerTint by animateColorAsState(
+        targetValue = if (isEnabled) palette.onPrimary else palette.onVar,
+        animationSpec = tween(220),
+        label = "eqPowerTint"
+    )
+    val powerRadius by animateDpAsState(
+        targetValue = if (isEnabled) 26.dp else 20.dp,
+        animationSpec = tween(220),
+        label = "eqPowerRadius"
     )
 
-    // Graph shows user × intensity when active, or flat when A/B compare is held
-    val graphDisplayGains = remember(displayGains.toList(), intensity, isAbCompare, usbBitPerfectActive) {
-        if (isAbCompare || usbBitPerfectActive) {
-            List(10) { 0f }
-        } else {
-            displayGains.map { (it * intensity).coerceIn(-12f, 12f) }
-        }
+    val subtitleText = when {
+        !isEnabled -> "Equalizer is off"
+        usbBitPerfectActive -> "USB Bit-Perfect ON · EQ bypassed"
+        isAbCompare -> "A/B bypass comparison active"
+        else -> String.format(Locale.US, "%.1f× intensity", intensity)
     }
+
+    val isWarn = ceilingDb > 4.0f
+    val meterFillFraction = (ceilingDb / 9.0f).coerceIn(0f, 1f)
+    val meterColor by animateColorAsState(
+        targetValue = if (isWarn) palette.warn else palette.primary,
+        animationSpec = tween(180),
+        label = "meterColor"
+    )
+    val ceilTextColor by animateColorAsState(
+        targetValue = if (isWarn) palette.warn else palette.onSurface,
+        animationSpec = tween(180),
+        label = "ceilTextColor"
+    )
+
+    val bandsAlpha by animateFloatAsState(
+        targetValue = if (isEnabled) 1f else 0.38f,
+        animationSpec = tween(220),
+        label = "bandsAlpha"
+    )
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
+            .border(
+                width = 1.dp,
+                color = palette.outlineV.copy(alpha = 0.55f),
+                shape = RoundedCornerShape(28.dp)
+            )
             .testTag("unified_equalizer_card"),
         shape = RoundedCornerShape(28.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        tonalElevation = 2.dp
+        color = palette.sCont
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 22.dp)
+                .padding(22.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Header: "Equalizer" + Route & Headroom / Ceiling Meter Badges
+            // 1. eq-head
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(
+                Row(
                     modifier = Modifier
                         .weight(1f)
-                        .padding(end = 8.dp)
-                ) {
-                    Text(
-                        text = "Equalizer",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = if (usbBitPerfectActive) {
-                            "Route: ${activeRoute.label} · Bit-perfect ON, EQ off"
-                        } else {
-                            "Route: ${activeRoute.label} · In ${String.format(Locale.US, "%.1f", inputGainDb)} dB · Makeup +${String.format(Locale.US, "%.1f", makeupGainDb)} dB"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Row(
+                        .padding(end = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    // v6 Section 3.1 Rule 3 Headroom Meter (ceilingLoadDb = max(0, max(effective) - 3) dB, warn > 4 dB)
-                    val isCeilingWarn = ceilingLoadDb > 4.0f
-                    val meterBg by animateColorAsState(
-                        targetValue = if (isCeilingWarn) {
-                            MaterialTheme.colorScheme.errorContainer
-                        } else {
-                            MaterialTheme.colorScheme.secondaryContainer
-                        },
-                        label = "headroomMeterBg"
-                    )
-                    val meterContent by animateColorAsState(
-                        targetValue = if (isCeilingWarn) {
-                            MaterialTheme.colorScheme.onErrorContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSecondaryContainer
-                        },
-                        label = "headroomMeterContent"
-                    )
-
-                    Surface(
-                        shape = RoundedCornerShape(999.dp),
-                        color = meterBg,
-                        contentColor = meterContent,
-                        modifier = Modifier.testTag("headroom_ceiling_meter")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            if (isCeilingWarn) {
-                                Icon(
-                                    imageVector = Icons.Default.Warning,
-                                    contentDescription = "High ceiling load warning",
-                                    modifier = Modifier.height(14.dp)
-                                )
-                            }
-                            Text(
-                                text = "Ceiling ${String.format(Locale.US, "%.1f", ceilingLoadDb)} dB",
-                                style = MaterialTheme.typography.labelSmall,
-                                maxLines = 1
-                            )
-                        }
-                    }
-
-                    // Interactive Enable / Disable Power Icon Button at the top of the Equalizer Card
-                    val powerBtnBg by animateColorAsState(
-                        targetValue = if (isEnabled) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.surfaceContainerHighest
-                        },
-                        label = "eqPowerBtnBg"
-                    )
-                    val powerBtnTint by animateColorAsState(
-                        targetValue = if (isEnabled) {
-                            MaterialTheme.colorScheme.onPrimary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        label = "eqPowerBtnTint"
-                    )
-
-                    IconButton(
-                        onClick = { onToggleEnabled(!isEnabled) },
+                    // #power (56x56dp)
+                    Box(
                         modifier = Modifier
-                            .clip(CircleShape)
-                            .background(powerBtnBg)
+                            .size(56.dp)
+                            .shadow(
+                                elevation = if (isEnabled) 10.dp else 0.dp,
+                                shape = RoundedCornerShape(powerRadius),
+                                ambientColor = palette.glow,
+                                spotColor = palette.glow
+                            )
+                            .clip(RoundedCornerShape(powerRadius))
+                            .background(powerBg)
                             .border(
                                 width = 1.dp,
-                                color = if (isEnabled) {
-                                    MaterialTheme.colorScheme.primaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.outlineVariant
-                                },
-                                shape = CircleShape
+                                color = if (isEnabled) Color.Transparent else palette.outlineV,
+                                shape = RoundedCornerShape(powerRadius)
                             )
-                            .testTag("global_power_switch")
+                            .clickable { onToggleEnabled(!isEnabled) }
+                            .testTag("eq_power_button"),
+                        contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.PowerSettingsNew,
                             contentDescription = if (isEnabled) "Disable Equalizer" else "Enable Equalizer",
-                            tint = powerBtnTint
+                            tint = powerTint,
+                            modifier = Modifier.size(24.dp)
                         )
                     }
-                }
-            }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // v6 Section 4: The 4 Acoustic Profiles (0: Dynamic, 1: Video / Movie, 2: Music, 3: Voice)
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surface,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("dax_profile_selector_bar")
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Acoustic Profile (dax-default.xml)",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
+                            text = "Equalizer",
+                            fontFamily = SpaceGroteskFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 20.sp,
+                            letterSpacing = (-0.2).sp,
+                            color = palette.onSurface,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = subtitleText,
+                            fontSize = 12.sp,
+                            color = palette.onVar,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                        val ieqLabel = when (selectedDaxProfile.ieqTargetId) {
-                            "ieq_balanced" -> "IEQ Balanced"
-                            "ieq_warm" -> "IEQ Warm"
-                            else -> "Pure Curve"
-                        }
-                        val dlgSteps = if (activeRoute == OutputRoute.SPEAKER) {
-                            selectedDaxProfile.dialogStepsSpk
-                        } else {
-                            selectedDaxProfile.dialogStepsHp
-                        }
-                        val lvlLabel = if (selectedDaxProfile.levelerOn) "Leveler ON" else "Leveler OFF"
-                        Text(
-                            text = "$ieqLabel · Dlg +${String.format(Locale.US, "%.1f", dlgSteps * 0.45)} dB · $lvlLabel",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            modifier = Modifier.testTag("eq_subtitle_text")
                         )
                     }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        com.audioeq.audio.DaxProfile.entries.forEach { prof ->
-                            val selected = prof == selectedDaxProfile
-                            Surface(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { onSelectDaxProfile(prof) }
-                                    .testTag("dax_profile_${prof.id}"),
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (selected) {
-                                    MaterialTheme.colorScheme.primaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceContainerHigh
-                                }
-                            ) {
-                                Text(
-                                    text = if (prof == com.audioeq.audio.DaxProfile.MOVIE) "Movie" else prof.displayName,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = if (selected) {
-                                        MaterialTheme.colorScheme.onPrimaryContainer
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                                    textAlign = TextAlign.Center,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(vertical = 7.dp, horizontal = 4.dp)
-                                )
-                            }
-                        }
-                    }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Preset Chips (Flat, Balanced Deep, Bass Boost, Vocal Clarity, Percussion Clarity, Cinema, + Saved)
-            FlowRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("preset_chip_row"),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                presets.forEach { preset ->
-                    val isSelected = preset.id == selectedPresetId
-                    EqualizerPresetPill(
-                        preset = preset,
-                        isSelected = isSelected,
-                        onClick = { onSelectPreset(preset) },
-                        onDelete = if (!preset.isBuiltIn) {
-                            { onDeleteCustomPreset(preset.id) }
-                        } else null
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Response Graph (matching equalizer.html .graph)
-            FrequencyResponseGraph(
-                displayGainsDb = graphDisplayGains,
-                isEnabled = isEnabled && !usbBitPerfectActive
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Optional Independent Left / Right Channel Selector when Split L/R EQ is enabled (v5 Section 17.2 F4)
-            if (splitLREnabled) {
+                // .route pill
                 Row(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surface)
-                        .padding(4.dp),
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(palette.tertiaryC)
+                        .padding(horizontal = 12.dp, vertical = 7.dp)
+                        .testTag("route_badge"),
+                    verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    listOf("Left Channel (L)" to false, "Right Channel (R)" to true).forEach { (label, isRight) ->
-                        val selected = editingRightChannel == isRight
-                        Surface(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { onSelectEditingChannel(isRight) }
-                                .testTag("channel_tab_${if (isRight) "right" else "left"}"),
-                            shape = RoundedCornerShape(10.dp),
-                            color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
-                        ) {
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(vertical = 6.dp),
-                                maxLines = 1
-                            )
-                        }
-                    }
+                    Icon(
+                        imageVector = if (activeRoute == OutputRoute.SPEAKER) {
+                            Icons.Default.VolumeUp
+                        } else {
+                            Icons.Default.Headphones
+                        },
+                        contentDescription = activeRoute.label,
+                        tint = palette.onTertiaryC,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = activeRoute.label,
+                        fontFamily = SpaceGroteskFontFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        color = palette.onTertiaryC,
+                        maxLines = 1
+                    )
                 }
             }
 
-            // v5 Section 2 True Category Boundaries Strip:
-            // Bass (20–350 Hz) | Mids (350–2.8k Hz) | Treble (2.8–11 kHz) | Air (11–20 kHz)
+            // 2. .headroom
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                FrequencySection.entries.forEach { sec ->
-                    Surface(
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.surface
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 4.dp, vertical = 6.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = sec.title,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                textAlign = TextAlign.Center,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = sec.rangeLabel,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // 10-Band Fluid Vertical Sliders Grid
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .alpha(bandsAlpha)
-                    .padding(horizontal = 6.dp, vertical = 16.dp)
-                    .testTag("ten_band_sliders_container")
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    EqConstants.MASTER_BANDS.forEach { band ->
-                        val gain = displayGains.getOrElse(band.index) { 0f }
-                        FluidVerticalBandSlider(
-                            band = band,
-                            gainDb = gain,
-                            enabled = isEnabled && !usbBitPerfectActive,
-                            onDragStateChange = { isDragging ->
-                                draggingBands[band.index] = isDragging
-                            },
-                            onGainChange = { newDb ->
-                                displayGains[band.index] = newDb
-                                onBandGainChange(band.index, newDb)
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // v5 Section 4.2, 7, 10 & 17: Ordered Intensity Macro, Volume Contour, Night Mode, A/B Compare, Blind ABX & Sound Calibration Card
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surface
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    // 1. Intensity Header + 3 Equal-Width Mode Chips
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "EQ Intensity",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = String.format(Locale.US, "%.1fx scale", intensity),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            val options = listOf(
-                                Triple("Light", "0.6x", 0.6f),
-                                Triple("Standard", "1.0x", 1.0f),
-                                Triple("Deep+", "1.3x", 1.3f)
-                            )
-                            options.forEach { (label, sub, value) ->
-                                val selected = abs(intensity - value) < 0.08f
-                                val chipBg = if (selected) {
-                                    MaterialTheme.colorScheme.primaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceContainerHigh
-                                }
-                                val chipText = if (selected) {
-                                    MaterialTheme.colorScheme.onPrimaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                }
-                                Surface(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .clickable { onIntensityChange(value) }
-                                        .testTag("intensity_chip_${label.lowercase()}"),
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = chipBg
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 8.dp, horizontal = 6.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
-                                        Text(
-                                            text = label,
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = chipText,
-                                            maxLines = 1
-                                        )
-                                        Text(
-                                            text = sub,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = chipText.copy(alpha = 0.8f),
-                                            maxLines = 1
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // 2. Volume Contour Full-Width Switch Row
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(end = 12.dp)
-                            ) {
-                                Text(
-                                    text = "Volume Contour (ISO 226)",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "Boosts low-volume bass & treble balance",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            Switch(
-                                checked = volumeContourEnabled,
-                                onCheckedChange = onToggleVolumeContour,
-                                modifier = Modifier.testTag("volume_contour_switch")
-                            )
-                        }
-                    }
-
-                    // 3. Night Mode (F8: Lower ceiling thresholds & higher ratios for quiet listening)
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(end = 12.dp)
-                            ) {
-                                Text(
-                                    text = "Night Mode (Quiet Ceilings)",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "Lowers 6-band ceiling thresholds (-6 dB) without peaks",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            Switch(
-                                checked = nightModeEnabled,
-                                onCheckedChange = onToggleNightMode,
-                                modifier = Modifier.testTag("night_mode_switch")
-                            )
-                        }
-                    }
-
-                    // 4. Two Equal-Width Action Buttons: A/B Compare & Sound Calibration
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        val abContainerColor = if (isAbCompare) {
-                            MaterialTheme.colorScheme.tertiaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.surfaceContainerHigh
-                        }
-                        val abContentColor = if (isAbCompare) {
-                            MaterialTheme.colorScheme.onTertiaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        }
-
-                        FilledTonalButton(
-                            onClick = { onToggleAbCompare(!isAbCompare) },
-                            shape = RoundedCornerShape(14.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = abContainerColor,
-                                contentColor = abContentColor
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("ab_compare_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Tune,
-                                contentDescription = "A/B Loudness Compare",
-                                modifier = Modifier.height(18.dp)
-                            )
-                            Spacer(modifier = Modifier.padding(3.dp))
-                            Text(
-                                text = if (isAbCompare) "A/B: Bypass" else "A/B Compare",
-                                style = MaterialTheme.typography.labelLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-
-                        FilledTonalButton(
-                            onClick = onOpenCalibration,
-                            shape = RoundedCornerShape(14.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("open_calibration_button")
-                        ) {
-                            Icon(
-                                imageVector = if (activeRoute == OutputRoute.SPEAKER) Icons.Default.Speaker else Icons.Default.Headphones,
-                                contentDescription = "Sound Calibration",
-                                modifier = Modifier.height(18.dp)
-                            )
-                            Spacer(modifier = Modifier.padding(3.dp))
-                            Text(
-                                text = activeCalibrationLabel ?: "Sound Calibrate",
-                                style = MaterialTheme.typography.labelLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-
-                    // 5. Blind ABX Tool Launcher (v5 Section 17.2 F6)
-                    OutlinedButton(
-                        onClick = onOpenAbxTest,
-                        shape = RoundedCornerShape(14.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(44.dp)
-                            .testTag("open_abx_test_button")
-                    ) {
-                        Text(
-                            text = "Blind ABX Listening Test (A vs B vs Hidden X)",
-                            style = MaterialTheme.typography.labelLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Footer: Status Indicator + Reset Button
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(palette.sLow)
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                    .testTag("headroom_ceiling_meter"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = if (isEnabled) "Equalizer Active" else "Equalizer Bypassed",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (isEnabled) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    modifier = Modifier.testTag("power_status_text")
+                    text = "Headroom",
+                    fontSize = 12.sp,
+                    color = palette.onVar
                 )
-
-                OutlinedButton(
-                    onClick = onResetFlat,
-                    shape = RoundedCornerShape(999.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.primary
-                    ),
-                    modifier = Modifier.testTag("reset_equalizer_button")
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(palette.sTop)
                 ) {
-                    Text(
-                        text = "Reset",
-                        style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.padding(horizontal = 6.dp)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(meterFillFraction)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(meterColor)
+                    )
+                }
+                Text(
+                    text = String.format(Locale.US, "%.1f dB", ceilingDb),
+                    fontFamily = JetBrainsMonoFontFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                    color = ceilTextColor,
+                    modifier = Modifier.testTag("ceiling_db_text")
+                )
+            }
+
+            // 3. .curve (#curveWrap)
+            FrequencyResponseGraph(
+                displayGainsDb = effectiveGainsDb,
+                isEnabled = isEnabled && !isAbCompare && !usbBitPerfectActive
+            )
+
+            // 4. .zones
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                val zones = listOf(
+                    "BASS" to 1.9f,
+                    "MIDS" to 2.6f,
+                    "TREBLE" to 2.4f,
+                    "AIR" to 1.2f
+                )
+                zones.forEach { (title, weightVal) ->
+                    Column(
+                        modifier = Modifier.weight(weightVal),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(2.dp)
+                                .background(palette.outlineV)
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = title,
+                            fontFamily = SpaceGroteskFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 11.sp,
+                            letterSpacing = 0.9.sp,
+                            color = palette.onVar,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+
+            // Optional Left / Right Channel Selector when Independent L/R EQ is enabled in Settings
+            AnimatedVisibility(visible = splitLREnabled) {
+                V7SegmentedRow(
+                    options = listOf(false to "Left Channel (10-Band)", true to "Right Channel (10-Band)"),
+                    selectedValue = editingRightChannel,
+                    enabled = isEnabled,
+                    onSelect = onSelectEditingChannel
+                )
+            }
+
+            // 5. .bands (#bands)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alpha(bandsAlpha)
+                    .padding(top = 4.dp)
+                    .testTag("eq_bands_row"),
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                for (i in 0 until 10) {
+                    val userGain = sliderGainsDb.getOrElse(i) { 0f }
+                    val effGain = effectiveGainsDb.getOrElse(i) { 0f }
+                    val freqLabel = FREQ_LABELS.getOrElse(i) { EqConstants.MASTER_BANDS[i].label }
+                    V7VerticalBandSlider(
+                        bandIndex = i,
+                        freqLabel = freqLabel,
+                        userGainDb = userGain,
+                        effectiveGainDb = effGain,
+                        intensity = intensity,
+                        enabled = isEnabled,
+                        onGainChange = { newDb -> onBandGainChange(i, newDb) },
+                        modifier = Modifier.weight(1f)
                     )
                 }
             }
@@ -847,222 +380,587 @@ fun UnifiedEqualizerCard(
 }
 
 @Composable
-private fun EqualizerPresetPill(
-    preset: PresetConfig,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    onDelete: (() -> Unit)? = null
-) {
-    val bgColor = if (isSelected) {
-        MaterialTheme.colorScheme.primaryContainer
-    } else {
-        Color.Transparent
-    }
-    val textColor = if (isSelected) {
-        MaterialTheme.colorScheme.onPrimaryContainer
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    val borderColor = if (isSelected) {
-        Color.Transparent
-    } else {
-        MaterialTheme.colorScheme.outline
-    }
-
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(bgColor)
-            .border(1.dp, borderColor, RoundedCornerShape(999.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 6.dp)
-            .testTag("preset_chip_${preset.id}"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        Text(
-            text = preset.name,
-            style = MaterialTheme.typography.labelLarge,
-            color = textColor
-        )
-        if (onDelete != null) {
-            Text(
-                text = "×",
-                style = MaterialTheme.typography.labelLarge,
-                color = textColor,
-                modifier = Modifier
-                    .clickable { onDelete() }
-                    .padding(horizontal = 2.dp)
-            )
-        }
-    }
-}
-
-@Composable
-private fun FluidVerticalBandSlider(
-    band: EqBandSpec,
-    gainDb: Float,
+private fun V7VerticalBandSlider(
+    bandIndex: Int,
+    freqLabel: String,
+    userGainDb: Float,
+    effectiveGainDb: Float,
+    intensity: Float,
     enabled: Boolean,
-    onDragStateChange: (Boolean) -> Unit,
     onGainChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
-    val surfaceColor = MaterialTheme.colorScheme.surface
-    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    val palette = LocalMonetPalette.current
+    var isDragging by remember { mutableStateOf(false) }
+    var lastTapTimeMs by remember { mutableLongStateOf(0L) }
 
-    var isPressed by remember { mutableStateOf(false) }
-    val thumbScale by animateFloatAsState(
-        targetValue = if (isPressed) 1.18f else 1.0f,
-        animationSpec = spring(dampingRatio = 0.65f, stiffness = 600f),
-        label = "thumbScale"
+    val currentOnGainChange by rememberUpdatedState(onGainChange)
+    val currentEnabled by rememberUpdatedState(enabled)
+    val currentUserGain by rememberUpdatedState(userGainDb)
+    val currentEffGain by rememberUpdatedState(effectiveGainDb)
+    val currentIntensity by rememberUpdatedState(intensity)
+
+    val activeDbText = if (effectiveGainDb >= 0f) {
+        String.format(Locale.US, "+%.1f", effectiveGainDb)
+    } else {
+        String.format(Locale.US, "%.1f", effectiveGainDb)
+    }
+    val hasGain = abs(effectiveGainDb) > 0.05f
+
+    val knobScale by animateFloatAsState(
+        targetValue = if (isDragging) 1.08f else 1.0f,
+        animationSpec = tween(120),
+        label = "knobScale_$bandIndex"
     )
 
-    val currentEnabled by rememberUpdatedState(enabled)
-    val currentOnGainChange by rememberUpdatedState(onGainChange)
-    val currentOnDragStateChange by rememberUpdatedState(onDragStateChange)
-
-    val formattedGain = remember(gainDb) {
-        val sign = if (gainDb > 0.05f) "+" else ""
-        String.format(Locale.US, "%s%.1f", sign, gainDb)
-    }
-
     Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally
+        modifier = modifier.testTag("band_column_$bandIndex"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        // .db
         Text(
-            text = formattedGain,
-            style = MaterialTheme.typography.labelSmall,
-            color = onSurfaceVariant,
-            textAlign = TextAlign.Center,
+            text = activeDbText,
+            fontFamily = JetBrainsMonoFontFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 10.5.sp,
+            color = if (hasGain) palette.primary else palette.onVar,
             maxLines = 1,
-            modifier = Modifier
-                .height(20.dp)
-                .padding(bottom = 4.dp)
+            textAlign = TextAlign.Center
         )
 
-        Box(
+        // .rail (height 172dp)
+        BoxWithConstraints(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(260.dp)
-                .testTag("band_slider_${band.frequencyHz}")
-                .semantics {
-                    contentDescription = "${band.label} Hz gain"
-                }
-                .pointerInput(band.index) {
-                    var lastTapTime = 0L
+                .width(32.dp)
+                .height(172.dp)
+                .pointerInput(bandIndex) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         if (!currentEnabled) return@awaitEachGesture
 
-                        down.consume()
-
                         val now = System.currentTimeMillis()
-                        if (now - lastTapTime < 280L) {
-                            currentOnDragStateChange(true)
+                        if (now - lastTapTimeMs <= 280L) {
+                            lastTapTimeMs = 0L
                             currentOnGainChange(0f)
-                            currentOnDragStateChange(false)
-                            lastTapTime = 0L
                             return@awaitEachGesture
                         }
-                        lastTapTime = now
+                        lastTapTimeMs = now
 
-                        isPressed = true
-                        currentOnDragStateChange(true)
+                        val hPx = size.height.toFloat().coerceAtLeast(1f)
+                        // Keep enhancer delta steady while dragging so knob tracks finger
+                        val enhancerDelta = currentEffGain - (currentUserGain * currentIntensity)
 
-                        val padPx = 14.dp.toPx()
-                        fun yToDb(y: Float): Float {
-                            val h = size.height.toFloat().coerceAtLeast(1f)
-                            val usable = (h - 2f * padPx).coerceAtLeast(1f)
-                            val norm = (1f - ((y - padPx) / usable)).coerceIn(0f, 1f)
-                            return (-12f + norm * 24f).coerceIn(-12f, 12f)
+                        fun updateFromY(yPx: Float) {
+                            val p = (1f - (yPx / hPx).coerceIn(0f, 1f))
+                            val targetEffDb = (p * 24f) - 12f
+                            val rawUserDb = if (currentIntensity > 0.1f) {
+                                (targetEffDb - enhancerDelta) / currentIntensity
+                            } else {
+                                targetEffDb
+                            }
+                            val rounded = ((rawUserDb * 10f).roundToInt() / 10f).coerceIn(-12f, 12f)
+                            currentOnGainChange(rounded)
                         }
 
-                        currentOnGainChange(yToDb(down.position.y))
+                        isDragging = true
+                        updateFromY(down.position.y)
 
                         try {
-                            while (true) {
+                            do {
                                 val event = awaitPointerEvent()
-                                val change = event.changes.firstOrNull { it.id == down.id }
-                                    ?: event.changes.firstOrNull()
-                                    ?: break
-
-                                if (!change.pressed) {
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: event.changes.firstOrNull()
+                                if (change != null && change.pressed) {
                                     change.consume()
-                                    break
+                                    updateFromY(change.position.y)
                                 }
-
-                                change.consume()
-                                currentOnGainChange(yToDb(change.position.y))
-                            }
+                            } while (event.changes.any { it.pressed })
                         } finally {
-                            isPressed = false
-                            currentOnDragStateChange(false)
+                            isDragging = false
                         }
                     }
-                },
+                }
+                .testTag("band_slider_$bandIndex"),
             contentAlignment = Alignment.Center
         ) {
-            Canvas(
+            val railHeight = maxHeight
+            val pct = ((effectiveGainDb.coerceIn(-12f, 12f) + 12f) / 24f).coerceIn(0f, 1f)
+            val topFraction = min(0.5f, 1f - pct)
+            val fillFraction = abs(pct - 0.5f)
+            val knobYOffset = railHeight * (0.5f - pct)
+
+            // .rail-track (6dp wide)
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .width(6.dp)
                     .fillMaxHeight()
-            ) {
-                val trackWidth = 14.dp.toPx()
-                val pad = 14.dp.toPx()
-                val usableHeight = (size.height - 2f * pad).coerceAtLeast(1f)
-                val centerX = size.width * 0.5f
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(palette.sTop)
+            )
 
-                val pct = ((gainDb.coerceIn(-12f, 12f) + 12f) / 24f).coerceIn(0f, 1f)
-                val thumbY = pad + (1f - pct) * usableHeight
+            // .rail-zero (14dp x 1dp at 50%)
+            Box(
+                modifier = Modifier
+                    .width(14.dp)
+                    .height(1.dp)
+                    .background(palette.outline)
+            )
 
-                drawRoundRect(
-                    color = trackColor,
-                    topLeft = Offset(centerX - trackWidth / 2f, pad),
-                    size = Size(trackWidth, usableHeight),
-                    cornerRadius = CornerRadius(trackWidth / 2f, trackWidth / 2f)
+            // .rail-fill (6dp wide between 50% and pct)
+            if (fillFraction > 0.002f) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .offset(y = railHeight * topFraction)
+                        .width(6.dp)
+                        .height(railHeight * fillFraction)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(palette.primary)
                 )
+            }
 
-                val fillTop = thumbY
-                val fillHeight = (pad + usableHeight - fillTop).coerceAtLeast(0f)
-                if (fillHeight > 0.5f) {
-                    drawRoundRect(
-                        color = primaryColor,
-                        topLeft = Offset(centerX - trackWidth / 2f, fillTop),
-                        size = Size(trackWidth, fillHeight),
-                        cornerRadius = CornerRadius(trackWidth / 2f, trackWidth / 2f)
+            // .knob (28dp x 16dp pill, rounded 9dp, 2dp primary border)
+            Box(
+                modifier = Modifier
+                    .offset(y = knobYOffset)
+                    .scale(knobScale)
+                    .width(28.dp)
+                    .height(16.dp)
+                    .shadow(4.dp, RoundedCornerShape(9.dp))
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(if (isDragging) palette.primary else palette.onPrimary)
+                    .border(2.dp, palette.primary, RoundedCornerShape(9.dp))
+            )
+        }
+
+        // .hz
+        Text(
+            text = freqLabel,
+            fontFamily = JetBrainsMonoFontFamily,
+            fontSize = 11.sp,
+            color = palette.onVar,
+            maxLines = 1,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+/**
+ * Tone Card (`section#toneCard`) placed directly below Equalizer, matching `audio-eq-v7.html`:
+ * - `.enhance-head`: 40x40dp icon badge + "Tone" + "Tilt, intensity and contour"
+ * - `.tone-grid` (2 columns): Bass tilt (`-6..+6 dB`, step `0.5`) and Treble tilt (`-6..+6 dB`, step `0.5`)
+ * - Intensity 3-segment control (`Light 0.6×`, `Standard 1.0×`, `Deep+ 1.3×`)
+ * - `.hairline` divider
+ * - Volume contour switch (`"Lifts bass and treble at low volume"`)
+ * - A/B loudness compare switch (`"Level-matched bypass comparison"`)
+ */
+@Composable
+fun ToneCard(
+    masterEnabled: Boolean,
+    tiltBassDb: Float,
+    tiltTrebleDb: Float,
+    intensity: Float,
+    volumeContourEnabled: Boolean,
+    isAbCompare: Boolean,
+    onTiltBassChange: (Float) -> Unit,
+    onTiltTrebleChange: (Float) -> Unit,
+    onIntensityChange: (Float) -> Unit,
+    onToggleVolumeContour: (Boolean) -> Unit,
+    onToggleAbCompare: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalMonetPalette.current
+    val cardAlpha by animateFloatAsState(
+        targetValue = if (masterEnabled) 1f else 0.45f,
+        animationSpec = tween(220),
+        label = "toneCardAlpha"
+    )
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .alpha(cardAlpha)
+            .border(
+                width = 1.dp,
+                color = palette.outlineV.copy(alpha = 0.55f),
+                shape = RoundedCornerShape(28.dp)
+            )
+            .testTag("tone_card"),
+        shape = RoundedCornerShape(28.dp),
+        color = palette.sCont
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Header (.enhance-head)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(palette.primaryC),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val iconColor = palette.onPrimaryC
+                    Canvas(modifier = Modifier.size(20.dp)) {
+                        val w = size.width
+                        val h = size.height
+                        val p = Path().apply {
+                            moveTo(w * (4f / 24f), h * (12f / 24f))
+                            lineTo(w * (8f / 24f), h * (12f / 24f))
+                            lineTo(w * (11f / 24f), h * (5f / 24f))
+                            lineTo(w * (14f / 24f), h * (19f / 24f))
+                            lineTo(w * (17f / 24f), h * (12f / 24f))
+                            lineTo(w * (20f / 24f), h * (12f / 24f))
+                        }
+                        drawPath(
+                            path = p,
+                            color = iconColor,
+                            style = Stroke(
+                                width = 2.dp.toPx(),
+                                cap = StrokeCap.Round,
+                                join = StrokeJoin.Round
+                            )
+                        )
+                    }
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Tone",
+                        fontFamily = SpaceGroteskFontFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 18.sp,
+                        letterSpacing = (-0.2).sp,
+                        color = palette.onSurface
+                    )
+                    Text(
+                        text = "Tilt, intensity and contour",
+                        fontSize = 12.sp,
+                        color = palette.onVar
                     )
                 }
+            }
 
-                val baseRadius = 11.dp.toPx() * thumbScale
-                drawCircle(
-                    color = Color.Black.copy(alpha = 0.24f),
-                    radius = baseRadius + 1.dp.toPx(),
-                    center = Offset(centerX, thumbY + 1.5.dp.toPx())
+            // .tone-grid (2 columns: Bass tilt & Treble tilt)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                ToneTiltMiniCard(
+                    label = "Bass tilt",
+                    valueDb = tiltBassDb,
+                    enabled = masterEnabled,
+                    onValueChange = { raw ->
+                        val stepped = (raw * 2f).roundToInt() / 2f
+                        onTiltBassChange(stepped)
+                    },
+                    testTag = "bass_tilt_slider",
+                    modifier = Modifier.weight(1f)
                 )
-                drawCircle(
-                    color = primaryColor,
-                    radius = baseRadius,
-                    center = Offset(centerX, thumbY)
+                ToneTiltMiniCard(
+                    label = "Treble tilt",
+                    valueDb = tiltTrebleDb,
+                    enabled = masterEnabled,
+                    onValueChange = { raw ->
+                        val stepped = (raw * 2f).roundToInt() / 2f
+                        onTiltTrebleChange(stepped)
+                    },
+                    testTag = "treble_tilt_slider",
+                    modifier = Modifier.weight(1f)
                 )
-                drawCircle(
-                    color = surfaceColor,
-                    radius = baseRadius,
-                    center = Offset(centerX, thumbY),
-                    style = Stroke(width = 3.5.dp.toPx())
+            }
+
+            // Intensity Segmented Row
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Intensity",
+                        fontSize = 12.sp,
+                        color = palette.onVar
+                    )
+                    Text(
+                        text = String.format(Locale.US, "%.1f×", intensity),
+                        fontFamily = JetBrainsMonoFontFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        color = palette.primary,
+                        modifier = Modifier.testTag("intensity_value_text")
+                    )
+                }
+                val selectedIntensityBucket = when {
+                    intensity < 0.8f -> 0.6f
+                    intensity > 1.15f -> 1.3f
+                    else -> 1.0f
+                }
+                V7SegmentedRow(
+                    options = listOf(
+                        0.6f to "Light 0.6×",
+                        1.0f to "Standard 1.0×",
+                        1.3f to "Deep+ 1.3×"
+                    ),
+                    selectedValue = selectedIntensityBucket,
+                    enabled = masterEnabled,
+                    onSelect = onIntensityChange,
+                    modifier = Modifier.testTag("intensity_segmented_row")
+                )
+            }
+
+            HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
+
+            // Switch Row 1: Volume contour
+            V7SwitchRow(
+                title = "Volume contour",
+                subtitle = "Lifts bass and treble at low volume",
+                checked = volumeContourEnabled,
+                enabled = masterEnabled,
+                onCheckedChange = onToggleVolumeContour,
+                testTag = "volume_contour_switch"
+            )
+
+            // Switch Row 2: A/B loudness compare
+            V7SwitchRow(
+                title = "A/B loudness compare",
+                subtitle = "Level-matched bypass comparison",
+                checked = isAbCompare,
+                enabled = masterEnabled,
+                onCheckedChange = onToggleAbCompare,
+                testTag = "ab_compare_switch"
+            )
+        }
+    }
+}
+
+@Composable
+private fun ToneTiltMiniCard(
+    label: String,
+    valueDb: Float,
+    enabled: Boolean,
+    onValueChange: (Float) -> Unit,
+    testTag: String,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalMonetPalette.current
+    val formattedVal = if (valueDb >= 0f) {
+        String.format(Locale.US, "+%.1f dB", valueDb)
+    } else {
+        String.format(Locale.US, "%.1f dB", valueDb)
+    }
+
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(palette.sLow)
+            .border(1.dp, palette.outlineV.copy(alpha = 0.4f), RoundedCornerShape(18.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                fontSize = 12.sp,
+                color = palette.onVar,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = formattedVal,
+                fontFamily = JetBrainsMonoFontFamily,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+                color = palette.primary,
+                maxLines = 1
+            )
+        }
+        Slider(
+            value = valueDb,
+            onValueChange = onValueChange,
+            valueRange = -6f..6f,
+            steps = 23,
+            enabled = enabled,
+            colors = SliderDefaults.colors(
+                thumbColor = palette.primary,
+                activeTrackColor = palette.primary,
+                inactiveTrackColor = palette.sTop
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(28.dp)
+                .testTag(testTag)
+        )
+    }
+}
+
+/**
+ * Reusable Segmented Pill Row (`.seg`) matching `audio-eq-v7.html`.
+ */
+@Composable
+fun <T> V7SegmentedRow(
+    options: List<Pair<T, String>>,
+    selectedValue: T,
+    enabled: Boolean,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalMonetPalette.current
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(palette.sLow)
+            .border(1.dp, palette.outlineV.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        options.forEach { (value, label) ->
+            val selected = value == selectedValue
+            val bg by animateColorAsState(
+                targetValue = if (selected) palette.primaryC else Color.Transparent,
+                animationSpec = tween(160),
+                label = "segBg_$label"
+            )
+            val fg by animateColorAsState(
+                targetValue = if (selected) palette.onPrimaryC else palette.onVar,
+                animationSpec = tween(160),
+                label = "segFg_$label"
+            )
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(36.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(bg)
+                    .clickable(enabled = enabled) { onSelect(value) }
+                    .padding(horizontal = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = label,
+                    fontFamily = SpaceGroteskFontFamily,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                    fontSize = 12.5.sp,
+                    color = fg,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
                 )
             }
         }
+    }
+}
 
-        Text(
-            text = band.label,
-            style = MaterialTheme.typography.labelSmall,
-            color = onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            modifier = Modifier.padding(top = 8.dp)
+/**
+ * Reusable Switch Row (`.switch-row` + `.sw`) matching `audio-eq-v7.html`.
+ */
+@Composable
+fun V7SwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    testTag: String,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalMonetPalette.current
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 12.dp)
+        ) {
+            Text(
+                text = title,
+                fontWeight = FontWeight.Medium,
+                fontSize = 14.sp,
+                color = palette.onSurface
+            )
+            Text(
+                text = subtitle,
+                fontSize = 12.sp,
+                color = palette.onVar
+            )
+        }
+        V7PillSwitch(
+            checked = checked,
+            enabled = enabled,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.testTag(testTag)
+        )
+    }
+}
+
+/**
+ * M3 Pill Switch (`.sw`, 50x30dp) matching `audio-eq-v7.html`.
+ */
+@Composable
+fun V7PillSwitch(
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalMonetPalette.current
+    val trackBg by animateColorAsState(
+        targetValue = if (checked) palette.primary else palette.sTop,
+        animationSpec = tween(180),
+        label = "swTrackBg"
+    )
+    val thumbColor by animateColorAsState(
+        targetValue = if (checked) palette.onPrimary else palette.outline,
+        animationSpec = tween(180),
+        label = "swThumbColor"
+    )
+    val thumbOffset by animateDpAsState(
+        targetValue = if (checked) 23.dp else 4.dp,
+        animationSpec = tween(180),
+        label = "swThumbOffset"
+    )
+
+    Box(
+        modifier = modifier
+            .width(50.dp)
+            .height(30.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(trackBg)
+            .border(
+                width = 1.dp,
+                color = if (checked) palette.primary else palette.outline,
+                shape = RoundedCornerShape(999.dp)
+            )
+            .clickable(enabled = enabled) { onCheckedChange(!checked) },
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Box(
+            modifier = Modifier
+                .offset(x = thumbOffset)
+                .size(20.dp)
+                .clip(CircleShape)
+                .background(thumbColor)
         )
     }
 }

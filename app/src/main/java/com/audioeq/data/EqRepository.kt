@@ -30,19 +30,20 @@ import java.util.Locale
 private val Context.eqDataStore by preferencesDataStore(name = "audio_eq_preferences")
 
 data class PersistedEqPreferences(
+    val masterEnabled: Boolean = true,
     val isEnabled: Boolean = true,
-    val selectedModeId: String = EngineMode.LEGACY.id,
+    val selectedModeId: String = EngineMode.ADB_SHIZUKU.id,
     val selectedProfileId: Int = DaxProfile.MUSIC.id, // v6 Section 4 Acoustic Profile (0=Dynamic, 1=Movie, 2=Music, 3=Voice)
     val selectedPresetId: String = "percussion_clarity",
     val gainsDb: List<Float> = EqConstants.BUILT_IN_PRESETS.first { it.id == "percussion_clarity" }.gainsDb,
     val rightGainsDb: List<Float>? = null, // Independent Right channel 10-band EQ when splitLREnabled is true (F4)
     val splitLREnabled: Boolean = false,
     val balanceDb: Float = 0.0f, // -6..+6 dB (F4)
-    val highPassHz: Float = 40f,
+    val highPassHz: Float = 0f,
     val intensity: Float = 1.0f,
     val volumeContourEnabled: Boolean = true,
     val nightModeEnabled: Boolean = false, // F8
-    val startOnBoot: Boolean = false, // F12
+    val startOnBoot: Boolean = true, // F12
     val usbBitPerfectEnabled: Boolean = false, // F7
     val selectedHeadphoneProfileId: String = "none",
     val headphoneStrength: Float = 0.8f,
@@ -62,7 +63,9 @@ data class PersistedEqPreferences(
     val compatibility10Band: Boolean = false,
     val transientMode: Boolean = false,
     val rootWarningAccepted: Boolean = false,
-    val dolbyBoseConfig: DolbyBoseDspConfig = DolbyBoseDspConfig()
+    val dolbyBoseConfig: DolbyBoseDspConfig = DolbyBoseDspConfig(),
+    val themeMode: String = "dark",
+    val seedHex: String = "#6750a4"
 )
 
 class EqRepository(private val context: Context) {
@@ -73,6 +76,7 @@ class EqRepository(private val context: Context) {
     private val sqlitePresetsTrigger = MutableStateFlow(0L)
 
     private object Keys {
+        val MASTER_ENABLED = booleanPreferencesKey("master_enabled")
         val IS_ENABLED = booleanPreferencesKey("is_enabled")
         val MODE_ID = stringPreferencesKey("mode_id")
         val PROFILE_ID = intPreferencesKey("dax_profile_id")
@@ -117,6 +121,10 @@ class EqRepository(private val context: Context) {
         val BASS_ENHANCER_ENABLED = booleanPreferencesKey("dolby_bass_enhancer_enabled")
         val VIRTUAL_BASS_ENABLED = booleanPreferencesKey("dolby_virtual_bass_enabled")
         val BOSE_PROFILE_ID = stringPreferencesKey("bose_profile_id")
+        val DOLBY_EXPERIMENTAL = booleanPreferencesKey("dolby_experimental_enabled")
+        val DOLBY_ENABLED = booleanPreferencesKey("dolby_control_enabled")
+        val THEME_MODE = stringPreferencesKey("theme_mode")
+        val SEED_HEX = stringPreferencesKey("monet_seed_hex")
     }
 
     val preferencesFlow: Flow<PersistedEqPreferences> = context.eqDataStore.data.map { prefs ->
@@ -153,25 +161,26 @@ class EqRepository(private val context: Context) {
         val deviceMap = decodeDeviceMemories(prefs[Keys.DEVICE_MEMORIES_RAW] ?: "")
 
         PersistedEqPreferences(
+            masterEnabled = prefs[Keys.MASTER_ENABLED] ?: true,
             isEnabled = prefs[Keys.IS_ENABLED] ?: true,
-            selectedModeId = prefs[Keys.MODE_ID] ?: EngineMode.LEGACY.id,
+            selectedModeId = prefs[Keys.MODE_ID] ?: EngineMode.ADB_SHIZUKU.id,
             selectedProfileId = (prefs[Keys.PROFILE_ID] ?: DaxProfile.MUSIC.id).coerceIn(0, 3),
             selectedPresetId = prefs[Keys.PRESET_ID] ?: defaultPreset.id,
             gainsDb = gains,
             rightGainsDb = rightGains,
             splitLREnabled = splitLR,
             balanceDb = (prefs[Keys.BALANCE_DB] ?: 0.0f).coerceIn(-6.0f, 6.0f),
-            highPassHz = prefs[Keys.HIGH_PASS_HZ] ?: defaultPreset.highPassHz,
+            highPassHz = (prefs[Keys.HIGH_PASS_HZ] ?: 0f).coerceIn(0f, 200f),
             intensity = (prefs[Keys.INTENSITY] ?: 1.0f).coerceIn(0.5f, 1.5f),
             volumeContourEnabled = prefs[Keys.VOLUME_CONTOUR] ?: true,
             nightModeEnabled = prefs[Keys.NIGHT_MODE] ?: false,
-            startOnBoot = prefs[Keys.START_ON_BOOT] ?: false,
+            startOnBoot = prefs[Keys.START_ON_BOOT] ?: true,
             usbBitPerfectEnabled = prefs[Keys.USB_BIT_PERFECT] ?: false,
             selectedHeadphoneProfileId = prefs[Keys.HEADPHONE_PROFILE_ID] ?: "none",
             headphoneStrength = (prefs[Keys.HEADPHONE_STRENGTH] ?: 0.8f).coerceIn(0.0f, 1.0f),
             headphoneFullRange = prefs[Keys.HEADPHONE_FULL_RANGE] ?: false,
             tiltBassDb = (prefs[Keys.TILT_BASS_DB] ?: 0.0f).coerceIn(-6.0f, 6.0f),
-            tiltTrebleDb = (prefs[Keys.TILT_TREBLE_DB] ?: 0.0f).coerceIn(-4.0f, 4.0f),
+            tiltTrebleDb = (prefs[Keys.TILT_TREBLE_DB] ?: 0.0f).coerceIn(-6.0f, 6.0f),
             customAutoEqName = prefs[Keys.CUSTOM_AUTOEQ_NAME] ?: "",
             customAutoEqSource = prefs[Keys.CUSTOM_AUTOEQ_SOURCE] ?: "",
             customAutoEqPath = prefs[Keys.CUSTOM_AUTOEQ_PATH] ?: "",
@@ -191,16 +200,20 @@ class EqRepository(private val context: Context) {
             transientMode = prefs[Keys.TRANSIENT_MODE] ?: false,
             rootWarningAccepted = prefs[Keys.ROOT_WARNING_ACCEPTED] ?: false,
             dolbyBoseConfig = DolbyBoseDspConfig(
-                ieqPreset = IeqPreset.fromId(prefs[Keys.IEQ_PRESET_ID] ?: IeqPreset.BALANCED.id),
-                ieqAmount = (prefs[Keys.IEQ_AMOUNT] ?: 14).coerceIn(0, 16),
+                ieqPreset = IeqPreset.fromId(prefs[Keys.IEQ_PRESET_ID] ?: IeqPreset.OFF.id),
+                ieqAmount = (prefs[Keys.IEQ_AMOUNT] ?: 10).coerceIn(0, 16),
                 ieqCustom10Db = ieqCustom10,
-                dialogueEnhancerEnabled = prefs[Keys.DIALOGUE_ENABLED] ?: true,
-                dialogueAmount = (prefs[Keys.DIALOGUE_AMOUNT] ?: 5).coerceIn(0, 16),
+                dialogueEnhancerEnabled = prefs[Keys.DIALOGUE_ENABLED] ?: false,
+                dialogueAmount = (prefs[Keys.DIALOGUE_AMOUNT] ?: 8).coerceIn(0, 16),
                 dialogueDucking = (prefs[Keys.DIALOGUE_DUCKING] ?: 2).coerceIn(0, 8),
-                bassEnhancerEnabled = prefs[Keys.BASS_ENHANCER_ENABLED] ?: true,
-                virtualBassEnabled = prefs[Keys.VIRTUAL_BASS_ENABLED] ?: true,
-                boseProfile = BoseProfile.fromId(prefs[Keys.BOSE_PROFILE_ID] ?: BoseProfile.OFF.id)
-            )
+                bassEnhancerEnabled = prefs[Keys.BASS_ENHANCER_ENABLED] ?: false,
+                virtualBassEnabled = prefs[Keys.VIRTUAL_BASS_ENABLED] ?: false,
+                boseProfile = BoseProfile.fromId(prefs[Keys.BOSE_PROFILE_ID] ?: BoseProfile.OFF.id),
+                dolbyExperimental = prefs[Keys.DOLBY_EXPERIMENTAL] ?: false,
+                dolbyEnabled = prefs[Keys.DOLBY_ENABLED] ?: false
+            ),
+            themeMode = prefs[Keys.THEME_MODE] ?: "dark",
+            seedHex = prefs[Keys.SEED_HEX] ?: "#6750a4"
         )
     }
 
@@ -213,6 +226,7 @@ class EqRepository(private val context: Context) {
     }.flowOn(Dispatchers.IO)
 
     suspend fun saveState(
+        masterEnabled: Boolean = true,
         isEnabled: Boolean,
         modeId: String,
         profileId: Int = DaxProfile.MUSIC.id,
@@ -240,9 +254,12 @@ class EqRepository(private val context: Context) {
         speakerCalStrength: Float,
         compatibility10Band: Boolean,
         transientMode: Boolean,
-        dolbyBoseConfig: DolbyBoseDspConfig = DolbyBoseDspConfig()
+        dolbyBoseConfig: DolbyBoseDspConfig = DolbyBoseDspConfig(),
+        themeMode: String = "dark",
+        seedHex: String = "#6750a4"
     ) {
         context.eqDataStore.edit { prefs ->
+            prefs[Keys.MASTER_ENABLED] = masterEnabled
             prefs[Keys.IS_ENABLED] = isEnabled
             prefs[Keys.MODE_ID] = modeId
             prefs[Keys.PROFILE_ID] = profileId.coerceIn(0, 3)
@@ -281,6 +298,10 @@ class EqRepository(private val context: Context) {
             prefs[Keys.BASS_ENHANCER_ENABLED] = dolbyBoseConfig.bassEnhancerEnabled
             prefs[Keys.VIRTUAL_BASS_ENABLED] = dolbyBoseConfig.virtualBassEnabled
             prefs[Keys.BOSE_PROFILE_ID] = dolbyBoseConfig.boseProfile.id
+            prefs[Keys.DOLBY_EXPERIMENTAL] = dolbyBoseConfig.dolbyExperimental
+            prefs[Keys.DOLBY_ENABLED] = dolbyBoseConfig.dolbyEnabled
+            prefs[Keys.THEME_MODE] = themeMode
+            prefs[Keys.SEED_HEX] = seedHex
         }
     }
 

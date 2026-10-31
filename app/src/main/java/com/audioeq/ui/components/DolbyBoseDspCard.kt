@@ -2,6 +2,9 @@ package com.audioeq.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,42 +28,56 @@ import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.audioeq.audio.BoseProfile
 import com.audioeq.audio.DolbyBoseDspConfig
 import com.audioeq.audio.DolbyBoseDspMath
 import com.audioeq.audio.IeqPreset
+import com.audioeq.model.EngineMode
+import com.audioeq.ui.theme.JetBrainsMonoFontFamily
+import com.audioeq.ui.theme.LocalMonetPalette
+import com.audioeq.ui.theme.SpaceGroteskFontFamily
 import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
- * Dolby & Bose Non-Root DSP Card below the Equalizer:
- * 1. Bose Profiles (Dynamic & Balanced) — Scenario 60 (+4 dB Sub/Air) & Scenario 61 (-3 dB 1kHz Dip)
- * 2. Intelligent Equalizer (IEQ) — Detailed, Balanced, Warm, Custom (can be set manually) + Off
- * 3. Dialogue Enhancer — 1–4 kHz Formant Peaking, MBC Upward Expansion & <=180 Hz Ambient Ducking
- * 4. Bass Enhancer (with Virtual Bass Harmonic Synthesis) — +7.44 dB Shelf + H2/H3/H4 Harmonic Synthesis
+ * Audio Enhancers & Profiles Card (`section#enhanceCard`) matching `audio-eq-v7.html`:
+ * 1. Bose Profiles (`Off`, `Dynamic`, `Balanced`)
+ * 2. Intelligent Equalizer (`Detailed`, `Balanced`, `Warm`, `Custom` + second row `Off (disable IEQ)` + `IEQ strength 0..16`)
+ * 3. Dialogue Enhancer (switch + `Dialogue amount 0..16` + `Ambient low-frequency ducking (≤ 180 Hz)`: `Off (0 dB)`, `Default (−2)`, `Strong (−4)`)
+ * 4. Bass Enhancer (switch + `Virtual bass harmonic synthesis` switch)
+ * 5. Conditional Dolby Control (`#dolbyBlock`: shown only when `dolbyExperimental` is on and engine != Legacy)
+ * 6. Bottom tonal buttons: `Calibration` and `ABX test`
  */
 @Composable
 fun DolbyBoseDspCard(
     config: DolbyBoseDspConfig,
-    isEnabled: Boolean,
+    masterEnabled: Boolean,
+    selectedMode: EngineMode,
     onSelectBoseProfile: (BoseProfile) -> Unit,
     onSelectIeqPreset: (IeqPreset) -> Unit,
     onIeqAmountChange: (Int) -> Unit,
@@ -71,736 +88,833 @@ fun DolbyBoseDspCard(
     onDialogueDuckingChange: (Int) -> Unit,
     onToggleBassEnhancer: (Boolean) -> Unit,
     onToggleVirtualBass: (Boolean) -> Unit,
+    onToggleDolbyControl: (Boolean) -> Unit,
     onResetDolbyBose: () -> Unit,
+    onOpenCalibration: () -> Unit,
+    onOpenAbxTest: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val contentAlpha = if (isEnabled) 1f else 0.48f
+    val palette = LocalMonetPalette.current
+    var showCustomBandSliders by remember { mutableStateOf(false) }
+
+    val cardAlpha by animateFloatAsState(
+        targetValue = if (masterEnabled) 1f else 0.45f,
+        animationSpec = tween(220),
+        label = "enhanceCardAlpha"
+    )
+
+    val enhanceSubText = if (masterEnabled) {
+        "Profiles and enhancers"
+    } else {
+        "Master is off · enhancers disabled"
+    }
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
+            .alpha(cardAlpha)
+            .border(
+                width = 1.dp,
+                color = palette.outlineV.copy(alpha = 0.55f),
+                shape = RoundedCornerShape(28.dp)
+            )
             .testTag("dolby_bose_dsp_card"),
         shape = RoundedCornerShape(28.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        tonalElevation = 2.dp
+        color = palette.sCont
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .alpha(contentAlpha)
-                .padding(horizontal = 18.dp, vertical = 18.dp),
+                .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Card Header
+            // Card Header (.enhance-head)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(
+                Row(
                     modifier = Modifier
                         .weight(1f)
-                        .padding(end = 8.dp)
+                        .padding(end = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(
-                        text = "Audio Enhancers & Profiles",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = "Bose Profiles · Intelligent EQ · Dialogue & Bass",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(palette.primaryC),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val iconColor = palette.onPrimaryC
+                        Canvas(modifier = Modifier.size(20.dp)) {
+                            val w = size.width
+                            val h = size.height
+                            val topPoly = Path().apply {
+                                moveTo(w * 0.5f, h * (3f / 24f))
+                                lineTo(w * (2f / 24f), h * (8f / 24f))
+                                lineTo(w * 0.5f, h * (13f / 24f))
+                                lineTo(w * (22f / 24f), h * (8f / 24f))
+                                close()
+                            }
+                            val midLine = Path().apply {
+                                moveTo(w * (2f / 24f), h * (13f / 24f))
+                                lineTo(w * 0.5f, h * (18f / 24f))
+                                lineTo(w * (22f / 24f), h * (13f / 24f))
+                            }
+                            val botLine = Path().apply {
+                                moveTo(w * (2f / 24f), h * (17f / 24f))
+                                lineTo(w * 0.5f, h * (22f / 24f))
+                                lineTo(w * (22f / 24f), h * (17f / 24f))
+                            }
+                            val strokeStyle = Stroke(
+                                width = 2.dp.toPx(),
+                                cap = StrokeCap.Round,
+                                join = StrokeJoin.Round
+                            )
+                            drawPath(topPoly, iconColor, style = strokeStyle)
+                            drawPath(midLine, iconColor, style = strokeStyle)
+                            drawPath(botLine, iconColor, style = strokeStyle)
+                        }
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Audio Enhancers & Profiles",
+                            fontFamily = SpaceGroteskFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 18.sp,
+                            letterSpacing = (-0.2).sp,
+                            color = palette.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = enhanceSubText,
+                            fontSize = 12.sp,
+                            color = palette.onVar,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
 
-                TextButton(
-                    onClick = onResetDolbyBose,
-                    enabled = isEnabled,
-                    modifier = Modifier.testTag("reset_dolby_bose_button")
+                // #enhanceReset (.ghost-btn)
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(enabled = masterEnabled) { onResetDolbyBose() }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .testTag("reset_dolby_bose_button"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.RestartAlt,
                         contentDescription = "Reset Enhancers",
+                        tint = palette.primary,
                         modifier = Modifier.size(16.dp)
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = "Reset",
+                        fontFamily = SpaceGroteskFontFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = palette.primary
+                    )
+                }
+            }
+
+            // ====================================================================
+            // 1. BOSE PROFILES (.block)
+            // ====================================================================
+            EnhancerBlockSurface {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        BlockIconBox {
+                            Icon(
+                                imageVector = Icons.Default.Speaker,
+                                contentDescription = "Bose Profiles",
+                                tint = palette.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Bose Profiles",
+                                fontFamily = SpaceGroteskFontFamily,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 15.sp,
+                                color = palette.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "Dynamic and balanced tuning",
+                                fontSize = 12.sp,
+                                color = palette.onVar,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    PillBadge(
+                        text = config.boseProfile.title,
+                        active = config.boseProfile != BoseProfile.OFF
+                    )
+                }
+
+                V7SegmentedRow(
+                    options = listOf(
+                        BoseProfile.OFF to "Off",
+                        BoseProfile.DYNAMIC to "Dynamic",
+                        BoseProfile.BALANCED to "Balanced"
+                    ),
+                    selectedValue = config.boseProfile,
+                    enabled = masterEnabled,
+                    onSelect = onSelectBoseProfile,
+                    modifier = Modifier.testTag("bose_segmented_row")
+                )
+            }
+
+            // ====================================================================
+            // 2. INTELLIGENT EQUALIZER (.block)
+            // ====================================================================
+            EnhancerBlockSurface {
+                val ieqPct = ((config.ieqAmount / 16.0f) * 100f).roundToInt()
+                val ieqBadgeText = if (config.ieqPreset == IeqPreset.OFF) {
+                    "Off"
+                } else {
+                    "${config.ieqPreset.title} · $ieqPct%"
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        BlockIconBox {
+                            Icon(
+                                imageVector = Icons.Default.GraphicEq,
+                                contentDescription = "Intelligent Equalizer",
+                                tint = palette.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Intelligent Equalizer",
+                                fontFamily = SpaceGroteskFontFamily,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 15.sp,
+                                color = palette.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "Adaptive target tone curve",
+                                fontSize = 12.sp,
+                                color = palette.onVar,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    PillBadge(
+                        text = ieqBadgeText,
+                        active = config.ieqPreset != IeqPreset.OFF
+                    )
+                }
+
+                // .seg.four: Detailed | Balanced | Warm | Custom
+                V7SegmentedRow(
+                    options = listOf(
+                        IeqPreset.DETAILED to "Detailed",
+                        IeqPreset.BALANCED to "Balanced",
+                        IeqPreset.WARM to "Warm",
+                        IeqPreset.CUSTOM to "Custom"
+                    ),
+                    selectedValue = config.ieqPreset,
+                    enabled = masterEnabled,
+                    onSelect = onSelectIeqPreset,
+                    modifier = Modifier.testTag("ieq_subsets_row")
+                )
+
+                // .seg (1 column): Off (disable IEQ)
+                V7SegmentedRow(
+                    options = listOf(IeqPreset.OFF to "Off (disable IEQ)"),
+                    selectedValue = config.ieqPreset,
+                    enabled = masterEnabled,
+                    onSelect = onSelectIeqPreset,
+                    modifier = Modifier.testTag("ieq_off_row")
+                )
+
+                // .slider-row: IEQ strength 0..16
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "IEQ strength",
+                            fontSize = 12.sp,
+                            color = palette.onVar
+                        )
+                        Text(
+                            text = "${config.ieqAmount} / 16 ($ieqPct%)",
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp,
+                            color = palette.primary
+                        )
+                    }
+                    Slider(
+                        value = config.ieqAmount.toFloat(),
+                        onValueChange = { onIeqAmountChange(it.roundToInt()) },
+                        valueRange = 0f..16f,
+                        steps = 15,
+                        enabled = masterEnabled,
+                        colors = SliderDefaults.colors(
+                            thumbColor = palette.primary,
+                            activeTrackColor = palette.primary,
+                            inactiveTrackColor = palette.sTop
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(28.dp)
+                            .testTag("ieq_amount_slider")
+                    )
+                }
+
+                // Optional Manual Custom IEQ 10-Band Target Editor when Custom is selected
+                AnimatedVisibility(visible = config.ieqPreset == IeqPreset.CUSTOM) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable(enabled = masterEnabled) {
+                                        showCustomBandSliders = !showCustomBandSliders
+                                    }
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Tune,
+                                    contentDescription = "Edit Custom IEQ Bands",
+                                    tint = palette.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = if (showCustomBandSliders) {
+                                        "Hide manual 10-band custom target"
+                                    } else {
+                                        "Edit manual 10-band custom target"
+                                    },
+                                    fontFamily = SpaceGroteskFontFamily,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 12.sp,
+                                    color = palette.primary
+                                )
+                            }
+                            if (showCustomBandSliders) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    TextButton(
+                                        onClick = { onResetIeqCustomBands(true) },
+                                        enabled = masterEnabled
+                                    ) {
+                                        Text("Flat", fontSize = 11.sp)
+                                    }
+                                    TextButton(
+                                        onClick = { onResetIeqCustomBands(false) },
+                                        enabled = masterEnabled
+                                    ) {
+                                        Text("Default", fontSize = 11.sp)
+                                    }
+                                }
+                            }
+                        }
+
+                        AnimatedVisibility(visible = showCustomBandSliders) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(palette.sCont)
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                DolbyBoseDspMath.FREQ_LABELS_10.forEachIndexed { idx, freqLabel ->
+                                    val bandVal = config.ieqCustom10Db.getOrElse(idx) { 0f }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "$freqLabel Hz",
+                                            fontFamily = JetBrainsMonoFontFamily,
+                                            fontSize = 11.sp,
+                                            color = palette.onVar,
+                                            modifier = Modifier.width(46.dp)
+                                        )
+                                        Slider(
+                                            value = bandVal,
+                                            onValueChange = { onIeqCustomBandChange(idx, it) },
+                                            valueRange = -12f..12f,
+                                            enabled = masterEnabled,
+                                            colors = SliderDefaults.colors(
+                                                thumbColor = palette.primary,
+                                                activeTrackColor = palette.primary,
+                                                inactiveTrackColor = palette.sTop
+                                            ),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .height(26.dp)
+                                                .testTag("ieq_custom_band_slider_$idx")
+                                        )
+                                        Text(
+                                            text = String.format(Locale.US, "%+.1f dB", bandVal),
+                                            fontFamily = JetBrainsMonoFontFamily,
+                                            fontSize = 11.sp,
+                                            color = palette.primary,
+                                            textAlign = TextAlign.End,
+                                            modifier = Modifier.width(52.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ====================================================================
+            // 3. DIALOGUE ENHANCER (.block)
+            // ====================================================================
+            EnhancerBlockSurface {
+                val deFormant2kDb = 6.25f * (config.dialogueAmount / 16.0f)
+                val deSubText = if (config.dialogueEnhancerEnabled) {
+                    String.format(
+                        Locale.US,
+                        "Amount %d/16 · +%.1f dB @ 2 kHz",
+                        config.dialogueAmount,
+                        deFormant2kDb
+                    )
+                } else {
+                    "Off"
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        BlockIconBox {
+                            Icon(
+                                imageVector = Icons.Default.RecordVoiceOver,
+                                contentDescription = "Dialogue Enhancer",
+                                tint = palette.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Dialogue Enhancer",
+                                fontFamily = SpaceGroteskFontFamily,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 15.sp,
+                                color = palette.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = deSubText,
+                                fontSize = 12.sp,
+                                color = palette.onVar,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    V7PillSwitch(
+                        checked = config.dialogueEnhancerEnabled,
+                        enabled = masterEnabled,
+                        onCheckedChange = onToggleDialogueEnhancer,
+                        modifier = Modifier.testTag("dialogue_enhancer_switch")
+                    )
+                }
+
+                // Dialogue amount slider (0..16)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Dialogue amount",
+                            fontSize = 12.sp,
+                            color = palette.onVar
+                        )
+                        Text(
+                            text = "${config.dialogueAmount} / 16",
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp,
+                            color = palette.primary
+                        )
+                    }
+                    Slider(
+                        value = config.dialogueAmount.toFloat(),
+                        onValueChange = { onDialogueAmountChange(it.roundToInt()) },
+                        valueRange = 0f..16f,
+                        steps = 15,
+                        enabled = masterEnabled,
+                        colors = SliderDefaults.colors(
+                            thumbColor = palette.primary,
+                            activeTrackColor = palette.primary,
+                            inactiveTrackColor = palette.sTop
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(28.dp)
+                            .testTag("dialogue_amount_slider")
+                    )
+                }
+
+                // Ambient low-frequency ducking (<= 180 Hz)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "Ambient low-frequency ducking (≤ 180 Hz)",
+                        fontSize = 12.sp,
+                        color = palette.onVar,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    V7SegmentedRow(
+                        options = listOf(
+                            0 to "Off (0 dB)",
+                            2 to "Default (−2)",
+                            4 to "Strong (−4)"
+                        ),
+                        selectedValue = config.dialogueDucking,
+                        enabled = masterEnabled,
+                        onSelect = onDialogueDuckingChange,
+                        modifier = Modifier.testTag("dialogue_ducking_row")
+                    )
+                }
+            }
+
+            // ====================================================================
+            // 4. BASS ENHANCER (.block)
+            // ====================================================================
+            EnhancerBlockSurface {
+                val bassSubText = if (config.bassEnhancerEnabled) {
+                    "+7.44 dB sub shelf"
+                } else {
+                    "Off"
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        BlockIconBox {
+                            Icon(
+                                imageVector = Icons.Default.Equalizer,
+                                contentDescription = "Bass Enhancer",
+                                tint = palette.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Bass Enhancer",
+                                fontFamily = SpaceGroteskFontFamily,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 15.sp,
+                                color = palette.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = bassSubText,
+                                fontSize = 12.sp,
+                                color = palette.onVar,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    V7PillSwitch(
+                        checked = config.bassEnhancerEnabled,
+                        enabled = masterEnabled,
+                        onCheckedChange = onToggleBassEnhancer,
+                        modifier = Modifier.testTag("bass_enhancer_switch")
+                    )
+                }
+
+                HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
+
+                V7SwitchRow(
+                    title = "Virtual bass harmonic synthesis",
+                    subtitle = "H2 (−2 dB), H3 (−9 dB), H4 (−12 dB)",
+                    checked = config.virtualBassEnabled,
+                    enabled = masterEnabled,
+                    onCheckedChange = onToggleVirtualBass,
+                    testTag = "virtual_bass_switch"
+                )
+            }
+
+            // ====================================================================
+            // 5. DOLBY CONTROL (#dolbyBlock — conditional on dolbyExperimental && mode != LEGACY)
+            // ====================================================================
+            val showDolbyBlock = config.dolbyExperimental && selectedMode != EngineMode.LEGACY
+            AnimatedVisibility(visible = showDolbyBlock) {
+                EnhancerBlockSurface {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("dolby_control_block"),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            BlockIconBox {
+                                Icon(
+                                    imageVector = Icons.Default.Tune,
+                                    contentDescription = "Dolby Control",
+                                    tint = palette.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Dolby Control",
+                                    fontFamily = SpaceGroteskFontFamily,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 15.sp,
+                                    color = palette.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "Experimental · RAM-only dolby.deepbass",
+                                    fontSize = 12.sp,
+                                    color = palette.onVar,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        V7PillSwitch(
+                            checked = config.dolbyEnabled,
+                            enabled = masterEnabled,
+                            onCheckedChange = onToggleDolbyControl,
+                            modifier = Modifier.testTag("dolby_control_switch")
+                        )
+                    }
+                }
+            }
+
+            // ====================================================================
+            // 6. BOTTOM ACTION BUTTONS (Calibration & ABX test)
+            // ====================================================================
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // #calBtn
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(palette.sHigh)
+                        .border(1.dp, palette.outlineV, RoundedCornerShape(16.dp))
+                        .clickable { onOpenCalibration() }
+                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                        .testTag("open_calibration_button"),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.GraphicEq,
+                        contentDescription = "Calibration",
+                        tint = palette.onSurface,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Calibration",
+                        fontFamily = SpaceGroteskFontFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = palette.onSurface,
+                        maxLines = 1
+                    )
+                }
+
+                // #abxBtn
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(palette.sHigh)
+                        .border(1.dp, palette.outlineV, RoundedCornerShape(16.dp))
+                        .clickable { onOpenAbxTest() }
+                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                        .testTag("open_abx_test_button"),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = "ABX test",
+                        tint = palette.onSurface,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "ABX test",
+                        fontFamily = SpaceGroteskFontFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = palette.onSurface,
                         maxLines = 1
                     )
                 }
             }
-
-            // ====================================================================
-            // 1. BOSE PROFILES (DYNAMIC & BALANCED)
-            // ====================================================================
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(end = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Equalizer,
-                                contentDescription = "Bose Profiles",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Bose Profiles (Dynamic & Balanced)",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = config.boseProfile.subtitle,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-
-                        StatusPillBadge(
-                            text = config.boseProfile.title,
-                            active = config.boseProfile != BoseProfile.OFF
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                            .padding(4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BoseProfile.entries.forEach { profile ->
-                            val selected = config.boseProfile == profile
-                            SegmentedOptionPill(
-                                label = profile.title,
-                                selected = selected,
-                                enabled = isEnabled,
-                                onClick = { onSelectBoseProfile(profile) },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("bose_profile_${profile.id}")
-                            )
-                        }
-                    }
-                }
-            }
-
-            // ====================================================================
-            // 2. INTELLIGENT EQUALIZER (IEQ: Detailed, Balanced, Warm, Custom)
-            // ====================================================================
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    val ieqPct = ((config.ieqAmount / 16.0f) * 100f).roundToInt()
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(end = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.GraphicEq,
-                                contentDescription = "Intelligent Equalizer",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Intelligent Equalizer (IEQ)",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = if (config.ieqPreset == IeqPreset.CUSTOM) {
-                                        "Custom manual target curve · Strength $ieqPct%"
-                                    } else {
-                                        "Detailed, Balanced, Warm & Manual Custom"
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-
-                        StatusPillBadge(
-                            text = if (config.ieqPreset == IeqPreset.OFF) {
-                                "Off"
-                            } else {
-                                "${config.ieqPreset.title} · $ieqPct%"
-                            },
-                            active = config.ieqPreset != IeqPreset.OFF
-                        )
-                    }
-
-                    // Uniform Segmented Layout:
-                    // Row 1: Detailed | Balanced | Warm | Custom
-                    // Row 2: Off (Full-width or paired cleanly) -> Using 5 equal-height pills across 2 clean rows:
-                    // Top row: Detailed, Balanced, Warm, Custom (the 4 subsets)
-                    // Bottom row or 5-segment bar: Let's use a 2-row uniform container so every word has generous space and never wraps
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                            .padding(4.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf(
-                                IeqPreset.DETAILED,
-                                IeqPreset.BALANCED,
-                                IeqPreset.WARM,
-                                IeqPreset.CUSTOM
-                            ).forEach { preset ->
-                                SegmentedOptionPill(
-                                    label = preset.title,
-                                    selected = config.ieqPreset == preset,
-                                    enabled = isEnabled,
-                                    onClick = { onSelectIeqPreset(preset) },
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("ieq_chip_${preset.id}")
-                                )
-                            }
-                        }
-
-                        SegmentedOptionPill(
-                            label = "Off (Disable IEQ)",
-                            selected = config.ieqPreset == IeqPreset.OFF,
-                            enabled = isEnabled,
-                            onClick = { onSelectIeqPreset(IeqPreset.OFF) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("ieq_chip_${IeqPreset.OFF.id}")
-                        )
-                    }
-
-                    AnimatedVisibility(visible = config.ieqPreset != IeqPreset.OFF) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "IEQ Strength",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = "${config.ieqAmount} / 16 ($ieqPct%)",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                                Slider(
-                                    value = config.ieqAmount.toFloat(),
-                                    onValueChange = { onIeqAmountChange(it.roundToInt()) },
-                                    valueRange = 0f..16f,
-                                    steps = 15,
-                                    enabled = isEnabled,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("ieq_amount_slider")
-                                )
-                            }
-
-                            // Manual Custom IEQ 10-Band Target Editor when Custom is selected
-                            AnimatedVisibility(visible = config.ieqPreset == IeqPreset.CUSTOM) {
-                                Surface(
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("ieq_custom_manual_panel")
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(12.dp),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Row(
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .padding(end = 8.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Tune,
-                                                    contentDescription = "Manual Custom IEQ",
-                                                    tint = MaterialTheme.colorScheme.primary,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                                Text(
-                                                    text = "Manual Custom IEQ Target (dB)",
-                                                    style = MaterialTheme.typography.labelLarge,
-                                                    color = MaterialTheme.colorScheme.onSurface,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                            }
-
-                                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                                TextButton(
-                                                    onClick = { onResetIeqCustomBands(true) },
-                                                    enabled = isEnabled,
-                                                    modifier = Modifier.testTag("ieq_custom_flat_button")
-                                                ) {
-                                                    Text("Flat", style = MaterialTheme.typography.labelSmall)
-                                                }
-                                                TextButton(
-                                                    onClick = { onResetIeqCustomBands(false) },
-                                                    enabled = isEnabled,
-                                                    modifier = Modifier.testTag("ieq_custom_default_button")
-                                                ) {
-                                                    Text("Default", style = MaterialTheme.typography.labelSmall)
-                                                }
-                                            }
-                                        }
-
-                                        DolbyBoseDspMath.FREQ_LABELS_10.forEachIndexed { idx, freqLabel ->
-                                            val bandVal = config.ieqCustom10Db.getOrElse(idx) { 0f }
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                            ) {
-                                                Text(
-                                                    text = "$freqLabel Hz",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    modifier = Modifier.width(46.dp),
-                                                    maxLines = 1
-                                                )
-                                                Slider(
-                                                    value = bandVal,
-                                                    onValueChange = { onIeqCustomBandChange(idx, it) },
-                                                    valueRange = -12f..12f,
-                                                    enabled = isEnabled,
-                                                    modifier = Modifier
-                                                        .weight(1f)
-                                                        .height(28.dp)
-                                                        .testTag("ieq_custom_band_slider_$idx")
-                                                )
-                                                Text(
-                                                    text = String.format(Locale.US, "%+.1f dB", bandVal),
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    fontWeight = FontWeight.Medium,
-                                                    color = MaterialTheme.colorScheme.primary,
-                                                    textAlign = TextAlign.End,
-                                                    modifier = Modifier.width(52.dp),
-                                                    maxLines = 1
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ====================================================================
-            // 3. DIALOGUE ENHANCER (Formant Expansion 1-4 kHz + Ambient Ducking <=180 Hz)
-            // ====================================================================
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    val deFactor = if (config.dialogueEnhancerEnabled) config.dialogueAmount / 16.0f else 0f
-                    val formant2kDb = 6.25f * deFactor
-                    val duckDb = config.dialogueDucking * deFactor
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(end = 12.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.RecordVoiceOver,
-                                contentDescription = "Dialogue Enhancer",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Dialogue Enhancer",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = if (config.dialogueEnhancerEnabled) {
-                                        String.format(
-                                            Locale.US,
-                                            "Amount %d/16 · +%.1f dB @ 2 kHz · -%.1f dB Ducking",
-                                            config.dialogueAmount,
-                                            formant2kDb,
-                                            duckDb
-                                        )
-                                    } else {
-                                        "1–4 kHz Formant Peaking & Upward Vocal Expansion"
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-
-                        Switch(
-                            checked = config.dialogueEnhancerEnabled,
-                            onCheckedChange = onToggleDialogueEnhancer,
-                            enabled = isEnabled,
-                            modifier = Modifier.testTag("dialogue_enhancer_switch")
-                        )
-                    }
-
-                    AnimatedVisibility(visible = config.dialogueEnhancerEnabled) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "Dialogue Amount",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = "${config.dialogueAmount} / 16",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                                Slider(
-                                    value = config.dialogueAmount.toFloat(),
-                                    onValueChange = { onDialogueAmountChange(it.roundToInt()) },
-                                    valueRange = 0f..16f,
-                                    steps = 15,
-                                    enabled = isEnabled,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("dialogue_amount_slider")
-                                )
-                            }
-
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(
-                                    text = "Ambient Low-Frequency Ducking (≤ 180 Hz)",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                                        .padding(4.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    listOf(
-                                        0 to "Off (0 dB)",
-                                        2 to "Default (-2 dB)",
-                                        4 to "Strong (-4 dB)"
-                                    ).forEach { (duckVal, label) ->
-                                        SegmentedOptionPill(
-                                            label = label,
-                                            selected = config.dialogueDucking == duckVal,
-                                            enabled = isEnabled,
-                                            onClick = { onDialogueDuckingChange(duckVal) },
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .testTag("dialogue_ducking_chip_$duckVal")
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ====================================================================
-            // 4. BASS ENHANCER (WITH VIRTUAL BASS HARMONIC SYNTHESIS)
-            // ====================================================================
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(end = 12.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Speaker,
-                                contentDescription = "Bass Enhancer",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Bass Enhancer",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = if (config.bassEnhancerEnabled) {
-                                        if (config.virtualBassEnabled) {
-                                            "+7.44 dB Sub Shelf · Virtual Harmonics Active"
-                                        } else {
-                                            "+7.44 dB Sub Shelf · Cutoff 504 Hz"
-                                        }
-                                    } else {
-                                        "Sub-bass boost & Virtual Bass Harmonic Synthesis"
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-
-                        Switch(
-                            checked = config.bassEnhancerEnabled,
-                            onCheckedChange = onToggleBassEnhancer,
-                            enabled = isEnabled,
-                            modifier = Modifier.testTag("bass_enhancer_switch")
-                        )
-                    }
-
-                    AnimatedVisibility(visible = config.bassEnhancerEnabled) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .padding(end = 12.dp)
-                                ) {
-                                    Text(
-                                        text = "Virtual Bass Harmonic Synthesis",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "H2 (-2 dB), H3 (-9 dB) & H4 (-12 dB) in 229–494 Hz window",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                Switch(
-                                    checked = config.virtualBassEnabled,
-                                    onCheckedChange = onToggleVirtualBass,
-                                    enabled = isEnabled,
-                                    modifier = Modifier.testTag("virtual_bass_switch")
-                                )
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }
 
 @Composable
-private fun StatusPillBadge(
+private fun EnhancerBlockSurface(
+    content: @Composable () -> Unit
+) {
+    val palette = LocalMonetPalette.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(palette.sLow)
+            .border(1.dp, palette.outlineV.copy(alpha = 0.45f), RoundedCornerShape(20.dp))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun BlockIconBox(
+    content: @Composable () -> Unit
+) {
+    val palette = LocalMonetPalette.current
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(palette.sHigh),
+        contentAlignment = Alignment.Center
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun PillBadge(
     text: String,
     active: Boolean
 ) {
-    Surface(
-        shape = RoundedCornerShape(999.dp),
-        color = if (active) {
-            MaterialTheme.colorScheme.primaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceContainerHighest
-        },
-        contentColor = if (active) {
-            MaterialTheme.colorScheme.onPrimaryContainer
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        }
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-        )
-    }
-}
-
-@Composable
-private fun SegmentedOptionPill(
-    label: String,
-    selected: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val pillBg by animateColorAsState(
-        targetValue = if (selected) {
-            MaterialTheme.colorScheme.primaryContainer
-        } else {
-            Color.Transparent
-        },
-        label = "segmentedPillBg"
+    val palette = LocalMonetPalette.current
+    val bg by animateColorAsState(
+        targetValue = if (active) palette.primaryC else palette.sTop,
+        animationSpec = tween(160),
+        label = "pillBadgeBg"
     )
-    val pillContent by animateColorAsState(
-        targetValue = if (selected) {
-            MaterialTheme.colorScheme.onPrimaryContainer
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        },
-        label = "segmentedPillContent"
+    val fg by animateColorAsState(
+        targetValue = if (active) palette.onPrimaryC else palette.onVar,
+        animationSpec = tween(160),
+        label = "pillBadgeFg"
     )
 
     Box(
-        modifier = modifier
-            .height(38.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(pillBg)
-            .border(
-                width = if (selected) 1.dp else 0.dp,
-                color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f) else Color.Transparent,
-                shape = RoundedCornerShape(10.dp)
-            )
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 8.dp),
-        contentAlignment = Alignment.Center
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(bg)
+            .padding(horizontal = 11.dp, vertical = 4.dp)
     ) {
         Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            color = pillContent,
-            textAlign = TextAlign.Center,
+            text = text,
+            fontFamily = JetBrainsMonoFontFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 11.sp,
+            color = fg,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )

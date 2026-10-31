@@ -354,7 +354,7 @@ object EqConstants {
         ),
         PresetConfig(
             id = "percussion_clarity",
-            name = "Percussion Clarity",
+            name = "Percussion",
             description = "Tuned for tabla: 62–125 Hz bayan weight, -3.5 dB @ 250 Hz boxiness cut, +3.5 dB @ 4 kHz stroke attack, +3 dB @ 8 kHz sizzle.",
             gainsDb = listOf(-4f, 1.5f, 2.5f, -3.5f, -2f, 0f, 1.5f, 3.5f, 3f, 1.5f),
             largestBoostDb = 3.5f,
