@@ -57,7 +57,6 @@ import com.audioeq.audio.BoseProfile
 import com.audioeq.audio.DolbyBoseDspConfig
 import com.audioeq.audio.DolbyBoseDspMath
 import com.audioeq.audio.IeqPreset
-import com.audioeq.model.EngineMode
 import com.audioeq.ui.theme.JetBrainsMonoFontFamily
 import com.audioeq.ui.theme.LocalMonetPalette
 import com.audioeq.ui.theme.SpaceGroteskFontFamily
@@ -65,19 +64,17 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
- * Audio Enhancers & Profiles Card (`section#enhanceCard`) matching `audio-eq-v7.html`:
- * 1. Bose Profiles (`Off`, `Dynamic`, `Balanced`)
+ * Audio Enhancers & Profiles Card (`section#enhanceCard`):
+ * 1. Bose Profiles (`Off`, `Dynamic`, `Balanced`, `3D`, `Live Music`)
  * 2. Intelligent Equalizer (`Detailed`, `Balanced`, `Warm`, `Custom` + second row `Off (disable IEQ)` + `IEQ strength 0..16`)
  * 3. Dialogue Enhancer (switch + `Dialogue amount 0..16` + `Ambient low-frequency ducking (≤ 180 Hz)`: `Off (0 dB)`, `Default (−2)`, `Strong (−4)`)
- * 4. Bass Enhancer (switch + `Virtual bass harmonic synthesis` switch)
- * 5. Conditional Dolby Control (`#dolbyBlock`: shown only when `dolbyExperimental` is on and engine != Legacy)
- * 6. Bottom tonal buttons: `Calibration` and `ABX test`
+ * 4. Bass Enhancer (switch + `Bass boost level` slider `0..100%` without volume suppression + `Virtual bass harmonic synthesis` switch)
+ * 5. Bottom tonal buttons: `Calibration` and `ABX test`
  */
 @Composable
 fun DolbyBoseDspCard(
     config: DolbyBoseDspConfig,
     masterEnabled: Boolean,
-    selectedMode: EngineMode,
     onSelectBoseProfile: (BoseProfile) -> Unit,
     onSelectIeqPreset: (IeqPreset) -> Unit,
     onIeqAmountChange: (Int) -> Unit,
@@ -87,8 +84,8 @@ fun DolbyBoseDspCard(
     onDialogueAmountChange: (Int) -> Unit,
     onDialogueDuckingChange: (Int) -> Unit,
     onToggleBassEnhancer: (Boolean) -> Unit,
+    onBassEnhancerStrengthChange: (Int) -> Unit,
     onToggleVirtualBass: (Boolean) -> Unit,
-    onToggleDolbyControl: (Boolean) -> Unit,
     onResetDolbyBose: () -> Unit,
     onOpenCalibration: () -> Unit,
     onOpenAbxTest: () -> Unit,
@@ -228,7 +225,7 @@ fun DolbyBoseDspCard(
             }
 
             // ====================================================================
-            // 1. BOSE PROFILES (.block)
+            // 1. BOSE PROFILES (.block) — Off, Dynamic, Balanced, 3D, Live Music
             // ====================================================================
             EnhancerBlockSurface {
                 Row(
@@ -262,7 +259,7 @@ fun DolbyBoseDspCard(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "Dynamic and balanced tuning",
+                                text = config.boseProfile.subtitle,
                                 fontSize = 12.sp,
                                 color = palette.onVar,
                                 maxLines = 1,
@@ -277,6 +274,7 @@ fun DolbyBoseDspCard(
                     )
                 }
 
+                // Row 1: Off | Dynamic | Balanced
                 V7SegmentedRow(
                     options = listOf(
                         BoseProfile.OFF to "Off",
@@ -287,6 +285,18 @@ fun DolbyBoseDspCard(
                     enabled = masterEnabled,
                     onSelect = onSelectBoseProfile,
                     modifier = Modifier.testTag("bose_segmented_row")
+                )
+
+                // Row 2: 3D | Live Music (Square Sound VirtualizerMz & EnvironmentalReverbMz)
+                V7SegmentedRow(
+                    options = listOf(
+                        BoseProfile.EFFECT_3D to "3D",
+                        BoseProfile.LIVE_MUSIC to "Live Music"
+                    ),
+                    selectedValue = config.boseProfile,
+                    enabled = masterEnabled,
+                    onSelect = onSelectBoseProfile,
+                    modifier = Modifier.testTag("bose_spatial_segmented_row")
                 )
             }
 
@@ -654,11 +664,21 @@ fun DolbyBoseDspCard(
             }
 
             // ====================================================================
-            // 4. BASS ENHANCER (.block)
+            // 4. BASS ENHANCER (.block) — with Volume-Preserving Bass Slider
             // ====================================================================
             EnhancerBlockSurface {
+                val peakSubShelfDb = DolbyBoseDspMath.bassEnhancerBandBoostDb(
+                    bandIndex = 1,
+                    strengthPct = config.bassEnhancerStrength,
+                    virtualBassEnabled = config.virtualBassEnabled
+                )
                 val bassSubText = if (config.bassEnhancerEnabled) {
-                    "+7.44 dB sub shelf"
+                    String.format(
+                        Locale.US,
+                        "+%.2f dB sub shelf · %d/1000 · No volume drop",
+                        peakSubShelfDb,
+                        config.bassBoostStrengthPermille.toInt()
+                    )
                 } else {
                     "Off"
                 }
@@ -711,6 +731,53 @@ fun DolbyBoseDspCard(
                     )
                 }
 
+                // Bass boost level slider (0..100% -> 0..1000 BassBoostMz strength, zero volume suppression)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Bass boost level",
+                            fontSize = 12.sp,
+                            color = palette.onVar
+                        )
+                        Text(
+                            text = String.format(
+                                Locale.US,
+                                "%d%% (+%.1f dB)",
+                                config.bassEnhancerStrength,
+                                peakSubShelfDb
+                            ),
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp,
+                            color = palette.primary,
+                            modifier = Modifier.testTag("bass_enhancer_strength_text")
+                        )
+                    }
+                    Slider(
+                        value = config.bassEnhancerStrength.toFloat(),
+                        onValueChange = { onBassEnhancerStrengthChange(it.roundToInt()) },
+                        valueRange = 0f..100f,
+                        steps = 19,
+                        enabled = masterEnabled,
+                        colors = SliderDefaults.colors(
+                            thumbColor = palette.primary,
+                            activeTrackColor = palette.primary,
+                            inactiveTrackColor = palette.sTop
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(28.dp)
+                            .testTag("bass_enhancer_strength_slider")
+                    )
+                }
+
                 HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
 
                 V7SwitchRow(
@@ -721,64 +788,6 @@ fun DolbyBoseDspCard(
                     onCheckedChange = onToggleVirtualBass,
                     testTag = "virtual_bass_switch"
                 )
-            }
-
-            // ====================================================================
-            // 5. DOLBY CONTROL (#dolbyBlock — conditional on dolbyExperimental && mode != LEGACY)
-            // ====================================================================
-            val showDolbyBlock = config.dolbyExperimental && selectedMode != EngineMode.LEGACY
-            AnimatedVisibility(visible = showDolbyBlock) {
-                EnhancerBlockSurface {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("dolby_control_block"),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(end = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            BlockIconBox {
-                                Icon(
-                                    imageVector = Icons.Default.Tune,
-                                    contentDescription = "Dolby Control",
-                                    tint = palette.primary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Dolby Control",
-                                    fontFamily = SpaceGroteskFontFamily,
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 15.sp,
-                                    color = palette.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "Experimental · RAM-only dolby.deepbass",
-                                    fontSize = 12.sp,
-                                    color = palette.onVar,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-
-                        V7PillSwitch(
-                            checked = config.dolbyEnabled,
-                            enabled = masterEnabled,
-                            onCheckedChange = onToggleDolbyControl,
-                            modifier = Modifier.testTag("dolby_control_switch")
-                        )
-                    }
-                }
             }
 
             // ====================================================================

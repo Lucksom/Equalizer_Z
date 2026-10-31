@@ -75,8 +75,8 @@ data class EqUiState(
     val currentVolumeRatio: Float = 0.6f,
     val activeRoute: OutputRoute = OutputRoute.SPEAKER,
     val activeDeviceKey: String = "",
-    val inputGainDb: Float = -3.0f,
-    val makeupGainDb: Float = 0.0f,
+    val inputGainDb: Float = 0.0f,
+    val makeupGainDb: Float = 0.5f,
     val ceilingLoadDb: Float = 0.0f, // max(0, max(effective31) - 3)
     val highPassHz: Float = 0f,
     val bassHarmonicMixDb: Float? = -15f,
@@ -146,11 +146,20 @@ data class EqUiState(
     val activePresetDisplayName: String
         get() = presets.find { it.id == selectedPresetId }?.name ?: "Custom"
 
+    /**
+     * Computes the composite gain at 10-band index [i]:
+     * - Top power button (`masterEnabled == false`) disables EVERYTHING (returns 0f).
+     * - Equalizer power button (`isEnabled == false`) disables ONLY the 10-band Equalizer sliders/preset curve,
+     *   while Tone and Audio Enhancers & Profiles continue to operate independently!
+     */
     fun effectiveGainDb(i: Int): Float {
-        if (!isEnabled || isAbCompare || diagnostics.usbBitPerfectActive) return 0f
+        if (!masterEnabled || isAbCompare || diagnostics.usbBitPerfectActive) return 0f
         val baseGains = activeSlidersGainsDb
-        var g = baseGains.getOrElse(i) { 0f } * intensity
-        if (!masterEnabled) return g.coerceIn(-12f, 12f)
+        var g = if (isEnabled) {
+            baseGains.getOrElse(i) { 0f } * intensity
+        } else {
+            0f
+        }
         val bf = max(0f, (3f - i) / 3f)
         val tf = max(0f, (i - 5f) / 4f)
         g += tiltBassDb * bf + tiltTrebleDb * tf
@@ -175,12 +184,11 @@ data class EqUiState(
         }
         g += ieqCurve.getOrElse(i) { 0f } * ieqS
         if (dolbyBoseConfig.bassEnhancerEnabled) {
-            when (i) {
-                0 -> g += 5.91f
-                1 -> g += 7.44f
-                2 -> g += if (dolbyBoseConfig.virtualBassEnabled) 4.18f else 3.5f
-                3 -> g += if (dolbyBoseConfig.virtualBassEnabled) 1.98f else 1.2f
-            }
+            g += DolbyBoseDspMath.bassEnhancerBandBoostDb(
+                bandIndex = i,
+                strengthPct = dolbyBoseConfig.bassEnhancerStrength,
+                virtualBassEnabled = dolbyBoseConfig.virtualBassEnabled
+            ).toFloat()
         }
         if (dolbyBoseConfig.dialogueEnhancerEnabled) {
             val df = dolbyBoseConfig.dialogueAmount.coerceIn(0, 16) / 16f
@@ -189,12 +197,6 @@ data class EqUiState(
                 5 -> g += 4.0f * df
                 6 -> g += 6.25f * df
                 7 -> g += 4.5f * df
-            }
-        }
-        if (dolbyBoseConfig.dolbyExperimental && selectedMode != EngineMode.LEGACY && dolbyBoseConfig.dolbyEnabled) {
-            when (i) {
-                0 -> g += 2.0f
-                1 -> g += 1.5f
             }
         }
         return g.coerceIn(-12f, 12f)
@@ -692,12 +694,25 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun buildCurrentLayers(state: EqUiState): Layers {
-        val userDb = DoubleArray(10) { i -> state.gainsDb.getOrElse(i) { 0f }.toDouble() }
-        val rightUserDb = if (state.splitLREnabled) {
+        if (!state.masterEnabled) {
+            return Layers(
+                userDb = DoubleArray(10),
+                intensity = 1.0,
+                routeDb = DoubleArray(10),
+                contourDb = DoubleArray(10)
+            )
+        }
+        val eqEnabled = state.isEnabled
+        val userDb = if (eqEnabled) {
+            DoubleArray(10) { i -> state.gainsDb.getOrElse(i) { 0f }.toDouble() }
+        } else {
+            DoubleArray(10)
+        }
+        val rightUserDb = if (eqEnabled && state.splitLREnabled) {
             DoubleArray(10) { i -> state.rightGainsDb.getOrElse(i) { 0f }.toDouble() }
         } else null
-        val isFlat = state.selectedPresetId == "flat"
-        val intensity = if (isFlat) 1.0 else state.intensity.toDouble()
+        val isFlat = eqEnabled && state.selectedPresetId == "flat"
+        val intensity = if (!eqEnabled || isFlat) 1.0 else state.intensity.toDouble()
 
         // v5 Section 6: If speaker calibration is active on Speaker route, use zero route offsets
         val routeDb = if (isFlat) {
@@ -708,17 +723,16 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             state.activeRoute.offsetsDb.clone()
         }
 
-        val contourDb = if (state.masterEnabled && state.volumeContourEnabled && !isFlat) {
+        val contourDb = if (state.volumeContourEnabled && !isFlat) {
             currentContourOffsets.clone()
         } else {
             DoubleArray(10)
         }
 
-        val effTiltBass = if (state.masterEnabled) state.tiltBassDb else 0f
-        val effTiltTreble = if (state.masterEnabled) state.tiltTrebleDb else 0f
+        val effTiltBass = state.tiltBassDb
+        val effTiltTreble = state.tiltTrebleDb
         val hasTilt = abs(effTiltBass) > 0.01f || abs(effTiltTreble) > 0.01f
         val correction31 = when {
-            isFlat || !state.masterEnabled -> DoubleArray(31)
             state.activeRoute == OutputRoute.SPEAKER && state.speakerCalEnabled && state.speakerCorrection31Db.size == 31 -> {
                 DoubleArray(31) { state.speakerCorrection31Db[it].toDouble() }
             }
@@ -744,43 +758,22 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             else -> DoubleArray(31)
         }
 
-        val hearingLeft31 = if (!isFlat && state.masterEnabled && state.hearingCurve.enabled) {
+        val hearingLeft31 = if (state.hearingCurve.enabled) {
             Dsp.computeHearingCurve31(state.hearingCurve.leftEarDb, state.hearingCurve.strength)
         } else {
             DoubleArray(31)
         }
-        val hearingRight31 = if (!isFlat && state.masterEnabled && state.hearingCurve.enabled) {
+        val hearingRight31 = if (state.hearingCurve.enabled) {
             Dsp.computeHearingCurve31(state.hearingCurve.rightEarDb, state.hearingCurve.strength)
         } else {
             DoubleArray(31)
         }
 
-        val effectiveDolbyCfg = if (state.masterEnabled) {
-            state.dolbyBoseConfig.copy(
-                dolbyEnabled = state.dolbyBoseConfig.dolbyEnabled &&
-                    state.dolbyBoseConfig.dolbyExperimental &&
-                    state.selectedMode != EngineMode.LEGACY
-            )
-        } else {
-            DolbyBoseDspConfig(
-                ieqPreset = IeqPreset.OFF,
-                dialogueEnhancerEnabled = false,
-                bassEnhancerEnabled = false,
-                virtualBassEnabled = false,
-                boseProfile = BoseProfile.OFF,
-                dolbyExperimental = false,
-                dolbyEnabled = false
-            )
-        }
-
-        val dolbyBose10 = if (state.masterEnabled) {
-            DolbyBoseDspMath.computeComposite10BandDeltaDb(
-                config = effectiveDolbyCfg,
-                userCustom10Db = userDb
-            )
-        } else {
-            DoubleArray(10)
-        }
+        val rawUserGainsForIeq = DoubleArray(10) { i -> state.gainsDb.getOrElse(i) { 0f }.toDouble() }
+        val dolbyBose10 = DolbyBoseDspMath.computeComposite10BandDeltaDb(
+            config = state.dolbyBoseConfig,
+            userCustom10Db = rawUserGainsForIeq
+        )
 
         return Layers(
             userDb = userDb,
@@ -788,7 +781,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             routeDb = routeDb,
             contourDb = contourDb,
             correction31 = correction31,
-            balanceDb = if (isFlat) 0f else state.balanceDb,
+            balanceDb = state.balanceDb,
             rightUserDb = rightUserDb,
             hearingLeft31 = hearingLeft31,
             hearingRight31 = hearingRight31,
@@ -816,13 +809,22 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
         val matchedPreset = s.presets.find { it.id == s.selectedPresetId }
         val mbc = EqConstants.mbcForPreset(matchedPreset, s.nightModeEnabled)
-        val flatBypass = matchedPreset?.bypassChain == true
-        val tier1Native5 = matchedPreset?.legacyNativeDb?.toFloatArray()
-            ?: EqConstants.convert10BandTo5BandNative(s.gainsDb).toFloatArray()
+        val flatBypass = !s.isEnabled || (matchedPreset?.bypassChain == true)
+        val effective10ForLegacy = List(10) { i -> s.effectiveGainDb(i) }
+        val tier1Native5 = if (s.isEnabled && matchedPreset?.legacyNativeDb != null &&
+            s.dolbyBoseConfig.boseProfile == BoseProfile.OFF &&
+            s.dolbyBoseConfig.ieqPreset == IeqPreset.OFF &&
+            !s.dolbyBoseConfig.dialogueEnhancerEnabled &&
+            !s.dolbyBoseConfig.bassEnhancerEnabled
+        ) {
+            matchedPreset.legacyNativeDb.toFloatArray()
+        } else {
+            EqConstants.convert10BandTo5BandNative(effective10ForLegacy).toFloatArray()
+        }
 
         engineController.loadEngineState(
             mode = s.selectedMode,
-            enabled = s.isEnabled,
+            enabled = s.masterEnabled,
             abCompare = s.isAbCompare,
             daxProfile = s.selectedDaxProfile,
             dolbyBoseConfig = s.dolbyBoseConfig,
@@ -841,7 +843,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         val makeupGain = engineController.currentMakeupGainDb
         val ceilingLoad = engineController.currentCeilingLoadDb
 
-        syncReferenceMonitorDsp(s, layers, inGain, makeupGain, flatBypass && s.selectedDaxProfile == DaxProfile.MUSIC)
+        syncReferenceMonitorDsp(s, layers, inGain, makeupGain, flatBypass)
 
         _uiState.update {
             it.copy(
@@ -864,11 +866,12 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     private fun applySliderOrContourFast(persistNow: Boolean = true) {
         val s = _uiState.value
         val layers = buildCurrentLayers(s)
-        val flatBypass = s.selectedPresetId == "flat"
-        val tier1Native5 = EqConstants.convert10BandTo5BandNative(s.gainsDb).toFloatArray()
+        val flatBypass = !s.isEnabled || s.selectedPresetId == "flat"
+        val effective10ForLegacy = List(10) { i -> s.effectiveGainDb(i) }
+        val tier1Native5 = EqConstants.convert10BandTo5BandNative(effective10ForLegacy).toFloatArray()
 
         engineController.updateSlidersOrContourFast(
-            enabled = s.isEnabled,
+            enabled = s.masterEnabled,
             abCompare = s.isAbCompare,
             daxProfile = s.selectedDaxProfile,
             dolbyBoseConfig = s.dolbyBoseConfig,
@@ -880,7 +883,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
         val ceilingLoad = engineController.currentCeilingLoadDb
 
-        syncReferenceMonitorDsp(s, layers, s.inputGainDb, s.makeupGainDb, flatBypass && s.selectedDaxProfile == DaxProfile.MUSIC)
+        syncReferenceMonitorDsp(s, layers, s.inputGainDb, s.makeupGainDb, flatBypass)
 
         _uiState.update {
             it.copy(ceilingLoadDb = ceilingLoad)
@@ -916,6 +919,13 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 baseMix + s.activeRoute.harmonicMixDeltaDb
             }
         }
+        val hasActiveEnhancerOrTone = s.dolbyBoseConfig.boseProfile != BoseProfile.OFF ||
+            s.dolbyBoseConfig.ieqPreset != IeqPreset.OFF ||
+            s.dolbyBoseConfig.dialogueEnhancerEnabled ||
+            s.dolbyBoseConfig.bassEnhancerEnabled ||
+            abs(s.tiltBassDb) > 0.01f ||
+            abs(s.tiltTrebleDb) > 0.01f ||
+            s.volumeContourEnabled
 
         dspMonitor.updateDspState(
             gainsDb = effective10,
@@ -926,7 +936,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             limiterThresholdDb = s.activeRoute.limiterThresholdDb,
             widths = SectionWidths(),
             qOverrides = s.qOverrides,
-            bypassed = !s.isEnabled || flatBypass,
+            boseProfile = if (s.masterEnabled) s.dolbyBoseConfig.boseProfile else BoseProfile.OFF,
+            bypassed = !s.masterEnabled || (flatBypass && !hasActiveEnhancerOrTone),
             abCompare = s.isAbCompare
         )
     }
@@ -979,7 +990,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setPowerEnabled(enabled: Boolean) {
         _uiState.update { it.copy(isEnabled = enabled) }
-        applySliderOrContourFast()
+        applyPresetOrContextLoad()
     }
 
     fun setThemeMode(mode: String) {
@@ -997,29 +1008,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         scheduleDebouncedPersist(delayMs = 50L)
-    }
-
-    fun setDolbyExperimental(enabled: Boolean) {
-        _uiState.update { cur ->
-            cur.copy(
-                dolbyBoseConfig = cur.dolbyBoseConfig.copy(
-                    dolbyExperimental = enabled,
-                    dolbyEnabled = if (!enabled) false else cur.dolbyBoseConfig.dolbyEnabled
-                ),
-                statusBannerMessage = if (enabled) "Experimental Dolby control enabled" else cur.statusBannerMessage
-            )
-        }
-        applyPresetOrContextLoad()
-    }
-
-    fun setDolbyControlEnabled(enabled: Boolean) {
-        _uiState.update { cur ->
-            cur.copy(
-                dolbyBoseConfig = cur.dolbyBoseConfig.copy(dolbyEnabled = enabled),
-                statusBannerMessage = if (enabled) "Dolby RAM-only control active" else cur.statusBannerMessage
-            )
-        }
-        applyPresetOrContextLoad()
     }
 
     fun setAbCompare(abCompare: Boolean) {
@@ -1090,13 +1078,11 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectMode(mode: EngineMode) {
         val s = _uiState.value
-        val nextDolbyOn = if (mode == EngineMode.LEGACY) false else s.dolbyBoseConfig.dolbyEnabled
         if (mode == EngineMode.ROOT && !s.rootWarningAccepted) {
             _uiState.update {
                 it.copy(
                     showRootWarningDialog = true,
                     selectedMode = mode,
-                    dolbyBoseConfig = it.dolbyBoseConfig.copy(dolbyEnabled = nextDolbyOn),
                     statusBannerMessage = "Switched to ${mode.shortTitle}"
                 )
             }
@@ -1104,7 +1090,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update {
                 it.copy(
                     selectedMode = mode,
-                    dolbyBoseConfig = it.dolbyBoseConfig.copy(dolbyEnabled = nextDolbyOn),
                     statusBannerMessage = "Switched to ${mode.shortTitle}"
                 )
             }
@@ -1249,10 +1234,30 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setBassEnhancerEnabled(enabled: Boolean) {
         _uiState.update { cur ->
+            val nextStrength = if (enabled && cur.dolbyBoseConfig.bassEnhancerStrength == 0) {
+                80
+            } else {
+                cur.dolbyBoseConfig.bassEnhancerStrength
+            }
             cur.copy(
                 dolbyBoseConfig = cur.dolbyBoseConfig.copy(
                     bassEnhancerEnabled = enabled,
+                    bassEnhancerStrength = nextStrength,
                     virtualBassEnabled = if (enabled) cur.dolbyBoseConfig.virtualBassEnabled else false
+                )
+            )
+        }
+        applyPresetOrContextLoad()
+    }
+
+    fun updateBassEnhancerStrength(strengthPct: Int) {
+        val clamped = strengthPct.coerceIn(0, 100)
+        _uiState.update { cur ->
+            cur.copy(
+                dolbyBoseConfig = cur.dolbyBoseConfig.copy(
+                    bassEnhancerEnabled = clamped > 0,
+                    bassEnhancerStrength = clamped,
+                    virtualBassEnabled = if (clamped > 0) cur.dolbyBoseConfig.virtualBassEnabled else false
                 )
             )
         }
@@ -1264,6 +1269,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             cur.copy(
                 dolbyBoseConfig = cur.dolbyBoseConfig.copy(
                     bassEnhancerEnabled = if (enabled) true else cur.dolbyBoseConfig.bassEnhancerEnabled,
+                    bassEnhancerStrength = if (enabled && cur.dolbyBoseConfig.bassEnhancerStrength == 0) 80 else cur.dolbyBoseConfig.bassEnhancerStrength,
                     virtualBassEnabled = enabled
                 )
             )
@@ -1291,8 +1297,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                     dialogueAmount = 8,
                     dialogueDucking = 2,
                     bassEnhancerEnabled = false,
-                    virtualBassEnabled = false,
-                    dolbyEnabled = false
+                    bassEnhancerStrength = 80,
+                    virtualBassEnabled = false
                 ),
                 statusBannerMessage = "Enhancers reset"
             )

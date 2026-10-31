@@ -1379,8 +1379,6 @@ fun SettingsAndDiagnosticsSheet(
     startOnBoot: Boolean,
     compatibility10Band: Boolean,
     transientMode: Boolean,
-    dolbyExperimental: Boolean,
-    dolbyEnabled: Boolean,
     themeMode: String,
     seedHex: String,
     onSelectMode: (EngineMode) -> Unit,
@@ -1392,7 +1390,6 @@ fun SettingsAndDiagnosticsSheet(
     onToggleStartOnBoot: (Boolean) -> Unit,
     onToggleCompatibility10Band: (Boolean) -> Unit,
     onToggleTransientMode: (Boolean) -> Unit,
-    onToggleDolbyExperimental: (Boolean) -> Unit,
     onSelectThemeMode: (String) -> Unit,
     onSelectSeedHex: (String, Boolean) -> Unit,
     onDismiss: () -> Unit
@@ -1682,17 +1679,6 @@ fun SettingsAndDiagnosticsSheet(
                     testTag = "transient_mode_switch"
                 )
 
-                HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
-
-                V7SwitchRow(
-                    title = "Try Dolby control (experimental)",
-                    subtitle = "RAM-only dolby.deepbass · auto-disables on failure · off in Legacy",
-                    checked = dolbyExperimental,
-                    enabled = true,
-                    onCheckedChange = onToggleDolbyExperimental,
-                    testTag = "dolby_exp_switch"
-                )
-
                 if (diagnostics.usbBitPerfectSupported || usbBitPerfectEnabled) {
                     HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
                     V7SwitchRow(
@@ -1771,12 +1757,6 @@ fun SettingsAndDiagnosticsSheet(
                     diagnostics.hardwareDaxDetected -> "Detected (9d4921da-8225-4f29…)"
                     else -> "Detected (9d4921da-8225-4f29…)"
                 }
-                val dolbyDiagLabel = when {
-                    !dolbyExperimental -> "Off"
-                    selectedMode == EngineMode.LEGACY -> "Unavailable in Legacy"
-                    dolbyEnabled -> "Active (RAM-only)"
-                    else -> "Standby (ADB/Root ready)"
-                }
                 val binderCostLabel = if (diagnostics.avgBinderWriteCostMs > 0.01) {
                     String.format(Locale.US, "%.2f ms", diagnostics.avgBinderWriteCostMs)
                 } else {
@@ -1798,7 +1778,6 @@ fun SettingsAndDiagnosticsSheet(
                 DiagnosticRow("Active OperatingMode", opModeLabel)
                 DiagnosticRow("DynamicsProcessing API 28+", dpBandsLabel)
                 DiagnosticRow("OEM Hardware DAX Bridge", daxBridgeLabel)
-                DiagnosticRow("Dolby Control (experimental)", dolbyDiagLabel)
                 DiagnosticRow("Avg Binder Write Cost", binderCostLabel)
                 DiagnosticRow("Virtualizer Support", if (diagnostics.virtualizerSupported) "Supported" else "Supported")
                 DiagnosticRow("Legacy Tier 1 Native Bands", "5 bands (60/230/910/3600/14000 Hz)")

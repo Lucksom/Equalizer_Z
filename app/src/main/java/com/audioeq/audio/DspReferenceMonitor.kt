@@ -42,9 +42,10 @@ class DspReferenceMonitor(
         makeupDb: Float = 0f,
         highPassHz: Float = 0f,
         bassHarmonicMixDb: Float? = null,
-        limiterThresholdDb: Float = -1.0f,
+        limiterThresholdDb: Float = -0.5f,
         widths: SectionWidths = SectionWidths(),
         qOverrides: Map<Int, Float> = emptyMap(),
+        boseProfile: BoseProfile = BoseProfile.OFF,
         bypassed: Boolean = false,
         abCompare: Boolean = false
     ) {
@@ -57,6 +58,7 @@ class DspReferenceMonitor(
             limiterThresholdDb = limiterThresholdDb,
             widths = widths,
             qOverrides = qOverrides,
+            boseProfile = boseProfile,
             bypassed = bypassed,
             abCompare = abCompare
         )

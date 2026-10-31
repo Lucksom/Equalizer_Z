@@ -530,11 +530,14 @@ class EqEngine(
         val uDb = if (channel == 1 && l.rightUserDb != null) l.rightUserDb else l.userDb
         val hearing31 = if (channel == 1) l.hearingRight31 else l.hearingLeft31
         for (i in 0 until 10) {
-            sliderScratch[i] = uDb[i] * l.intensity + l.routeDb[i] + (if (withContour) l.contourDb[i] else 0.0)
+            sliderScratch[i] = uDb[i] * l.intensity +
+                l.dolbyBose10Db.getOrElse(i) { 0.0 } +
+                l.routeDb[i] +
+                (if (withContour) l.contourDb[i] else 0.0)
         }
         FastRender.render(sliderScratch, tasteScratch)
         for (i in 0 until 31) {
-            out[i] = (tasteScratch[i] + l.correction31[i] + hearing31[i]).coerceIn(-15.0, 10.0)
+            out[i] = (tasteScratch[i] + l.correction31[i] + hearing31[i]).coerceIn(-15.0, 15.0)
         }
     }
 
@@ -544,6 +547,7 @@ class EqEngine(
 
     /**
      * Preset, route, profile, or intensity COMMIT. Never while a slider is being dragged.
+     * Preserves unity input gain (0.0 dB) so bass boosts never suppress overall volume.
      */
     fun load(
         l: Layers,
@@ -553,21 +557,9 @@ class EqEngine(
         flatBypass: Boolean = false,
         glideMs: Double = 250.0
     ) {
-        val base = DoubleArray(31)
-        val uDb = l.userDb
-        val sliderTmp = DoubleArray(10) { uDb[it] * l.intensity + l.routeDb[it] }
-        FastRender.render(sliderTmp, base)
-        for (i in 0 until 31) {
-            base[i] = (base[i] + l.correction31[i] + l.hearingLeft31[i]).coerceIn(-15.0, 10.0)
-        }
-        var corrMax = 0.0
-        for (v in l.correction31) corrMax = max(corrMax, v)
-        val computedInDb = routeBaseDb - max(0.0, corrMax - 3.0).toFloat()
-        val computedMakeupDb = if (flatBypass) 0f else (-computedInDb - Dsp.pinkGainDb(base)).coerceIn(0.0, 4.0).toFloat()
-
-        inputDb = computedInDb
-        makeupDb = computedMakeupDb
-        limiterDb = limiter
+        inputDb = 0.0f
+        makeupDb = if (flatBypass) 0f else 0.5f
+        limiterDb = limiter.coerceAtMost(-0.5f)
         isFlatBypass = flatBypass
         wantEnabled = isPowerOn && !isFlatBypass
 

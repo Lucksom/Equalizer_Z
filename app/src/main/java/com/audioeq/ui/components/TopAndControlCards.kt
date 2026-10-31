@@ -53,7 +53,7 @@ import com.audioeq.ui.theme.SpaceGroteskFontFamily
  * - `.brand` 46x46dp icon box (`primaryC` background, `onPrimaryC` 3-band EQ icon)
  * - `h1` "Audio EQ" + `#sub` subtitle (`"<Preset> · <Engine>"` or `"All features are off"`)
  * - `.engine-pill` (`#enginePill`) with glowing green LED dot and `#engineText`
- * - `#master` 46x46dp power button (toggles `masterEnabled` — everything except Equalizer)
+ * - `#master` 46x46dp power button (toggles `masterEnabled` — global power for Equalizer and every effect)
  * - `#settingsBtn` 46x46dp gear button (opens DSP Engine Settings & Diagnostics sheet)
  */
 @Composable
@@ -251,9 +251,9 @@ fun TopBarHeader(
                 Icon(
                     imageVector = Icons.Default.PowerSettingsNew,
                     contentDescription = if (masterEnabled) {
-                        "Master power on (disable Tone & Enhancers)"
+                        "Master power on (disable Equalizer and all effects)"
                     } else {
-                        "Master power off (enable Tone & Enhancers)"
+                        "Master power off (enable Equalizer and all effects)"
                     },
                     tint = masterTint,
                     modifier = Modifier.size(20.dp)
@@ -337,6 +337,7 @@ fun StatusBanner(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PresetsCard(
+    masterEnabled: Boolean = true,
     presets: List<PresetConfig>,
     selectedPresetId: String,
     activePresetName: String,
@@ -356,7 +357,7 @@ fun PresetsCard(
             )
             .testTag("preset_card"),
         shape = RoundedCornerShape(28.dp),
-        color = palette.sCont
+        color = palette.sCont.copy(alpha = if (masterEnabled) 1f else 0.6f)
     ) {
         Column(
             modifier = Modifier
@@ -418,7 +419,7 @@ fun PresetsCard(
                                 color = if (isSelected) Color.Transparent else palette.outlineV,
                                 shape = RoundedCornerShape(12.dp)
                             )
-                            .clickable { onSelectPreset(preset) }
+                            .clickable(enabled = masterEnabled) { onSelectPreset(preset) }
                             .padding(horizontal = 13.dp, vertical = 8.dp)
                             .testTag("preset_chip_${preset.id}"),
                         verticalAlignment = Alignment.CenterVertically

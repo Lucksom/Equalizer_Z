@@ -3,6 +3,7 @@ package com.audioeq.audio
 import android.media.audiofx.AudioEffect
 import android.media.audiofx.BassBoost
 import android.media.audiofx.DynamicsProcessing
+import android.media.audiofx.EnvironmentalReverb
 import android.media.audiofx.Equalizer
 import android.media.audiofx.Virtualizer
 import android.os.Build
@@ -46,26 +47,26 @@ enum class AudioRoute(
 ) {
     SPEAKER(
         id = "speaker",
-        baseInputGainDb = -3.0f,
-        limiterThresholdDb = -1.0f,
-        offsets10Db = doubleArrayOf(-9.0, -7.0, -2.0, 2.0, 1.0, 0.0, -1.0, -1.0, 0.0, 0.0)
+        baseInputGainDb = 0.0f,
+        limiterThresholdDb = -0.5f,
+        offsets10Db = doubleArrayOf(0.0, 0.0, 0.0, 1.5, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     ),
     WIRED(
         id = "wired",
-        baseInputGainDb = -3.0f,
-        limiterThresholdDb = -1.0f,
+        baseInputGainDb = 0.0f,
+        limiterThresholdDb = -0.5f,
         offsets10Db = DoubleArray(10)
     ),
     BLUETOOTH(
         id = "bluetooth",
-        baseInputGainDb = -4.0f,
-        limiterThresholdDb = -1.5f,
+        baseInputGainDb = 0.0f,
+        limiterThresholdDb = -0.8f,
         offsets10Db = DoubleArray(10)
     ),
     USB(
         id = "usb",
-        baseInputGainDb = -3.0f,
-        limiterThresholdDb = -1.0f,
+        baseInputGainDb = 0.0f,
+        limiterThresholdDb = -0.5f,
         offsets10Db = DoubleArray(10)
     )
 }
@@ -816,6 +817,9 @@ class MasterEqController(private val sessionId: Int) {
     private var nativeEq: Equalizer? = null
     private var bassBoost: BassBoost? = null
     private var virtualizer: Virtualizer? = null
+    private var envReverb: EnvironmentalReverb? = null
+    private var vendorEnvReverbEffect: AudioEffect? = null
+    private var vendorSetParamMethod: java.lang.reflect.Method? = null
     private var oemBridge: OemDaxBridge.SessionHandle? = null
 
     private val current31 = FloatArray(31)
@@ -827,11 +831,11 @@ class MasterEqController(private val sessionId: Int) {
     private var hasEffectControl: Boolean = true
 
     @Volatile
-    var inputGainDb: Float = -3.0f
+    var inputGainDb: Float = 0.0f
         private set
 
     @Volatile
-    var makeupDb: Float = 0.0f
+    var makeupDb: Float = 0.5f
         private set
 
     @Volatile
@@ -896,7 +900,6 @@ class MasterEqController(private val sessionId: Int) {
                 }
                 engine.setPreEqAllChannelsTo(initPreEq)
                 engine.setMbcAllChannelsTo(initMbc)
-                // Probe single-band parameter updates so any HAL rejection on sessionId (e.g. session 0) is caught immediately
                 engine.setPreEqBandAllChannelsTo(0, initPreEq.getBand(0))
                 engine.setMbcBandAllChannelsTo(0, initMbc.getBand(0))
                 engine.setInputGainAllChannelsTo(inputGainDb)
@@ -920,7 +923,7 @@ class MasterEqController(private val sessionId: Int) {
                 mbc = initMbc
                 dp = engine
                 hasEffectControl = true
-                initVirtualizerOnly()
+                initAuxiliaryEffects()
                 activeMode = preferredMode
                 return activeMode
             } catch (_: Throwable) {
@@ -940,12 +943,55 @@ class MasterEqController(private val sessionId: Int) {
         return activeMode
     }
 
-    private fun initVirtualizerOnly() {
+    private fun initAuxiliaryEffects() {
         if (virtualizer == null) {
             try {
                 virtualizer = Virtualizer(0, sessionId)
             } catch (_: Throwable) {
                 virtualizer = null
+            }
+        }
+        if (bassBoost == null) {
+            try {
+                bassBoost = BassBoost(0, sessionId)
+            } catch (_: Throwable) {
+                bassBoost = null
+            }
+        }
+        if (envReverb == null) {
+            try {
+                envReverb = EnvironmentalReverb(0, sessionId)
+            } catch (_: Throwable) {
+                envReverb = null
+            }
+        }
+        if (vendorEnvReverbEffect == null) {
+            try {
+                val descriptors = AudioEffect.queryEffects()
+                val hasVendorReverb = descriptors?.any { it.uuid == DolbyBoseDspMath.UUID_ENV_REVERB_MZ } == true
+                if (hasVendorReverb) {
+                    val ctor = AudioEffect::class.java.getConstructor(
+                        UUID::class.java,
+                        UUID::class.java,
+                        Int::class.javaPrimitiveType,
+                        Int::class.javaPrimitiveType
+                    )
+                    ctor.isAccessible = true
+                    vendorEnvReverbEffect = ctor.newInstance(
+                        AudioEffect.EFFECT_TYPE_ENV_REVERB,
+                        DolbyBoseDspMath.UUID_ENV_REVERB_MZ,
+                        0,
+                        sessionId
+                    )
+                    vendorSetParamMethod = AudioEffect::class.java.getMethod(
+                        "setParameter",
+                        Int::class.javaPrimitiveType,
+                        ByteArray::class.java
+                    ).apply { isAccessible = true }
+                }
+            } catch (_: Throwable) {
+                vendorEnvReverbEffect = null
+                vendorSetParamMethod = null
             }
         }
     }
@@ -958,20 +1004,7 @@ class MasterEqController(private val sessionId: Int) {
                 nativeEq = null
             }
         }
-        if (bassBoost == null) {
-            try {
-                bassBoost = BassBoost(0, sessionId)?.apply { enabled = true }
-            } catch (_: Throwable) {
-                bassBoost = null
-            }
-        }
-        if (virtualizer == null) {
-            try {
-                virtualizer = Virtualizer(0, sessionId)?.apply { enabled = true }
-            } catch (_: Throwable) {
-                virtualizer = null
-            }
-        }
+        initAuxiliaryEffects()
     }
 
     private fun fallbackToTier1OnError(state: EngineState) {
@@ -990,25 +1023,22 @@ class MasterEqController(private val sessionId: Int) {
 
     /**
      * Call on Preset, Profile, Route, AutoEq, or Intensity change:
-     * Recomputes inputGainDb and makeupDb (Section 3.1 Rule 1 & Rule 2) and glides over 250 ms.
+     * Preserves unity inputGainDb (0.0 dB) and upward makeupDb so boosting bass NEVER lowers volume.
      */
     fun loadFullState(state: EngineState, glideMs: Double = 250.0) {
         handler.post {
             activeState = state
-            val noContour31 = EqMath.computeEffective31(state, includeContour = false)
-            val maxPosGain = (noContour31.maxOrNull() ?: 0.0).toFloat()
-            val antiClipHeadroomDb = DolbyBoseDspMath.computeSafeHeadroomDb(maxPosGain)
-            val corrPeak = state.correction31Db.maxOrNull() ?: 0.0
-            val routeInDb = state.route.baseInputGainDb - max(0.0, corrPeak - 3.0).toFloat()
-            inputGainDb = min(routeInDb, antiClipHeadroomDb).coerceAtLeast(-11.0f)
+            inputGainDb = 0.0f
 
-            val levelerBonus = if (state.profile.levelerOn) 1.0 else 0.0
+            val levelerBonus = if (state.profile.levelerOn) 1.0f else 0.5f
+            val bassBonus = if (state.dolbyBoseConfig.bassEnhancerEnabled) {
+                1.0f * (state.dolbyBoseConfig.bassEnhancerStrength.coerceIn(0, 100) / 100f)
+            } else 0f
+
             makeupDb = if (state.flatBypass) {
                 0f
             } else {
-                (-inputGainDb - EqMath.pinkGainDb(noContour31) + levelerBonus)
-                    .coerceIn(0.0, 4.0)
-                    .toFloat()
+                (levelerBonus + bassBonus).coerceIn(0.0f, 3.5f)
             }
 
             applyTargetsAndSchedule(state, recomputeMbc = true, glideMs = glideMs)
@@ -1023,6 +1053,92 @@ class MasterEqController(private val sessionId: Int) {
         handler.post {
             activeState = state
             applyTargetsAndSchedule(state, recomputeMbc = false, glideMs = glideMs)
+        }
+    }
+
+    /**
+     * Applies Meizu Square Sound 3D Virtualizer (Section 4 & 7: strength 650/1000, BINAURAL mode),
+     * Live Music EnvironmentalReverb (Section 5: 26-Byte PARAM_PROPERTIES = 10 Little-Endian packet),
+     * and BassBoostMz (Section 6: strength 0..1000).
+     */
+    private fun applyAuxiliaryEffects(state: EngineState) {
+        val cfg = state.dolbyBoseConfig
+        val activeGate = state.enabled && !state.flatBypass
+
+        // 1. VirtualizerMz / Android Virtualizer (3D Sound Effects: strength = 650, BINAURAL)
+        try {
+            virtualizer?.let { v ->
+                val is3dMode = cfg.boseProfile == BoseProfile.EFFECT_3D
+                val targetStrength: Short = when {
+                    !activeGate -> 0
+                    is3dMode -> DolbyBoseDspMath.VIRTUALIZER_3D_STRENGTH // 650
+                    else -> state.profile.virtualizerStrength
+                }
+                v.enabled = activeGate && targetStrength > 0
+                if (v.strengthSupported && targetStrength > 0) {
+                    v.setStrength(targetStrength)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && is3dMode && activeGate) {
+                    try {
+                        v.forceVirtualizationMode(Virtualizer.VIRTUALIZATION_MODE_BINAURAL)
+                    } catch (_: Throwable) {
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+        }
+
+        // 2. EnvironmentalReverbMz / Android EnvironmentalReverb (Live Music: 26-byte Little-Endian PARAM_PROPERTIES=10)
+        val isLiveMusic = activeGate && cfg.boseProfile == BoseProfile.LIVE_MUSIC
+        try {
+            val props = DolbyBoseDspMath.DEFAULT_LIVE_MUSIC_REVERB
+            vendorEnvReverbEffect?.let { vFx ->
+                vFx.enabled = isLiveMusic
+                if (isLiveMusic) {
+                    val packet26 = props.to26ByteLittleEndianPacket()
+                    vendorSetParamMethod?.invoke(vFx, DolbyBoseDspMath.ENV_REVERB_PARAM_PROPERTIES, packet26)
+                }
+            }
+        } catch (_: Throwable) {
+        }
+        try {
+            envReverb?.let { rev ->
+                rev.enabled = isLiveMusic
+                if (isLiveMusic) {
+                    val p = DolbyBoseDspMath.DEFAULT_LIVE_MUSIC_REVERB
+                    val settings = EnvironmentalReverb.Settings().apply {
+                        roomLevel = p.roomLevelMb
+                        roomHFLevel = p.roomHfLevelMb
+                        decayTime = p.decayTimeMs
+                        decayHFRatio = p.decayHfRatioPermille
+                        reflectionsLevel = p.reflectionsLevelMb
+                        reflectionsDelay = p.reflectionsDelayMs
+                        reverbLevel = p.reverbLevelMb
+                        reverbDelay = p.reverbDelayMs
+                        diffusion = p.diffusionPermille
+                        density = p.densityPermille
+                    }
+                    rev.properties = settings
+                }
+            }
+        } catch (_: Throwable) {
+        }
+
+        // 3. BassBoostMz / Android BassBoost (Power Bass & Bass Enhancer slider: 0..1000)
+        try {
+            bassBoost?.let { bb ->
+                val targetBassStrength: Short = when {
+                    !activeGate -> 0
+                    cfg.bassEnhancerEnabled -> cfg.bassBoostStrengthPermille
+                    state.tier1BassBoost > 0 -> state.tier1BassBoost
+                    else -> 0
+                }
+                bb.enabled = activeGate && targetBassStrength > 0
+                if (bb.strengthSupported && targetBassStrength > 0) {
+                    bb.setStrength(targetBassStrength)
+                }
+            }
+        } catch (_: Throwable) {
         }
     }
 
@@ -1049,7 +1165,7 @@ class MasterEqController(private val sessionId: Int) {
         try {
             engine.enabled = state.enabled && !state.flatBypass
             if (recomputeMbc && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                engine.setInputGainAllChannelsTo(if (state.flatBypass) 0f else inputGainDb)
+                engine.setInputGainAllChannelsTo(0.0f)
                 engine.setLimiterAllChannelsTo(
                     DynamicsProcessing.Limiter(
                         true,
@@ -1058,7 +1174,7 @@ class MasterEqController(private val sessionId: Int) {
                         1.0f,  // 1 ms instantaneous peak catch
                         60.0f, // 60 ms transparent recovery
                         10.0f, // 10:1 brickwall ceiling
-                        min(state.route.limiterThresholdDb, -0.8f),
+                        min(state.route.limiterThresholdDb, -0.5f),
                         0f
                     )
                 )
@@ -1069,32 +1185,35 @@ class MasterEqController(private val sessionId: Int) {
                     val deFactor = if (cfg.dialogueEnhancerEnabled) {
                         cfg.dialogueAmount.coerceIn(0, 16) / 16.0f
                     } else 0f
+                    val bassFactor = if (cfg.bassEnhancerEnabled) {
+                        cfg.bassEnhancerStrength.coerceIn(0, 100) / 100.0f
+                    } else 0f
                     val levelerShift = if (state.profile.levelerOn) 1.5f else 0.0f
 
                     for (i in 0 until 6) {
                         val meanBoost = max(0.0, EqMath.MBC_RANGES[i].map { eff31[it] }.average()).toFloat()
                         val b = m.getBand(i)
                         when {
-                            // Stage 2: Virtual Bass Mix Window (90-359 Hz -> MBC band 1): Fast harmonic density compression
-                            cfg.bassEnhancerEnabled && cfg.virtualBassEnabled && i == 1 -> {
-                                b.attackTime = 4.0f
-                                b.releaseTime = 75.0f
-                                b.ratio = 2.8f
-                                b.threshold = -20.0f + meanBoost * 0.5f
+                            // Stage 2: Bass & Virtual Bass bands (0 and 1: <=359 Hz): Volume-preserving upward density (high threshold so bass is NEVER ducked!)
+                            cfg.bassEnhancerEnabled && (i == 0 || i == 1) -> {
+                                b.attackTime = 15.0f
+                                b.releaseTime = 110.0f
+                                b.ratio = if (cfg.virtualBassEnabled) 2.0f else 1.6f
+                                b.threshold = (-1.0f + meanBoost).coerceAtMost(-0.5f)
                                 b.kneeWidth = 6.0f
-                                b.noiseGateThreshold = -70.0f
+                                b.noiseGateThreshold = -85.0f
                                 b.expanderRatio = 1.0f
-                                b.preGain = 1.5f
-                                b.postGain = 2.2f + makeupDb * 0.5f
+                                b.preGain = 0.0f
+                                b.postGain = makeupDb + (1.5f * bassFactor) + (if (cfg.virtualBassEnabled && i == 1) 0.8f * bassFactor else 0f)
                             }
                             // Stage 2: Dialogue Formant Band (359-5747 Hz -> MBC bands 2 & 3): Upward vocal expansion
                             deFactor > 0f && (i == 2 || i == 3) -> {
                                 b.attackTime = 2.5f
                                 b.releaseTime = 55.0f
                                 b.ratio = 1.0f + (0.8f * deFactor)
-                                b.threshold = -26.0f
+                                b.threshold = -12.0f
                                 b.kneeWidth = 8.0f
-                                b.noiseGateThreshold = -65.0f
+                                b.noiseGateThreshold = -75.0f
                                 b.expanderRatio = 1.0f
                                 b.preGain = 0.0f
                                 b.postGain = (3.2f * deFactor) + makeupDb
@@ -1103,9 +1222,9 @@ class MasterEqController(private val sessionId: Int) {
                                 b.attackTime = state.mbc.attackMs[i]
                                 b.releaseTime = state.mbc.releaseMs[i]
                                 b.ratio = max(state.mbc.ratio[i], 1.0f + 0.4f * ieqStrength)
-                                b.threshold = state.mbc.baseThresholdDb[i] + meanBoost - levelerShift
+                                b.threshold = (state.mbc.baseThresholdDb[i] + meanBoost - levelerShift).coerceAtMost(-0.8f)
                                 b.kneeWidth = state.mbc.kneeDb[i]
-                                b.noiseGateThreshold = -80.0f
+                                b.noiseGateThreshold = -85.0f
                                 b.expanderRatio = 1.0f
                                 b.preGain = 0.0f
                                 b.postGain = makeupDb
@@ -1122,17 +1241,7 @@ class MasterEqController(private val sessionId: Int) {
             return
         }
 
-        if (recomputeMbc) {
-            try {
-                virtualizer?.let { v ->
-                    v.enabled = state.enabled && state.profile.virtualizerStrength > 0
-                    if (v.strengthSupported) {
-                        v.setStrength(state.profile.virtualizerStrength)
-                    }
-                }
-            } catch (_: Throwable) {
-            }
-        }
+        applyAuxiliaryEffects(state)
 
         tauSec = max(glideMs, 10.0) / 3000.0
         lastTickNs = System.nanoTime()
@@ -1186,14 +1295,26 @@ class MasterEqController(private val sessionId: Int) {
                 val m = mbc
                 if (m != null) {
                     var anyMbcBandChanged = false
+                    val cfg = activeState.dolbyBoseConfig
+                    val bassFactor = if (cfg.bassEnhancerEnabled) {
+                        cfg.bassEnhancerStrength.coerceIn(0, 100) / 100.0f
+                    } else 0f
                     val levelerShift = if (activeState.profile.levelerOn) 1.5f else 0.0f
                     for (i in 0 until 6) {
                         val meanBoost = max(0.0f, EqMath.MBC_RANGES[i].map { current31[it] }.average().toFloat())
-                        val thr = activeState.mbc.baseThresholdDb[i] + meanBoost - levelerShift
+                        val thr = if (cfg.bassEnhancerEnabled && (i == 0 || i == 1)) {
+                            (-1.0f + meanBoost).coerceAtMost(-0.5f)
+                        } else {
+                            (activeState.mbc.baseThresholdDb[i] + meanBoost - levelerShift).coerceAtMost(-0.8f)
+                        }
                         if (writtenMbc[i].isNaN() || abs(thr - writtenMbc[i]) > 0.25f) {
                             val b = m.getBand(i).apply {
                                 threshold = thr
-                                postGain = makeupDb
+                                postGain = if (cfg.bassEnhancerEnabled && (i == 0 || i == 1)) {
+                                    makeupDb + (1.5f * bassFactor)
+                                } else {
+                                    makeupDb
+                                }
                             }
                             m.setBand(i, b)
                             try {
@@ -1225,26 +1346,13 @@ class MasterEqController(private val sessionId: Int) {
                 eq.enabled = s.enabled && !s.flatBypass
                 val count = min(eq.numberOfBands.toInt(), 5)
                 for (b in 0 until count) {
-                    val mb = (s.tier1Native5Db[b].coerceIn(-12f, 4f) * 100f).toInt().toShort()
+                    val mb = (s.tier1Native5Db[b].coerceIn(-12f, 6f) * 100f).toInt().toShort()
                     eq.setBandLevel(b.toShort(), mb)
                 }
             }
         } catch (_: Throwable) {
         }
-        try {
-            bassBoost?.let { bb ->
-                bb.enabled = s.enabled && !s.flatBypass && s.tier1BassBoost > 0
-                if (bb.strengthSupported) bb.setStrength(s.tier1BassBoost)
-            }
-        } catch (_: Throwable) {
-        }
-        try {
-            virtualizer?.let { v ->
-                v.enabled = s.enabled && !s.flatBypass && s.profile.virtualizerStrength > 0
-                if (v.strengthSupported) v.setStrength(s.profile.virtualizerStrength)
-            }
-        } catch (_: Throwable) {
-        }
+        applyAuxiliaryEffects(s)
     }
 
     fun release() {
@@ -1266,11 +1374,21 @@ class MasterEqController(private val sessionId: Int) {
                 virtualizer?.release()
             } catch (_: Throwable) {
             }
+            try {
+                envReverb?.release()
+            } catch (_: Throwable) {
+            }
+            try {
+                vendorEnvReverbEffect?.release()
+            } catch (_: Throwable) {
+            }
             oemBridge?.release()
             dp = null
             nativeEq = null
             bassBoost = null
             virtualizer = null
+            envReverb = null
+            vendorEnvReverbEffect = null
             oemBridge = null
             thread.quitSafely()
         }

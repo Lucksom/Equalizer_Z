@@ -25,7 +25,7 @@ class AudioEqUnitTest {
     @Test
     fun v5Presets_matchMasterSpecification() {
         val presets = EqConstants.BUILT_IN_PRESETS.associateBy { it.id }
-        assertEquals(6, presets.size)
+        assertEquals(12, presets.size)
 
         // Flat (bypass = true)
         val flat = presets.getValue("flat")
@@ -63,6 +63,32 @@ class AudioEqUnitTest {
         assertEquals(listOf(4f, 4f, 2f, -2f, -1f, 0.5f, 2.5f, 2.5f, 2f, 2f), cinema.gainsDb)
         assertEquals(20f, cinema.highPassHz, 0.01f)
         assertEquals(-12f, cinema.bassHarmonicMixDb ?: 0f, 0.01f)
+
+        // Meizu Square Sound Presets (Classical, Jazz, Rock, Pop, Pure Voice, Power Bass)
+        assertEquals(
+            listOf(0f, 0f, 0f, 0f, 0f, 0f, -5f, -5f, -5f, -8f),
+            presets.getValue("classical").gainsDb
+        )
+        assertEquals(
+            listOf(0f, 0f, 0f, 5f, 5f, 5f, 0f, 2f, 3f, 5f),
+            presets.getValue("jazz").gainsDb
+        )
+        assertEquals(
+            listOf(3f, 2f, 3f, 3f, -2f, 2f, 3f, 5f, 6f, 6f),
+            presets.getValue("rock").gainsDb
+        )
+        assertEquals(
+            listOf(2f, 3f, 0f, -3f, -6f, -5f, -3f, 0f, 2f, -2f),
+            presets.getValue("pop").gainsDb
+        )
+        assertEquals(
+            listOf(0f, 0f, 0f, 0f, -2f, 2f, 5f, 5f, 5f, 3f),
+            presets.getValue("pure_voice").gainsDb
+        )
+        assertEquals(
+            listOf(9f, 8f, 6f, 4f, 0f, 0f, 0f, 0f, 0f, 0f),
+            presets.getValue("power_bass").gainsDb
+        )
     }
 
     @Test
@@ -82,10 +108,10 @@ class AudioEqUnitTest {
         val flat31 = Dsp.renderCurve(DoubleArray(10) { 0.0 })
         assertTrue(flat31.all { abs(it) < 1e-6 })
 
-        // Speaker route offsets (-9, -7, -2, +2, +1, 0, -1, -1, 0, 0)
-        assertEquals(-9.0, OutputRoute.SPEAKER.offsetsDb[0], 0.01)
-        assertEquals(-7.0, OutputRoute.SPEAKER.offsetsDb[1], 0.01)
-        assertEquals(2.0, OutputRoute.SPEAKER.offsetsDb[3], 0.01)
+        // Speaker route offsets keep low frequencies at 0.0 dB so bass is never suppressed
+        assertEquals(0.0, OutputRoute.SPEAKER.offsetsDb[0], 0.01)
+        assertEquals(0.0, OutputRoute.SPEAKER.offsetsDb[1], 0.01)
+        assertEquals(1.5, OutputRoute.SPEAKER.offsetsDb[3], 0.01)
     }
 
     @Test
@@ -275,13 +301,14 @@ class AudioEqUnitTest {
         val percussion = EqConstants.BUILT_IN_PRESETS.first { it.id == "percussion_clarity" }
         processor.updateParameters(
             gainsDb = percussion.gainsDb,
-            preampDb = -3.0f,
+            preampDb = 0.0f,
             makeupDb = 1.5f,
             highPassHz = percussion.highPassHz,
             bassHarmonicMixDb = percussion.bassHarmonicMixDb,
-            limiterThresholdDb = -1.0f,
+            limiterThresholdDb = -0.5f,
             widths = SectionWidths(),
             qOverrides = percussion.qOverrides,
+            boseProfile = com.audioeq.audio.BoseProfile.EFFECT_3D,
             bypassed = false,
             abCompare = false
         )
@@ -360,14 +387,16 @@ class AudioEqUnitTest {
         assertEquals(1.63f, com.audioeq.audio.DolbyBoseDspMath.IEQ_BALANCED_10[2], 0.01f)
         assertEquals(1.50f, com.audioeq.audio.DolbyBoseDspMath.IEQ_WARM_10[5], 0.01f)
 
-        // 3. Bose Profiles (Dynamic & Balanced)
-        assertEquals("Dynamic", com.audioeq.audio.BoseProfile.DYNAMIC.title)
-        assertEquals("Balanced", com.audioeq.audio.BoseProfile.BALANCED.title)
+        // 3. Bose Profiles (Off, Dynamic, Balanced, 3D, Live Music)
+        assertEquals(
+            listOf("Off", "Dynamic", "Balanced", "3D", "Live Music"),
+            com.audioeq.audio.BoseProfile.entries.map { it.title }
+        )
         assertEquals(4.0f, com.audioeq.audio.DolbyBoseDspMath.BOSE_DYNAMIC_10[0], 0.01f)
         assertEquals(4.0f, com.audioeq.audio.DolbyBoseDspMath.BOSE_DYNAMIC_10[9], 0.01f)
         assertEquals(-3.0f, com.audioeq.audio.DolbyBoseDspMath.BOSE_BALANCED_10[5], 0.01f)
 
-        // 4. Bass Enhancer (with Virtual Bass Harmonic Synthesis) + Dialogue Enhancer
+        // 4. Bass Enhancer (with slider & Virtual Bass Harmonic Synthesis) + Dialogue Enhancer
         val cfg = com.audioeq.audio.DolbyBoseDspConfig(
             ieqPreset = com.audioeq.audio.IeqPreset.DETAILED,
             ieqAmount = 10,
@@ -375,20 +404,83 @@ class AudioEqUnitTest {
             dialogueAmount = 16,
             dialogueDucking = 2,
             bassEnhancerEnabled = true,
+            bassEnhancerStrength = 80,
             virtualBassEnabled = true,
             boseProfile = com.audioeq.audio.BoseProfile.DYNAMIC
         )
         val composite = com.audioeq.audio.DolbyBoseDspMath.computeComposite10BandDeltaDb(cfg)
         assertEquals(10, composite.size)
-        // Band 1 (63 Hz): Bose Dynamic (+1.0) + IEQ Detailed (-4.20 * 10/16 = -2.625) + Bass Enhancer (+7.44) - Dialogue Ducking (-2.0) = +3.815
-        assertEquals(3.815, composite[1], 0.02)
+        // Band 1 (63 Hz) at 80% Bass Enhancer (+6.40 dB): Bose Dynamic (+1.0) + IEQ Detailed (-4.20 * 10/16 = -2.625) + Bass Enhancer (+6.40) - Dialogue Ducking (-2.0) = +2.775
+        assertEquals(2.775, composite[1], 0.02)
         // Band 6 (2 kHz): Bose Dynamic (0.0) + IEQ Detailed (-0.44 * 10/16 = -0.275) + Dialogue Enhancer (+6.25) = +5.975
         assertEquals(5.975, composite[6], 0.02)
 
-        // 5. Anti-Clipping Headroom
+        // At 100% Bass Enhancer strength (Power Bass 1000/1000), band 0 = +9.0 dB, band 1 = +8.0 dB
+        assertEquals(9.0f, com.audioeq.audio.DolbyBoseDspMath.bassEnhancerBandBoostDb(0, 100, true), 0.01f)
+        assertEquals(8.0f, com.audioeq.audio.DolbyBoseDspMath.bassEnhancerBandBoostDb(1, 100, true), 0.01f)
+
+        // 5. Volume-Preserving Headroom: never attenuates global input gain when bass increases
         val maxPos = composite.maxOf { it.toFloat() }
         val headroom = com.audioeq.audio.DolbyBoseDspMath.computeSafeHeadroomDb(maxPos)
-        assertTrue("Expected negative anti-clipping headroom, got $headroom", headroom < -1.0f)
+        assertEquals(0.0f, headroom, 0.001f)
+    }
+
+    @Test
+    fun squareSoundMeizuAndIndependentPower_matchSpecification() {
+        // 1. Meizu 20-char preset decoding: G_dB[k] = parseInt(payload.substring(2k, 2k+2)) - 10
+        assertEquals(
+            listOf(0f, 0f, 0f, 0f, 0f, 0f, -4f, -4f, -4f, -6f),
+            com.audioeq.audio.DolbyBoseDspMath.decodeMeizuPresetPayload("10101010101006060604")
+        )
+        assertEquals(
+            listOf(3f, 3f, 1f, 2f, -1f, -1f, 0f, 1f, 2f, 4f),
+            com.audioeq.audio.DolbyBoseDspMath.decodeMeizuPresetPayload("13131112090910111214")
+        )
+        assertEquals(
+            listOf(4f, 3f, -2f, -4f, -1f, 2f, 5f, 6f, 6f, 6f),
+            com.audioeq.audio.DolbyBoseDspMath.decodeMeizuPresetPayload("14130806091215161616")
+        )
+        assertEquals(
+            listOf(-1f, 2f, 4f, 4f, 3f, 0f, -1f, -1f, -1f, -1f),
+            com.audioeq.audio.DolbyBoseDspMath.decodeMeizuPresetPayload("09121414131009090909")
+        )
+
+        // 2. Woodworth Spherical Head ITD for 3D Effect (r = 0.0875 m, c = 343 m/s, theta = 35 deg)
+        val itdSec = com.audioeq.audio.DolbyBoseDspMath.computeWoodworthItdSeconds()
+        assertEquals(0.0003022, itdSec, 0.000001)
+        val delaySamples48k = com.audioeq.audio.DolbyBoseDspMath.computeWoodworthDelaySamples(48000.0)
+        assertEquals(15, delaySamples48k)
+
+        // 3. 26-Byte Little-Endian EnvironmentalReverbMz Live Music binary packet
+        val props = com.audioeq.audio.MeizuLiveMusicReverbProperties()
+        val packet26 = props.to26ByteLittleEndianPacket()
+        assertEquals(26, packet26.size)
+        val decodedProps = com.audioeq.audio.MeizuLiveMusicReverbProperties.from26ByteLittleEndianPacket(packet26)
+        assertEquals(props, decodedProps)
+
+        // 4. Independent Power Controls:
+        //    - Top button (masterEnabled = false) disables EVERYTHING (Equalizer + Tone + Enhancers)
+        //    - Equalizer button (isEnabled = false, masterEnabled = true) disables ONLY Equalizer while Tone & Enhancers stay active!
+        val stateBothOn = com.audioeq.ui.EqUiState(
+            masterEnabled = true,
+            isEnabled = true,
+            gainsDb = List(10) { 4.0f },
+            tiltBassDb = 3.0f,
+            volumeContourEnabled = false,
+            dolbyBoseConfig = com.audioeq.audio.DolbyBoseDspConfig(
+                boseProfile = com.audioeq.audio.BoseProfile.DYNAMIC
+            )
+        )
+        // Band 0 when both on: 4.0 (EQ) + 3.0 (Tilt) + 4.0 (Bose Dynamic) = 11.0 dB
+        assertEquals(11.0f, stateBothOn.effectiveGainDb(0), 0.05f)
+
+        // Equalizer off, Master on: EQ (4.0) is off, but Tilt (3.0) + Bose Dynamic (4.0) = 7.0 dB still active!
+        val stateEqOffOnly = stateBothOn.copy(isEnabled = false)
+        assertEquals(7.0f, stateEqOffOnly.effectiveGainDb(0), 0.05f)
+
+        // Top Master off: EVERYTHING disabled -> 0.0 dB
+        val stateMasterOff = stateBothOn.copy(masterEnabled = false)
+        assertEquals(0.0f, stateMasterOff.effectiveGainDb(0), 0.01f)
     }
 }
 

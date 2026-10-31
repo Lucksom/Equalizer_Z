@@ -86,6 +86,7 @@ private val FREQ_LABELS = listOf("31", "62", "125", "250", "500", "1k", "2k", "4
  */
 @Composable
 fun EqualizerCard(
+    masterEnabled: Boolean = true,
     isEnabled: Boolean,
     isAbCompare: Boolean,
     usbBitPerfectActive: Boolean,
@@ -102,25 +103,33 @@ fun EqualizerCard(
     modifier: Modifier = Modifier
 ) {
     val palette = LocalMonetPalette.current
+    val eqActive = masterEnabled && isEnabled
+
+    val cardAlpha by animateFloatAsState(
+        targetValue = if (masterEnabled) 1f else 0.45f,
+        animationSpec = tween(220),
+        label = "eqCardAlpha"
+    )
 
     val powerBg by animateColorAsState(
-        targetValue = if (isEnabled) palette.primary else palette.sHigh,
+        targetValue = if (eqActive) palette.primary else palette.sHigh,
         animationSpec = tween(220),
         label = "eqPowerBg"
     )
     val powerTint by animateColorAsState(
-        targetValue = if (isEnabled) palette.onPrimary else palette.onVar,
+        targetValue = if (eqActive) palette.onPrimary else palette.onVar,
         animationSpec = tween(220),
         label = "eqPowerTint"
     )
     val powerRadius by animateDpAsState(
-        targetValue = if (isEnabled) 26.dp else 20.dp,
+        targetValue = if (eqActive) 26.dp else 20.dp,
         animationSpec = tween(220),
         label = "eqPowerRadius"
     )
 
     val subtitleText = when {
-        !isEnabled -> "Equalizer is off"
+        !masterEnabled -> "Master is off · all effects disabled"
+        !isEnabled -> "Equalizer is off · Tone & Enhancers active"
         usbBitPerfectActive -> "USB Bit-Perfect ON · EQ bypassed"
         isAbCompare -> "A/B bypass comparison active"
         else -> String.format(Locale.US, "%.1f× intensity", intensity)
@@ -140,7 +149,7 @@ fun EqualizerCard(
     )
 
     val bandsAlpha by animateFloatAsState(
-        targetValue = if (isEnabled) 1f else 0.38f,
+        targetValue = if (eqActive) 1f else 0.38f,
         animationSpec = tween(220),
         label = "bandsAlpha"
     )
@@ -148,6 +157,7 @@ fun EqualizerCard(
     Surface(
         modifier = modifier
             .fillMaxWidth()
+            .alpha(cardAlpha)
             .border(
                 width = 1.dp,
                 color = palette.outlineV.copy(alpha = 0.55f),
@@ -181,7 +191,7 @@ fun EqualizerCard(
                         modifier = Modifier
                             .size(56.dp)
                             .shadow(
-                                elevation = if (isEnabled) 10.dp else 0.dp,
+                                elevation = if (eqActive) 10.dp else 0.dp,
                                 shape = RoundedCornerShape(powerRadius),
                                 ambientColor = palette.glow,
                                 spotColor = palette.glow
@@ -190,16 +200,16 @@ fun EqualizerCard(
                             .background(powerBg)
                             .border(
                                 width = 1.dp,
-                                color = if (isEnabled) Color.Transparent else palette.outlineV,
+                                color = if (eqActive) Color.Transparent else palette.outlineV,
                                 shape = RoundedCornerShape(powerRadius)
                             )
-                            .clickable { onToggleEnabled(!isEnabled) }
+                            .clickable(enabled = masterEnabled) { onToggleEnabled(!isEnabled) }
                             .testTag("eq_power_button"),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.PowerSettingsNew,
-                            contentDescription = if (isEnabled) "Disable Equalizer" else "Enable Equalizer",
+                            contentDescription = if (eqActive) "Disable Equalizer only" else "Enable Equalizer",
                             tint = powerTint,
                             modifier = Modifier.size(24.dp)
                         )
@@ -301,7 +311,7 @@ fun EqualizerCard(
             // 3. .curve (#curveWrap)
             FrequencyResponseGraph(
                 displayGainsDb = effectiveGainsDb,
-                isEnabled = isEnabled && !isAbCompare && !usbBitPerfectActive
+                isEnabled = masterEnabled && !isAbCompare && !usbBitPerfectActive
             )
 
             // 4. .zones
@@ -345,7 +355,7 @@ fun EqualizerCard(
                 V7SegmentedRow(
                     options = listOf(false to "Left Channel (10-Band)", true to "Right Channel (10-Band)"),
                     selectedValue = editingRightChannel,
-                    enabled = isEnabled,
+                    enabled = eqActive,
                     onSelect = onSelectEditingChannel
                 )
             }
@@ -367,9 +377,9 @@ fun EqualizerCard(
                         bandIndex = i,
                         freqLabel = freqLabel,
                         userGainDb = userGain,
-                        effectiveGainDb = effGain,
+                        effectiveGainDb = if (eqActive) effGain else userGain,
                         intensity = intensity,
-                        enabled = isEnabled,
+                        enabled = eqActive,
                         onGainChange = { newDb -> onBandGainChange(i, newDb) },
                         modifier = Modifier.weight(1f)
                     )

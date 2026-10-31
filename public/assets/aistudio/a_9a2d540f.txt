@@ -1,0 +1,191 @@
+Meizu Square Sound DSP: Architectural Specification & Reverse-Engineering Reference
+This document details the reverse-engineered DSP pipeline, signal processing mathematics, coefficient tables, and implementation parameters extracted from Meizu's Square Sound audio engine (FlymeMusicFX.apk and vendor native libraries).
+1. System Architecture & Dispatch Model
+The audio pipeline consists of a high-level UI dispatcher interacting with Android's native AudioEffect framework via vendor shared objects:
+┌────────────────────────────────────────────────────────┐
+│               FlymeMusicFX.apk (Java UI)               │
+│               com.meizu.musicfx                        │
+└──────────────────────────┬─────────────────────────────┘
+                           │
+                           ▼
+┌────────────────────────────────────────────────────────┐
+│               ControlPanelEffect.java                  │
+│       - Session Management (mPackageSessions)          │
+│       - Preset Dispatcher (Switch Key.ordinal())       │
+└───────┬──────────────────┬───────────────────┬─────────┘
+        │                  │                   │
+        ▼                  ▼                   ▼
+┌──────────────┐   ┌──────────────┐    ┌──────────────┐
+│VirtualizerMz │   │ EqualizerMz  │    │EnvReverbMz   │
+└───────┬──────┘   └───────┬──────┘    └───────┬──────┘
+        │ (UUID: 725d...)  │                   │ (UUID: 38a6...)
+        ▼                  ▼                   ▼
+┌──────────────┐   ┌──────────────┐    ┌──────────────┐
+│libvirtual-   │   │libequalizer- │    │liblivemusic- │
+│izerMz.so     │   │Mz.so         │    │Mz.so         │
+└──────────────┘   └──────────────┘    └──────────────┘
+
+Registered AudioEffect UUIDs
+ * Virtualizer (VirtualizerMz): 725d7fa7-9219-4f71-8fa7-240a6d489387
+ * Environmental Reverb (EnvironmentalReverbMz): 38a6a248-94be-4007-bbe1-337d7dc49e6d
+ * Equalizer (EqualizerMz): Standard Android Equalizer interface / Vendor HAL instance
+ * Bass Boost (BassBoostMz): 42b10000-0010-0000-0000-0002a5d5c51b (Standard/Vendor BassBoost interface)
+2. Preset Matrix & 10-Band EQ Curve Profiles
+Meizu encodes 10-band equalizer profiles inside EqualizerUtils.java as 20-character strings where each consecutive 2-digit token represents an ISO band gain.
+Decoding Mathematics
+The raw decimal integer value is converted to decibel gain using a zero-offset of 10:
+Where k \in [0, 9] maps to standard ISO center frequencies:
+ *  *  *  *  *  *  *  *  *  * Complete Preset Gain Table (dB)
+| Preset Name | Raw String Payload | 31.25 Hz | 62.5 Hz | 125 Hz | 250 Hz | 500 Hz | 1 kHz | 2 kHz | 4 kHz | 8 kHz | 16 kHz |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Pure Voice | 10101010081215151513 | 0.0 | 0.0 | 0.0 | 0.0 | -2.0 | +2.0 | +5.0 | +5.0 | +5.0 | +3.0 |
+| Pop | 12131007040507101208 | +2.0 | +3.0 | 0.0 | -3.0 | -6.0 | -5.0 | -3.0 | 0.0 | +2.0 | -2.0 |
+| Rock | 13121313081213151616 | +3.0 | +2.0 | +3.0 | +3.0 | -2.0 | +2.0 | +3.0 | +5.0 | +6.0 | +6.0 |
+| Jazz | 10101015151510121315 | 0.0 | 0.0 | 0.0 | +5.0 | +5.0 | +5.0 | 0.0 | +2.0 | +3.0 | +5.0 |
+| Classical | 10101010101005050502 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | -5.0 | -5.0 | -5.0 | -8.0 |
+| Power Bass | 19181614101010101010 | +9.0 | +8.0 | +6.0 | +4.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
+| Custom / Flat | 10101010101010101010 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
+3. Acoustic Analysis by Preset
+Pure Voice (BUTTON_PURE_VOICE)
+ * Target: Vocal clarity, sibilance preservation, and speech intelligibility.
+ * Filter Curve: A steep notch at 500\text{ Hz} (-2\text{ dB}) cleans up muddy chest resonance and acoustic cavity reflections. A wide +5\text{ dB} shelf from 2\text{ kHz} to 8\text{ kHz} targets formant frequencies F_2, F_3, and speech consonants (/s/, /t/, /k/). A high-shelf tail of +3\text{ dB} at 16\text{ kHz} preserves vocal breath and open-mic air.
+Pop
+ * Target: Compensates for typical V-shaped consumer tunings with high-energy bass and suppressed harsh mid-range frequencies.
+ * Filter Curve: Mild low-end lift (+2\text{ dB} to +3\text{ dB}), steep scoop across lower-mids (500\text{ Hz} at -6\text{ dB}, 1\text{ kHz} at -5\text{ dB}), with controlled upper treble (+2\text{ dB} at 8\text{ kHz}) to eliminate fatigue during extended listening.
+Rock
+ * Target: Punchy kick drums, aggressive electric guitar bite, and bright cymbals.
+ * Filter Curve: Consistent +3\text{ dB} boost from sub-bass to upper-bass (31.25\text{ Hz} to 250\text{ Hz}), a minor mid dip at 500\text{ Hz} (-2\text{ dB}) to decouple bass lines from guitars, followed by an aggressive upward ramp hitting +5\text{ dB} at 4\text{ kHz} and +6\text{ dB} at 8\text{ kHz}\text{--}16\text{ kHz}.
+Jazz
+ * Target: Warm acoustic instrumentation, upright double-bass presence, and intimate saxophone/brass bodies.
+ * Filter Curve: Low-end remains completely neutral (0\text{ dB} up to 125\text{ Hz}). Lower mids (250\text{ Hz} to 1\text{ kHz}) are boosted by +5\text{ dB} to fill out horn timbres and snare body, balanced with open air at 16\text{ kHz} (+5\text{ dB}).
+Classical
+ * Target: Natural orchestral dynamics and high-frequency roll-off to emulate concert-hall acoustic absorption.
+ * Filter Curve: Perfectly flat response through 1\text{ kHz}, followed by aggressive high-frequency damping: -5\text{ dB} across 2\text{ kHz}\text{--}8\text{ kHz}, descending to -8\text{ dB} at 16\text{ kHz} to suppress string shrillness.
+4. 3D Sound Effects: Virtualizer DSP Model
+When selecting 3D sound effects (BUTTON_3D = 3), ControlPanelEffect.java executes:
+VirtualizerMz virtualizerEffect = getVirtualizerEffect(audioSession);
+virtualizerEffect.setEnabled(true);
+virtualizerEffect.setStrength((short) 650);
+
+Signal Flow Architecture
+The virtualizer expands the acoustic image beyond physical transducer limits using Interaural Time Differences (ITD), Interaural Level Differences (ILD), and head-shadow filtering:
+Direct Left  x_L[n] ────┬─────────────[ G_direct ]─────────────(+)──> Output Left y_L[n]
+                        │                                       ▲
+                        └─────[ Delay τ ]────[ H_shadow(z) ]────┤
+                                                                │
+Direct Right x_R[n] ────┬─────[ Delay τ ]────[ H_shadow(z) ]────┘
+                        │                                       ▲
+                        └─────────────[ G_direct ]─────────────(+)──> Output Right y_R[n]
+
+Mathematical Formulations
+1. Woodworth Contralateral Delay (ITD)
+To place virtual sound sources at azimuth \theta \approx \pm 35^\circ:
+ * Average head radius: r = 0.0875\text{ m}
+ * Acoustic velocity: c = 343\text{ m/s}
+ * Azimuth angle: \theta = 35^\circ = 0.6109\text{ rad}
+At f_s = 48000\text{ Hz}:
+
+2. Head-Shadow Low-Pass Filter (H_{\text{shadow}}(z))
+Acoustic diffraction around the skull attenuates high frequencies entering the opposite ear. Modeled via a 1-pole recursive low-pass filter with cutoff f_c \approx 850\text{ Hz}:
+Time-domain difference equation:
+
+3. Wet/Dry Blending at 65% Strength
+Strength is normalized on an integer scale of 0\text{--}1000:
+Output matrix with spatial width expansion:
+
+5. Live Music: Environmental Reverb Model
+Selecting Live Music (BUTTON_ENV_REVERB = 2 / Case 3) invokes EnvironmentalReverbMz with UUID 38a6a248-94be-4007-bbe1-337d7dc49e6d.
+26-Byte Serialization Layout (PARAM_PROPERTIES = 10)
+The reverb state is managed using a packed little-endian binary buffer containing 10 parameters:
+Byte Offset:   0      2      4      8      10     12     16     18     22     24   26
+Field:        [rL]   [rHF]  [dT]   [dHF]  [rfL]  [rfD]  [rvL]  [rvD]  [diff] [dens]
+Size (Bytes):   2      2      4      2      2      4      2      4      2      2
+Type:         short  short   int   short  short   int   short   int   short  short
+
+Parameter Reference & Physical Units
+| Parameter Key | Constant ID | Data Type | Units / Scale | Target Acoustic Property |
+|---|---|---|---|---|
+| PARAM_ROOM_LEVEL | 0 | short | \text{mB} (-10000 to 0) | Attenuation of direct sound / room volume |
+| PARAM_ROOM_HF_LEVEL | 1 | short | \text{mB} (-10000 to 0) | High-frequency damping factor |
+| PARAM_DECAY_TIME | 2 | int | \text{ms} (100 to 20000) | RT60 reverberation decay time |
+| PARAM_DECAY_HF_RATIO | 3 | short | Permille (100 to 2000) | Ratio of HF decay to mid-band decay |
+| PARAM_REFLECTIONS_LEVEL | 4 | short | \text{mB} (-10000 to 1000) | Amplitude of initial discrete reflections |
+| PARAM_REFLECTIONS_DELAY | 5 | int | \text{ms} (0 to 300) | Pre-delay time before first reflection |
+| PARAM_REVERB_LEVEL | 6 | short | \text{mB} (-10000 to 2000) | Amplitude of late diffuse reverberant tail |
+| PARAM_REVERB_DELAY | 7 | int | \text{ms} (0 to 100) | Delay between early reflections and late tail |
+| PARAM_DIFFUSION | 8 | short | Permille (0 to 1000) | Echo density / modal spread |
+| PARAM_DENSITY | 9 | short | Permille (0 to 1000) | Coloration / resonance frequency density |
+6. Power Bass: Bass Boost Model
+Selecting Power Bass (BUTTON_BASS = 1) in ControlPanelEffect.java executes:
+BassBoostMz bassBoostEffect = getBassBoostEffect(audioSession);
+bassBoostEffect.setEnabled(true);
+bassBoostEffect.setStrength((short) 1000);
+
+Coupled with EQ_BASS_DEFAULT = "19181614101010101010", this preset implements a two-stage low-frequency reinforcement pipeline:
+ * Dynamic Psychoacoustic Harmonics: A non-linear filter inside libbassboostMz.so generates missing fundamental harmonics (2nd and 3rd harmonics) at 100% processing strength (1000 / 1000).
+ * Fixed Low-Shelf Boost: Applies static linear post-filtering:
+   * +9.0\text{ dB} at 31.25\text{ Hz}
+   * +8.0\text{ dB} at 62.5\text{ Hz}
+   * +6.0\text{ dB} at 125\text{ Hz}
+   * +4.0\text{ dB} at 250\text{ Hz}
+7. Non-Root DynamicsProcessing Integration
+To reproduce these profiles without modifying system files, map the extracted coefficients into Android's public DynamicsProcessing and Virtualizer APIs:
+// Map Meizu Square Sound modes into DynamicsProcessing stages
+fun applyMeizuPreset(dp: DynamicsProcessing, virt: Virtualizer?, mode: MeizuMode) {
+    when (mode) {
+        MeizuMode.EFFECT_3D -> {
+            virt?.apply {
+                enabled = true
+                if (strengthSupported) setStrength(650.toShort())
+                forceVirtualizationMode(Virtualizer.VIRTUALIZATION_MODE_BINAURAL)
+            }
+            // Set linear flat response on DynamicsProcessing stages
+            for (i in 0 until 10) {
+                dp.setPostEqBandAllChannelsTo(i, DynamicsProcessing.EqBand(true, FREQ[i], 0.0f))
+            }
+        }
+        MeizuMode.PURE_VOICE -> {
+            virt?.enabled = false
+            val gains = floatArrayOf(0.0f, 0.0f, 0.0f, 0.0f, -2.0f, 2.0f, 5.0f, 5.0f, 5.0f, 3.0f)
+            for (i in 0 until 10) {
+                dp.setPostEqBandAllChannelsTo(i, DynamicsProcessing.EqBand(true, FREQ[i], gains[i]))
+            }
+        }
+        MeizuMode.POP -> {
+            virt?.enabled = false
+            val gains = floatArrayOf(2.0f, 3.0f, 0.0f, -3.0f, -6.0f, -5.0f, -3.0f, 0.0f, 2.0f, -2.0f)
+            for (i in 0 until 10) {
+                dp.setPostEqBandAllChannelsTo(i, DynamicsProcessing.EqBand(true, FREQ[i], gains[i]))
+            }
+        }
+        MeizuMode.ROCK -> {
+            virt?.enabled = false
+            val gains = floatArrayOf(3.0f, 2.0f, 3.0f, 3.0f, -2.0f, 2.0f, 3.0f, 5.0f, 6.0f, 6.0f)
+            for (i in 0 until 10) {
+                dp.setPostEqBandAllChannelsTo(i, DynamicsProcessing.EqBand(true, FREQ[i], gains[i]))
+            }
+        }
+        MeizuMode.JAZZ -> {
+            virt?.enabled = false
+            val gains = floatArrayOf(0.0f, 0.0f, 0.0f, 5.0f, 5.0f, 5.0f, 0.0f, 2.0f, 3.0f, 5.0f)
+            for (i in 0 until 10) {
+                dp.setPostEqBandAllChannelsTo(i, DynamicsProcessing.EqBand(true, FREQ[i], gains[i]))
+            }
+        }
+        MeizuMode.CLASSICAL -> {
+            virt?.enabled = false
+            val gains = floatArrayOf(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, -5.0f, -5.0f, -5.0f, -8.0f)
+            for (i in 0 until 10) {
+                dp.setPostEqBandAllChannelsTo(i, DynamicsProcessing.EqBand(true, FREQ[i], gains[i]))
+            }
+        }
+        MeizuMode.POWER_BASS -> {
+            virt?.enabled = false
+            val gains = floatArrayOf(9.0f, 8.0f, 6.0f, 4.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f)
+            for (i in 0 until 10) {
+                dp.setPostEqBandAllChannelsTo(i, DynamicsProcessing.EqBand(true, FREQ[i], gains[i]))
+            }
+        }
+    }
+}
+

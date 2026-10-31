@@ -179,6 +179,7 @@ fun AudioEqScreen(
                             // Left Column (300dp): Presets Card
                             Box(modifier = Modifier.width(300.dp)) {
                                 PresetsCard(
+                                    masterEnabled = state.masterEnabled,
                                     presets = state.presets,
                                     selectedPresetId = state.selectedPresetId,
                                     activePresetName = state.activePresetDisplayName,
@@ -193,6 +194,7 @@ fun AudioEqScreen(
                                 verticalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
                                 EqualizerCard(
+                                    masterEnabled = state.masterEnabled,
                                     isEnabled = state.isEnabled,
                                     isAbCompare = state.isAbCompare,
                                     usbBitPerfectActive = state.diagnostics.usbBitPerfectActive,
@@ -225,7 +227,6 @@ fun AudioEqScreen(
                                 DolbyBoseDspCard(
                                     config = state.dolbyBoseConfig,
                                     masterEnabled = state.masterEnabled && !state.diagnostics.usbBitPerfectActive,
-                                    selectedMode = state.selectedMode,
                                     onSelectBoseProfile = { viewModel.selectBoseProfile(it) },
                                     onSelectIeqPreset = { viewModel.selectIeqPreset(it) },
                                     onIeqAmountChange = { viewModel.updateIeqAmount(it) },
@@ -235,8 +236,8 @@ fun AudioEqScreen(
                                     onDialogueAmountChange = { viewModel.updateDialogueAmount(it) },
                                     onDialogueDuckingChange = { viewModel.updateDialogueDucking(it) },
                                     onToggleBassEnhancer = { viewModel.setBassEnhancerEnabled(it) },
+                                    onBassEnhancerStrengthChange = { viewModel.updateBassEnhancerStrength(it) },
                                     onToggleVirtualBass = { viewModel.setVirtualBassEnabled(it) },
-                                    onToggleDolbyControl = { viewModel.setDolbyControlEnabled(it) },
                                     onResetDolbyBose = { viewModel.resetDolbyBoseDsp() },
                                     onOpenCalibration = { viewModel.openCalibrationSheet() },
                                     onOpenAbxTest = { viewModel.openAbxSheet() }
@@ -280,6 +281,7 @@ fun AudioEqScreen(
 
                         item {
                             PresetsCard(
+                                masterEnabled = state.masterEnabled,
                                 presets = state.presets,
                                 selectedPresetId = state.selectedPresetId,
                                 activePresetName = state.activePresetDisplayName,
@@ -290,6 +292,7 @@ fun AudioEqScreen(
 
                         item {
                             EqualizerCard(
+                                masterEnabled = state.masterEnabled,
                                 isEnabled = state.isEnabled,
                                 isAbCompare = state.isAbCompare,
                                 usbBitPerfectActive = state.diagnostics.usbBitPerfectActive,
@@ -326,7 +329,6 @@ fun AudioEqScreen(
                             DolbyBoseDspCard(
                                 config = state.dolbyBoseConfig,
                                 masterEnabled = state.masterEnabled && !state.diagnostics.usbBitPerfectActive,
-                                selectedMode = state.selectedMode,
                                 onSelectBoseProfile = { viewModel.selectBoseProfile(it) },
                                 onSelectIeqPreset = { viewModel.selectIeqPreset(it) },
                                 onIeqAmountChange = { viewModel.updateIeqAmount(it) },
@@ -336,8 +338,8 @@ fun AudioEqScreen(
                                 onDialogueAmountChange = { viewModel.updateDialogueAmount(it) },
                                 onDialogueDuckingChange = { viewModel.updateDialogueDucking(it) },
                                 onToggleBassEnhancer = { viewModel.setBassEnhancerEnabled(it) },
+                                onBassEnhancerStrengthChange = { viewModel.updateBassEnhancerStrength(it) },
                                 onToggleVirtualBass = { viewModel.setVirtualBassEnabled(it) },
-                                onToggleDolbyControl = { viewModel.setDolbyControlEnabled(it) },
                                 onResetDolbyBose = { viewModel.resetDolbyBoseDsp() },
                                 onOpenCalibration = { viewModel.openCalibrationSheet() },
                                 onOpenAbxTest = { viewModel.openAbxSheet() }
@@ -439,8 +441,6 @@ fun AudioEqScreen(
             startOnBoot = state.startOnBoot,
             compatibility10Band = state.compatibility10Band,
             transientMode = state.transientMode,
-            dolbyExperimental = state.dolbyBoseConfig.dolbyExperimental,
-            dolbyEnabled = state.dolbyBoseConfig.dolbyEnabled,
             themeMode = state.themeMode,
             seedHex = state.seedHex,
             onSelectMode = { viewModel.selectMode(it) },
@@ -452,7 +452,6 @@ fun AudioEqScreen(
             onToggleStartOnBoot = { viewModel.setStartOnBoot(it) },
             onToggleCompatibility10Band = { viewModel.setCompatibility10Band(it) },
             onToggleTransientMode = { viewModel.setTransientMode(it) },
-            onToggleDolbyExperimental = { viewModel.setDolbyExperimental(it) },
             onSelectThemeMode = { viewModel.setThemeMode(it) },
             onSelectSeedHex = { hex, fromWallpaper -> viewModel.setSeedHex(hex, fromWallpaper) },
             onDismiss = { viewModel.dismissSettingsSheet() }

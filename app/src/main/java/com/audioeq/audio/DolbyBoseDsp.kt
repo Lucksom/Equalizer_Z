@@ -1,18 +1,28 @@
 package com.audioeq.audio
 
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.UUID
+import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
-import kotlin.math.log10
+import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.sin
-import kotlin.math.PI
 
 /**
  * Complete Non-Root DSP Mathematical Engine for:
  * - Dialogue Enhancer (1-4 kHz Formant Expansion + <=180 Hz Ambient Ducking + MBC Upward Expansion)
- * - Bass Enhancer (with Virtual Bass Harmonic Synthesis: H2=-2dB, H3=-9dB, H4=-12dB in 229-494 Hz mix window)
+ * - Bass Enhancer (Variable 0..100% / 0..1000 BassBoostMz + Two-Stage Low-Shelf Boost + Virtual Bass Harmonic Synthesis H2/H3/H4)
  * - Intelligent Equalizer (IEQ) with 4 subsets: ieq_detailed, ieq_balanced, ieq_warm, and ieq_custom (+ Off)
- * - Bose Profiles (Dynamic & Balanced) extracted from MiSound resources.arsc (Scenarios 60 & 61)
+ * - Bose & Meizu Square Sound Profiles:
+ *   1. Off
+ *   2. Dynamic (MiSound Scenario 60)
+ *   3. Balanced (MiSound Scenario 61)
+ *   4. 3D (VirtualizerMz 725d7fa7-9219-4f71-8fa7-240a6d489387: Woodworth ITD τ=302.2µs / 15 samples @ 48kHz + 850Hz 1-pole Head-Shadow LPF + 650/1000 Binaural)
+ *   5. Live Music (EnvironmentalReverbMz 38a6a248-94be-4007-bbe1-337d7dc49e6d: 26-Byte Little-Endian PARAM_PROPERTIES=10 Hall Reverb)
  */
 enum class IeqPreset(
     val id: String,
@@ -38,7 +48,9 @@ enum class BoseProfile(
 ) {
     OFF("bose_off", "Off", "Flat bypass"),
     DYNAMIC("bose_dynamic", "Dynamic", "Scenario 60 · +4 dB Sub & Air"),
-    BALANCED("bose_balanced", "Balanced", "Scenario 61 · Smooth 1 kHz dip");
+    BALANCED("bose_balanced", "Balanced", "Scenario 61 · Smooth 1 kHz dip"),
+    EFFECT_3D("bose_3d", "3D", "VirtualizerMz · ITD 302µs + 850Hz Head-Shadow (650/1000)"),
+    LIVE_MUSIC("bose_live_music", "Live Music", "EnvReverbMz · 26-Byte Hall Reverb & Reflections");
 
     companion object {
         fun fromId(id: String): BoseProfile = entries.find { it.id == id } ?: OFF
@@ -53,14 +65,136 @@ data class DolbyBoseDspConfig(
     val dialogueAmount: Int = 8, // 0..16 (v7 default = 8)
     val dialogueDucking: Int = 2, // 0, 2, or 4 dB for f <= 180 Hz
     val bassEnhancerEnabled: Boolean = false,
+    val bassEnhancerStrength: Int = 80, // 0..100% (maps to 0..1000 BassBoostMz strength and scales low-shelf boost without volume drop)
     val virtualBassEnabled: Boolean = false,
-    val boseProfile: BoseProfile = BoseProfile.OFF,
-    val dolbyExperimental: Boolean = false,
-    val dolbyEnabled: Boolean = false
-)
+    val boseProfile: BoseProfile = BoseProfile.OFF
+) {
+    /** Maps 0..100% UI slider to 0..1000 native BassBoostMz / Android BassBoost strength. */
+    val bassBoostStrengthPermille: Short
+        get() = (bassEnhancerStrength.coerceIn(0, 100) * 10).toShort()
+}
+
+/**
+ * Meizu Square Sound EnvironmentalReverbMz 26-Byte Serialization Layout (`PARAM_PROPERTIES = 10`):
+ * Byte Offset:   0      2      4      8      10     12     16     18     22     24   26
+ * Field:        [rL]   [rHF]  [dT]   [dHF]  [rfL]  [rfD]  [rvL]  [rvD]  [diff] [dens]
+ * Size (Bytes):   2      2      4      2      2      4      2      4      2      2
+ * Type:         short  short   int   short  short   int   short   int   short  short
+ */
+data class MeizuLiveMusicReverbProperties(
+    val roomLevelMb: Short = -600,          // PARAM_ROOM_LEVEL (0): -10000 to 0 mB
+    val roomHfLevelMb: Short = -350,        // PARAM_ROOM_HF_LEVEL (1): -10000 to 0 mB
+    val decayTimeMs: Int = 1850,            // PARAM_DECAY_TIME (2): 100 to 20000 ms (RT60)
+    val decayHfRatioPermille: Short = 720,  // PARAM_DECAY_HF_RATIO (3): 100 to 2000 permille
+    val reflectionsLevelMb: Short = -450,   // PARAM_REFLECTIONS_LEVEL (4): -10000 to 1000 mB
+    val reflectionsDelayMs: Int = 22,       // PARAM_REFLECTIONS_DELAY (5): 0 to 300 ms
+    val reverbLevelMb: Short = -150,        // PARAM_REVERB_LEVEL (6): -10000 to 2000 mB
+    val reverbDelayMs: Int = 38,            // PARAM_REVERB_DELAY (7): 0 to 100 ms
+    val diffusionPermille: Short = 1000,    // PARAM_DIFFUSION (8): 0 to 1000 permille
+    val densityPermille: Short = 1000       // PARAM_DENSITY (9): 0 to 1000 permille
+) {
+    /**
+     * Packs the 10 reverb parameters into the exact 26-byte Little-Endian binary payload
+     * for `PARAM_PROPERTIES = 10` on `EnvironmentalReverbMz` (`38a6a248-94be-4007-bbe1-337d7dc49e6d`).
+     */
+    fun to26ByteLittleEndianPacket(): ByteArray {
+        val buf = ByteBuffer.allocate(26).order(ByteOrder.LITTLE_ENDIAN)
+        buf.putShort(roomLevelMb.coerceIn(-10000, 0))          // Offset 0 (2B)
+        buf.putShort(roomHfLevelMb.coerceIn(-10000, 0))        // Offset 2 (2B)
+        buf.putInt(decayTimeMs.coerceIn(100, 20000))           // Offset 4 (4B)
+        buf.putShort(decayHfRatioPermille.coerceIn(100, 2000)) // Offset 8 (2B)
+        buf.putShort(reflectionsLevelMb.coerceIn(-10000, 1000))// Offset 10 (2B)
+        buf.putInt(reflectionsDelayMs.coerceIn(0, 300))        // Offset 12 (4B)
+        buf.putShort(reverbLevelMb.coerceIn(-10000, 2000))     // Offset 16 (2B)
+        buf.putInt(reverbDelayMs.coerceIn(0, 100))             // Offset 18 (4B)
+        buf.putShort(diffusionPermille.coerceIn(0, 1000))      // Offset 22 (2B)
+        buf.putShort(densityPermille.coerceIn(0, 1000))        // Offset 24 (2B)
+        return buf.array()
+    }
+
+    companion object {
+        fun from26ByteLittleEndianPacket(bytes: ByteArray): MeizuLiveMusicReverbProperties {
+            require(bytes.size >= 26) { "EnvironmentalReverbMz PARAM_PROPERTIES requires 26 bytes" }
+            val buf = ByteBuffer.wrap(bytes, 0, 26).order(ByteOrder.LITTLE_ENDIAN)
+            return MeizuLiveMusicReverbProperties(
+                roomLevelMb = buf.short,
+                roomHfLevelMb = buf.short,
+                decayTimeMs = buf.int,
+                decayHfRatioPermille = buf.short,
+                reflectionsLevelMb = buf.short,
+                reflectionsDelayMs = buf.int,
+                reverbLevelMb = buf.short,
+                reverbDelayMs = buf.int,
+                diffusionPermille = buf.short,
+                densityPermille = buf.short
+            )
+        }
+    }
+}
 
 object DolbyBoseDspMath {
     const val NUM_BANDS = 10
+
+    // Registered Meizu Square Sound AudioEffect Vendor UUIDs (Section 1)
+    val UUID_VIRTUALIZER_MZ: UUID = UUID.fromString("725d7fa7-9219-4f71-8fa7-240a6d489387")
+    val UUID_ENV_REVERB_MZ: UUID = UUID.fromString("38a6a248-94be-4007-bbe1-337d7dc49e6d")
+    val UUID_BASS_BOOST_MZ: UUID = UUID.fromString("42b10000-0010-0000-0000-0002a5d5c51b")
+
+    const val ENV_REVERB_PARAM_PROPERTIES = 10
+    const val VIRTUALIZER_3D_STRENGTH: Short = 650
+
+    // Woodworth Contralateral ITD & Head-Shadow Constants (Section 4)
+    const val HEAD_RADIUS_M = 0.0875
+    const val SOUND_SPEED_MPS = 343.0
+    const val AZIMUTH_35_RAD = 35.0 * PI / 180.0 // 0.610865 rad
+    const val HEAD_SHADOW_CUTOFF_HZ = 850.0
+    const val DEFAULT_SAMPLE_RATE_HZ = 48000.0
+
+    /**
+     * Woodworth Contralateral Delay (ITD) in seconds:
+     * τ = (r / c) * (θ + sin(θ))
+     * For r = 0.0875 m, c = 343 m/s, θ = 35° (0.6109 rad): τ ≈ 0.0003022 s (302.2 µs)
+     */
+    fun computeWoodworthItdSeconds(
+        headRadiusM: Double = HEAD_RADIUS_M,
+        soundSpeedMps: Double = SOUND_SPEED_MPS,
+        azimuthRad: Double = AZIMUTH_35_RAD
+    ): Double {
+        return (headRadiusM / soundSpeedMps) * (azimuthRad + sin(azimuthRad))
+    }
+
+    /**
+     * Woodworth Contralateral Delay in integer samples at `sampleRateHz`:
+     * At fs = 48000 Hz, D = round(0.0003022 * 48000) = 15 samples.
+     */
+    fun computeWoodworthDelaySamples(sampleRateHz: Double = DEFAULT_SAMPLE_RATE_HZ): Int {
+        return (computeWoodworthItdSeconds() * sampleRateHz).roundToInt().coerceAtLeast(1)
+    }
+
+    /**
+     * Head-Shadow 1-Pole Low-Pass Filter pole coefficient α:
+     * α = exp(-2π * fc / fs), where fc ≈ 850 Hz.
+     * H_shadow(z) = (1 - α) / (1 - α * z^-1)
+     */
+    fun computeHeadShadowAlpha(
+        cutoffHz: Double = HEAD_SHADOW_CUTOFF_HZ,
+        sampleRateHz: Double = DEFAULT_SAMPLE_RATE_HZ
+    ): Double {
+        return exp(-2.0 * PI * cutoffHz / sampleRateHz)
+    }
+
+    /**
+     * Meizu EqualizerUtils.java 20-Character Preset String Decoder (Section 2):
+     * Each consecutive 2-digit token represents an ISO band gain with a zero-offset of 10:
+     * G_dB[k] = Integer.parseInt(payload.substring(2k, 2k + 2)) - 10
+     */
+    fun decodeMeizuPresetPayload(raw20Char: String): List<Float> {
+        if (raw20Char.length < 20) return List(NUM_BANDS) { 0f }
+        return List(NUM_BANDS) { k ->
+            val token = raw20Char.substring(2 * k, 2 * k + 2)
+            ((token.toIntOrNull() ?: 10) - 10).toFloat()
+        }
+    }
 
     // 10-Band Upper Cutoff Frequencies (Hz) for DynamicsProcessing
     val FREQ_CUTOFFS_10 = floatArrayOf(
@@ -69,7 +203,7 @@ object DolbyBoseDspMath {
 
     // 10-Band ISO Center Frequencies (Hz)
     val FREQ_CENTERS_10 = doubleArrayOf(
-        31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0
+        31.25, 62.5, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0
     )
 
     val FREQ_LABELS_10 = listOf(
@@ -100,14 +234,26 @@ object DolbyBoseDspMath {
     val IEQ_WARM_10 = floatArrayOf(-6.06f, -4.88f, -1.56f, -2.25f, -1.19f, 1.50f, -0.50f, -4.19f, -8.50f, -11.00f)
     val IEQ_CUSTOM_DEFAULT_10 = floatArrayOf(2.5f, 2.0f, 1.0f, 0.0f, -0.5f, 0.5f, 1.5f, 2.0f, 1.5f, 1.0f)
 
-    // --- 1.F Extracted Bose Profiles (from MiSound resources.arsc Scenarios 60 & 61) ---
+    // --- 1.F Extracted Bose & Meizu Square Sound Profiles ---
     val BOSE_OFF_10 = floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)
     // Bose Dinamis (Scenario 60) -> Dynamic
     val BOSE_DYNAMIC_10 = floatArrayOf(4.0f, 1.0f, -2.0f, -0.25f, 0.0f, -2.0f, 0.0f, -2.0f, 0.5f, 4.0f)
     // Bose Seimbang (Scenario 61) -> Balanced
     val BOSE_BALANCED_10 = floatArrayOf(0.0f, 0.0f, 0.0f, -1.0f, -1.0f, -3.0f, -0.5f, 0.0f, 0.0f, 0.0f)
+    // 3D Sound Effects (Section 4 & 7: VirtualizerMz strength 650/1000 + Linear PostEq stage with binaural head-shadow spatial cues)
+    val BOSE_3D_10 = floatArrayOf(1.5f, 1.2f, 0.5f, -0.5f, -1.0f, 0.0f, 1.8f, 2.5f, 3.0f, 2.5f)
+    // Live Music (Section 5: EnvironmentalReverbMz 26-byte hall acoustics + warm stage body & hall air)
+    val BOSE_LIVE_MUSIC_10 = floatArrayOf(2.0f, 2.5f, 2.0f, 1.0f, -1.0f, 0.5f, 2.0f, 2.5f, 2.0f, 1.5f)
 
-    // --- 1.D Bass Enhancer & Virtual Bass Harmonic Synthesis Constants ---
+    val DEFAULT_LIVE_MUSIC_REVERB = MeizuLiveMusicReverbProperties()
+
+    // --- 1.D Bass Enhancer & Power Bass Low-Shelf + Virtual Bass Harmonic Synthesis Constants ---
+    // From Section 6 (Power Bass: +9.0 dB @ 31.25 Hz, +8.0 dB @ 62.5 Hz, +6.0 dB @ 125 Hz, +4.0 dB @ 250 Hz at 100% strength)
+    const val BASS_MAX_31_DB = 9.0f
+    const val BASS_MAX_62_DB = 8.0f
+    const val BASS_MAX_125_DB = 6.0f
+    const val BASS_MAX_250_DB = 4.0f
+
     const val BASS_ENHANCER_BOOST_RAW = 119 // +7.4375 dB
     const val BASS_ENHANCER_BOOST_DB = 119f / 16f // +7.4375 dB
     const val BASS_ENHANCER_CUTOFF_HZ = 504f
@@ -129,7 +275,7 @@ object DolbyBoseDspMath {
             IeqPreset.CUSTOM -> {
                 if (custom10Db.size == NUM_BANDS) {
                     FloatArray(NUM_BANDS) { i -> custom10Db[i].coerceIn(-12f, 12f) }
-                } else if (userCustom10Db != null && userCustom10Db.any { kotlin.math.abs(it) > 0.05 }) {
+                } else if (userCustom10Db != null && userCustom10Db.any { abs(it) > 0.05 }) {
                     FloatArray(NUM_BANDS) { i ->
                         userCustom10Db.getOrElse(i) { 0.0 }.toFloat().coerceIn(-12f, 12f)
                     }
@@ -145,15 +291,39 @@ object DolbyBoseDspMath {
             BoseProfile.OFF -> BOSE_OFF_10
             BoseProfile.DYNAMIC -> BOSE_DYNAMIC_10
             BoseProfile.BALANCED -> BOSE_BALANCED_10
+            BoseProfile.EFFECT_3D -> BOSE_3D_10
+            BoseProfile.LIVE_MUSIC -> BOSE_LIVE_MUSIC_10
+        }
+    }
+
+    /**
+     * Computes the per-band Bass Enhancer dB boost for band `i` (0..3 -> 31.25..250 Hz)
+     * given `bassEnhancerStrength` (0..100%) and `virtualBassEnabled`.
+     * At 100% strength, delivers the full Power Bass low-shelf (+9.0, +8.0, +6.0, +4.0 dB)
+     * plus Virtual Bass harmonic synthesis (H2/H3/H4 in 125–250 Hz) when enabled.
+     */
+    fun bassEnhancerBandBoostDb(
+        bandIndex: Int,
+        strengthPct: Int,
+        virtualBassEnabled: Boolean
+    ): Float {
+        val factor = (strengthPct.coerceIn(0, 100) / 100.0f)
+        if (factor <= 0f) return 0f
+        return when (bandIndex) {
+            0 -> BASS_MAX_31_DB * factor
+            1 -> BASS_MAX_62_DB * factor
+            2 -> (BASS_MAX_125_DB + (if (virtualBassEnabled) 1.5f else 0.0f)) * factor
+            3 -> (BASS_MAX_250_DB + (if (virtualBassEnabled) 1.2f else 0.0f)) * factor
+            else -> 0f
         }
     }
 
     /**
      * Computes the composite 10-band Pre-EQ + Post-EQ delta (in dB) contributed by:
      * - Intelligent Equalizer (IEQ: Detailed, Balanced, Warm, Custom)
-     * - Bass Enhancer (+5.91 dB @ 31Hz, +7.44 dB @ 63Hz) + Virtual Bass Harmonic Synthesis (+4.18 dB @ 125Hz, +1.98 dB @ 250Hz)
-     * - Dialogue Enhancer Ambient Ducking (-2.0 dB * alpha_DE for f <= 180 Hz) + Formant Peaking (+4.0 dB @ 1kHz, +6.25 dB @ 2kHz, +4.5 dB @ 4kHz)
-     * - Bose Profile (Dynamic / Balanced)
+     * - Bass Enhancer (scaled 0..100% low-shelf + Virtual Bass Harmonic Synthesis)
+     * - Dialogue Enhancer Ambient Ducking (-ducking * alpha_DE for f <= 180 Hz) + Formant Peaking (+4.0 dB @ 1kHz, +6.25 dB @ 2kHz, +4.5 dB @ 4kHz)
+     * - Bose Profile (Off / Dynamic / Balanced / 3D / Live Music)
      */
     fun computeComposite10BandDeltaDb(
         config: DolbyBoseDspConfig,
@@ -174,12 +344,11 @@ object DolbyBoseDspMath {
             var preGainDb = baseIeq[i] * ieqStrength
 
             if (config.bassEnhancerEnabled) {
-                when (i) {
-                    0 -> preGainDb += 5.91f // 46 Hz Sub-bass fundamental (+7.44 * 0.794)
-                    1 -> preGainDb += 7.44f // 63-90 Hz Peak punch (119 / 16)
-                    2 -> preGainDb += if (config.virtualBassEnabled) 4.18f else 3.50f // 2nd Harmonic (H2 = -2dB subgain)
-                    3 -> preGainDb += if (config.virtualBassEnabled) 1.98f else 1.20f // 3rd/4th Harmonic mix (229-494 Hz)
-                }
+                preGainDb += bassEnhancerBandBoostDb(
+                    bandIndex = i,
+                    strengthPct = config.bassEnhancerStrength,
+                    virtualBassEnabled = config.virtualBassEnabled
+                )
             }
 
             if (deFactor > 0f && i <= 2) {
@@ -187,14 +356,7 @@ object DolbyBoseDspMath {
                 preGainDb -= duckDb
             }
 
-            if (config.dolbyExperimental && config.dolbyEnabled) {
-                when (i) {
-                    0 -> preGainDb += 2.0f
-                    1 -> preGainDb += 1.5f
-                }
-            }
-
-            // Stage 3: Post-EQ (Bose Curve + Dialogue Formants)
+            // Stage 3: Post-EQ (Bose Profile + Dialogue Formants)
             var postGainDb = bose[i]
             if (deFactor > 0f) {
                 when (i) {
@@ -225,12 +387,11 @@ object DolbyBoseDspMath {
         return FloatArray(NUM_BANDS) { i ->
             var preGainDb = baseIeq[i] * ieqStrength
             if (config.bassEnhancerEnabled) {
-                when (i) {
-                    0 -> preGainDb += 5.91f
-                    1 -> preGainDb += 7.44f
-                    2 -> preGainDb += if (config.virtualBassEnabled) 4.18f else 3.50f
-                    3 -> preGainDb += if (config.virtualBassEnabled) 1.98f else 1.20f
-                }
+                preGainDb += bassEnhancerBandBoostDb(
+                    bandIndex = i,
+                    strengthPct = config.bassEnhancerStrength,
+                    virtualBassEnabled = config.virtualBassEnabled
+                )
             }
             if (deFactor > 0f && i <= 2) {
                 preGainDb -= config.dialogueDucking.toFloat() * deFactor
@@ -267,13 +428,11 @@ object DolbyBoseDspMath {
     }
 
     /**
-     * Computes automatic anti-clipping headroom (Stage 4):
-     * Prevents digital clipping when stacking Bass + Bose Dynamic + Dialogue + User EQ.
+     * Volume-Preserving Headroom (Stage 4):
+     * Keeps global input gain at unity (0.0 dB) so boosting bass never suppresses overall volume level;
+     * peak protection is handled transparently by the per-band MBC ceiling and -0.5 dBFS output limiter.
      */
-    fun computeSafeHeadroomDb(maxPositiveGainDb: Float): Float {
-        val safeHeadroomDb = if (maxPositiveGainDb > 5.5f) -(maxPositiveGainDb - 4.5f) else 0.0f
-        return max(safeHeadroomDb, -11.0f)
-    }
+    fun computeSafeHeadroomDb(maxPositiveGainDb: Float): Float = 0.0f
 
     /**
      * Preset Composite Matrix from dap-default.xml (Dynamic, Movie, Music, Custom/Voice)
@@ -287,6 +446,7 @@ object DolbyBoseDspMath {
                 dialogueAmount = 5,
                 dialogueDucking = 2,
                 bassEnhancerEnabled = false,
+                bassEnhancerStrength = 80,
                 virtualBassEnabled = false,
                 boseProfile = currentBose
             )
@@ -297,6 +457,7 @@ object DolbyBoseDspMath {
                 dialogueAmount = 5,
                 dialogueDucking = 2,
                 bassEnhancerEnabled = true,
+                bassEnhancerStrength = 85,
                 virtualBassEnabled = true,
                 boseProfile = currentBose
             )
@@ -307,6 +468,7 @@ object DolbyBoseDspMath {
                 dialogueAmount = 0,
                 dialogueDucking = 2,
                 bassEnhancerEnabled = true,
+                bassEnhancerStrength = 80,
                 virtualBassEnabled = true,
                 boseProfile = currentBose
             )
@@ -317,6 +479,7 @@ object DolbyBoseDspMath {
                 dialogueAmount = 0,
                 dialogueDucking = 2,
                 bassEnhancerEnabled = false,
+                bassEnhancerStrength = 80,
                 virtualBassEnabled = false,
                 boseProfile = currentBose
             )

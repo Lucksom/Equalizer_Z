@@ -151,34 +151,34 @@ enum class OutputRoute(
     SPEAKER(
         id = "speaker",
         label = "Speaker",
-        offsetsDb = doubleArrayOf(-9.0, -7.0, -2.0, 2.0, 1.0, 0.0, -1.0, -1.0, 0.0, 0.0),
-        baseInputGainDb = -3.0f,
-        limiterThresholdDb = -1.0f,
-        rootHighPassHz = 140f,
+        offsetsDb = doubleArrayOf(0.0, 0.0, 0.0, 1.5, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        baseInputGainDb = 0.0f,
+        limiterThresholdDb = -0.5f,
+        rootHighPassHz = 80f,
         harmonicMixDeltaDb = 3.0f,
-        note = "Protects small driver, lifts 250 Hz, softens 2–4 kHz"
+        note = "Lifts 250–500 Hz body with unity headroom"
     ),
     WIRED(
         id = "wired",
         label = "Wired Headphones",
         offsetsDb = doubleArrayOf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-        baseInputGainDb = -3.0f,
-        limiterThresholdDb = -1.0f
+        baseInputGainDb = 0.0f,
+        limiterThresholdDb = -0.5f
     ),
     BLUETOOTH(
         id = "bluetooth",
         label = "Bluetooth",
         offsetsDb = doubleArrayOf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-        baseInputGainDb = -4.0f,
-        limiterThresholdDb = -1.5f,
-        note = "-4 dB headroom & -1.5 dB ceiling for lossy codec overshoot"
+        baseInputGainDb = 0.0f,
+        limiterThresholdDb = -0.8f,
+        note = "-0.8 dB ceiling for lossy codec peak protection"
     ),
     USB(
         id = "usb",
         label = "USB DAC",
         offsetsDb = doubleArrayOf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-        baseInputGainDb = -3.0f,
-        limiterThresholdDb = -1.0f,
+        baseInputGainDb = 0.0f,
+        limiterThresholdDb = -0.5f,
         note = "Some USB DAC paths may bypass OS effects"
     )
 }
@@ -301,12 +301,12 @@ object EqConstants {
         kneeDb = floatArrayOf(6f, 6f, 6f, 6f, 4f, 6f)
     )
 
-    // v4 Section 4.1 & Section 13 & Section 15 exact preset tables
+    // Built-in Presets including Meizu Square Sound EqualizerUtils.java 10-band profiles
     val BUILT_IN_PRESETS: List<PresetConfig> = listOf(
         PresetConfig(
             id = "flat",
             name = "Flat",
-            description = "Chain bypassed for bit-transparent reference.",
+            description = "Chain bypassed for bit-transparent reference (payload 10101010101010101010).",
             gainsDb = listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f),
             largestBoostDb = 0f,
             highPassHz = 0f,
@@ -315,6 +315,78 @@ object EqConstants {
             bassBoostStrength = 0,
             virtualizerStrength = 0,
             bypassChain = true
+        ),
+        PresetConfig(
+            id = "classical",
+            name = "Classical",
+            description = "Natural orchestral dynamics and concert-hall high-frequency absorption (-5 dB @ 2–8 kHz, -8 dB @ 16 kHz · payload 10101010101005050502).",
+            gainsDb = listOf(0f, 0f, 0f, 0f, 0f, 0f, -5f, -5f, -5f, -8f),
+            largestBoostDb = 0f,
+            highPassHz = 0f,
+            bassHarmonicMixDb = null,
+            legacyNativeDb = listOf(0f, 0f, 0f, -4f, -4f),
+            bassBoostStrength = 0,
+            virtualizerStrength = 150
+        ),
+        PresetConfig(
+            id = "jazz",
+            name = "Jazz",
+            description = "Warm acoustic instrumentation, upright double-bass & horn body (+5 dB @ 250 Hz–1 kHz), and open air (+5 dB @ 16 kHz · payload 10101015151510121315).",
+            gainsDb = listOf(0f, 0f, 0f, 5f, 5f, 5f, 0f, 2f, 3f, 5f),
+            largestBoostDb = 5f,
+            highPassHz = 0f,
+            bassHarmonicMixDb = null,
+            legacyNativeDb = listOf(0f, 2.5f, 4f, 1.0f, 4f),
+            bassBoostStrength = 0,
+            virtualizerStrength = 100
+        ),
+        PresetConfig(
+            id = "rock",
+            name = "Rock",
+            description = "Punchy kick drums (+3 dB bass), -2 dB @ 500 Hz guitar decoupling dip, and bright cymbals (+6 dB @ 8–16 kHz · payload 13121313081213151616).",
+            gainsDb = listOf(3f, 2f, 3f, 3f, -2f, 2f, 3f, 5f, 6f, 6f),
+            largestBoostDb = 6f,
+            highPassHz = 20f,
+            bassHarmonicMixDb = -12f,
+            legacyNativeDb = listOf(2.5f, 3.0f, 0.0f, 4.0f, 4.0f),
+            bassBoostStrength = 250,
+            virtualizerStrength = 100
+        ),
+        PresetConfig(
+            id = "pop",
+            name = "Pop",
+            description = "Low-end lift (+2 to +3 dB), lower-mid scoop (-6 dB @ 500 Hz, -5 dB @ 1 kHz), and controlled upper treble (payload 12131007040507101208).",
+            gainsDb = listOf(2f, 3f, 0f, -3f, -6f, -5f, -3f, 0f, 2f, -2f),
+            largestBoostDb = 3f,
+            highPassHz = 20f,
+            bassHarmonicMixDb = -14f,
+            legacyNativeDb = listOf(2.5f, -1.5f, -5.5f, -1.5f, 0.0f),
+            bassBoostStrength = 200,
+            virtualizerStrength = 100
+        ),
+        PresetConfig(
+            id = "pure_voice",
+            name = "Pure Voice",
+            description = "Steep 500 Hz notch (-2 dB) with +5 dB formant shelf (2–8 kHz) and +3 dB air for vocal clarity (payload 10101010081215151513).",
+            gainsDb = listOf(0f, 0f, 0f, 0f, -2f, 2f, 5f, 5f, 5f, 3f),
+            largestBoostDb = 5f,
+            highPassHz = 50f,
+            bassHarmonicMixDb = null,
+            legacyNativeDb = listOf(0f, 0f, 0f, 4f, 4f),
+            bassBoostStrength = 0,
+            virtualizerStrength = 0
+        ),
+        PresetConfig(
+            id = "power_bass",
+            name = "Power Bass",
+            description = "Two-stage low-frequency reinforcement (+9 dB @ 31 Hz, +8 dB @ 62 Hz, +6 dB @ 125 Hz, +4 dB @ 250 Hz · payload 19181614101010101010 + BassBoost 1000).",
+            gainsDb = listOf(9f, 8f, 6f, 4f, 0f, 0f, 0f, 0f, 0f, 0f),
+            largestBoostDb = 9f,
+            highPassHz = 20f,
+            bassHarmonicMixDb = -6f,
+            legacyNativeDb = listOf(4f, 4f, 0f, 0f, 0f),
+            bassBoostStrength = 1000,
+            virtualizerStrength = 0
         ),
         PresetConfig(
             id = "balanced_deep",

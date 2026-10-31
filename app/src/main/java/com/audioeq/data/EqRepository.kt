@@ -119,10 +119,9 @@ class EqRepository(private val context: Context) {
         val DIALOGUE_AMOUNT = intPreferencesKey("dolby_dialogue_amount")
         val DIALOGUE_DUCKING = intPreferencesKey("dolby_dialogue_ducking")
         val BASS_ENHANCER_ENABLED = booleanPreferencesKey("dolby_bass_enhancer_enabled")
+        val BASS_ENHANCER_STRENGTH = intPreferencesKey("dolby_bass_enhancer_strength")
         val VIRTUAL_BASS_ENABLED = booleanPreferencesKey("dolby_virtual_bass_enabled")
         val BOSE_PROFILE_ID = stringPreferencesKey("bose_profile_id")
-        val DOLBY_EXPERIMENTAL = booleanPreferencesKey("dolby_experimental_enabled")
-        val DOLBY_ENABLED = booleanPreferencesKey("dolby_control_enabled")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val SEED_HEX = stringPreferencesKey("monet_seed_hex")
     }
@@ -207,10 +206,9 @@ class EqRepository(private val context: Context) {
                 dialogueAmount = (prefs[Keys.DIALOGUE_AMOUNT] ?: 8).coerceIn(0, 16),
                 dialogueDucking = (prefs[Keys.DIALOGUE_DUCKING] ?: 2).coerceIn(0, 8),
                 bassEnhancerEnabled = prefs[Keys.BASS_ENHANCER_ENABLED] ?: false,
+                bassEnhancerStrength = (prefs[Keys.BASS_ENHANCER_STRENGTH] ?: 80).coerceIn(0, 100),
                 virtualBassEnabled = prefs[Keys.VIRTUAL_BASS_ENABLED] ?: false,
-                boseProfile = BoseProfile.fromId(prefs[Keys.BOSE_PROFILE_ID] ?: BoseProfile.OFF.id),
-                dolbyExperimental = prefs[Keys.DOLBY_EXPERIMENTAL] ?: false,
-                dolbyEnabled = prefs[Keys.DOLBY_ENABLED] ?: false
+                boseProfile = BoseProfile.fromId(prefs[Keys.BOSE_PROFILE_ID] ?: BoseProfile.OFF.id)
             ),
             themeMode = prefs[Keys.THEME_MODE] ?: "dark",
             seedHex = prefs[Keys.SEED_HEX] ?: "#6750a4"
@@ -296,10 +294,9 @@ class EqRepository(private val context: Context) {
             prefs[Keys.DIALOGUE_AMOUNT] = dolbyBoseConfig.dialogueAmount.coerceIn(0, 16)
             prefs[Keys.DIALOGUE_DUCKING] = dolbyBoseConfig.dialogueDucking.coerceIn(0, 8)
             prefs[Keys.BASS_ENHANCER_ENABLED] = dolbyBoseConfig.bassEnhancerEnabled
+            prefs[Keys.BASS_ENHANCER_STRENGTH] = dolbyBoseConfig.bassEnhancerStrength.coerceIn(0, 100)
             prefs[Keys.VIRTUAL_BASS_ENABLED] = dolbyBoseConfig.virtualBassEnabled
             prefs[Keys.BOSE_PROFILE_ID] = dolbyBoseConfig.boseProfile.id
-            prefs[Keys.DOLBY_EXPERIMENTAL] = dolbyBoseConfig.dolbyExperimental
-            prefs[Keys.DOLBY_ENABLED] = dolbyBoseConfig.dolbyEnabled
             prefs[Keys.THEME_MODE] = themeMode
             prefs[Keys.SEED_HEX] = seedHex
         }
