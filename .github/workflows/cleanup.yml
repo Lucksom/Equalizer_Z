@@ -1,0 +1,77 @@
+name: Clean Workflows and Releases
+
+on:
+  workflow_dispatch:
+    inputs:
+      delete_workflow_runs:
+        description: 'Delete all previous workflow run histories'
+        required: true
+        type: boolean
+        default: true
+      delete_releases_and_tags:
+        description: 'Delete all GitHub releases, release files, and git tags'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  cleanup:
+    name: Purge Runs, Releases, and Tags
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete All Previous Workflow Runs
+        if: ${{ inputs.delete_workflow_runs }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CURRENT_RUN_ID="${{ github.run_id }}"
+          REPO="${{ github.repository }}"
+          echo "Scanning workflow runs for repository: $REPO (excluding current run: $CURRENT_RUN_ID)..."
+
+          RUNS=$(gh run list --repo "$REPO" --limit 1000 --json databaseId -q '.[].databaseId' || true)
+          for RUN_ID in $RUNS; do
+            if [ "$RUN_ID" != "$CURRENT_RUN_ID" ]; then
+              echo "Deleting workflow run: $RUN_ID"
+              gh run delete "$RUN_ID" --repo "$REPO" || true
+            fi
+          done
+          echo "Workflow runs cleanup completed."
+
+      - name: Delete All Releases and Release Files
+        if: ${{ inputs.delete_releases_and_tags }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          echo "Scanning GitHub releases for repository: $REPO..."
+
+          RELEASES=$(gh release list --repo "$REPO" --limit 1000 --json tagName -q '.[].tagName' || true)
+          for TAG in $RELEASES; do
+            echo "Deleting release and tag: $TAG"
+            gh release delete "$TAG" --repo "$REPO" --cleanup-tag -y || true
+          done
+          echo "Releases cleanup completed."
+
+      - name: Delete Remaining Git Tags
+        if: ${{ inputs.delete_releases_and_tags }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Fetching remote tags..."
+          git fetch --tags --force || true
+          TAGS=$(git tag -l)
+          for T in $TAGS; do
+            echo "Deleting remote git tag: $T"
+            git push origin --delete "$T" || true
+            git tag -d "$T" || true
+          done
+          echo "All git tags purged successfully."

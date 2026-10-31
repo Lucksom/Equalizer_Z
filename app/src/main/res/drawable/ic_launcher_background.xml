@@ -8,15 +8,26 @@
     <path android:pathData="M0,0h108v108h-108z">
         <aapt:attr name="android:fillColor">
             <gradient
-                android:startX="0"
-                android:startY="0"
-                android:endX="108"
-                android:endY="108"
+                android:startX="15"
+                android:startY="15"
+                android:endX="93"
+                android:endY="93"
                 android:type="linear">
-                <item android:offset="0.0" android:color="#0B0F19" />
-                <item android:offset="0.5" android:color="#181335" />
-                <item android:offset="1.0" android:color="#0D2137" />
+                <item android:offset="0.0" android:color="#FAFCFF" />
+                <item android:offset="0.5" android:color="#F1F5F9" />
+                <item android:offset="1.0" android:color="#E6ECF5" />
             </gradient>
         </aapt:attr>
     </path>
+    <!-- Subtle soundwave acoustic ring on light surface -->
+    <path
+        android:strokeColor="#CBD5E1"
+        android:strokeWidth="1.0"
+        android:fillColor="#00000000"
+        android:pathData="M 54,20 A 34,34 0 1,1 53.9,20 Z" />
+    <path
+        android:strokeColor="#E2E8F0"
+        android:strokeWidth="0.8"
+        android:fillColor="#00000000"
+        android:pathData="M 54,26 A 28,28 0 1,1 53.9,26 Z" />
 </vector>
