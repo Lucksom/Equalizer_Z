@@ -4,10 +4,6 @@ import android.content.Context
 import androidx.annotation.Keep
 import kotlin.system.exitProcess
 
-/**
- * Runs inside Shizuku's process as shell (uid 2000) or root (uid 0).
- * Shizuku v13+ tries the Context constructor first; older versions use the default one.
- */
 @Keep
 class ShizukuUserService() : IUserService.Stub() {
 

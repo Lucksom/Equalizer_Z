@@ -23,19 +23,6 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-/**
- * Audio EQ Deep Optimization v5 — Section 16 AutoEq Integration & Section 17 F1/F2/F3/F9.
- *
- * Implements:
- * - AutoEq `INDEX.md`, `ParametricEQ.txt`, `FixedBandEQ.txt`, and `GraphicEQ.txt` parsers
- * - 44.1 kHz RBJ cookbook biquad evaluation (`biquadDb`), 10–14 kHz logarithmic taper (`taper`),
- *   `peqToCorrection31` and `graphicToCorrection31` matching `autoeq_reference.py` golden vectors within <0.001 dB
- * - Headroom trim detection (`trimmedDb = max(raw) - max(limited)`) and `Full range` (+10 dB boost limit) toggle
- * - Tilt knobs (Bass low-shelf 105 Hz Q 0.7 [-6..+6 dB], Treble high-shelf 6 kHz Q 0.7 [-4..+4 dB])
- * - Legacy Tier 1 native `Equalizer` band-averaged mapping (`mapCorrection31ToNativeBands`, capped at +4 dB)
- * - `AutoEqRepo` with HTTPS allow-list, ETag conditional caching, 24h TTL, 403/429 rate-limit backoff,
- *   64 KB / 8 MB size caps, and offline starter catalog fallback
- */
 data class PeqFilter(
     val type: String, // "PK", "LSC", "HSC"
     val fc: Double,
@@ -136,10 +123,7 @@ object AutoEq {
         }
     }
 
-    /**
-     * RBJ cookbook magnitude in dB of one filter at `atHz` evaluated at sample rate `fs`
-     * (44100 Hz for AutoEq data, v5 Section 16.5).
-     */
+    
     fun biquadDb(f: PeqFilter, atHz: Double, fs: Double = 44100.0): Double {
         val a = 10.0.pow(f.gainDb / 40.0)
         val w0 = 2.0 * PI * f.fc / fs
@@ -187,21 +171,14 @@ object AutoEq {
         return 10.0 * log10(mag2(b) / mag2(d))
     }
 
-    /**
-     * Logarithmic top-octave taper between 10 kHz and 14 kHz (v5 Section 8.1 & 16.5).
-     */
+    
     fun taper(f: Double): Double = when {
         f <= 10000.0 -> 1.0
         f >= 14000.0 -> 0.0
         else -> 1.0 - log2(f / 10000.0) / log2(1.4)
     }
 
-    /**
-     * Optional on-device Tilt knobs (v5 Section 16.4 & 17.2 F3):
-     * - Bass: Low-shelf (LSC) at 105 Hz, Q 0.7, -6 to +6 dB
-     * - Treble: High-shelf (HSC) at 6 kHz, Q 0.7, -4 to +4 dB
-     * Evaluated with the same biquad function and added before limiting.
-     */
+    
     fun evaluateTiltDb(
         atHz: Double,
         tiltBassDb: Double = 0.0,
@@ -218,10 +195,7 @@ object AutoEq {
         return sum
     }
 
-    /**
-     * Converts ParametricEQ or FixedBandEQ filters to the 31-band `correction31` array (v5 Section 16.5).
-     * Matches Golden Vector A in Section 16.7 when `tiltBassDb == 0.0` and `tiltTrebleDb == 0.0`.
-     */
+    
     fun peqToCorrection31(
         filters: List<PeqFilter>,
         strength: Double = 0.8,
@@ -238,10 +212,7 @@ object AutoEq {
         raw.coerceIn(-12.0, hi) * strength
     }
 
-    /**
-     * Computes `trimmedDb = max(raw) - max(limited)` (v5 Section 16.4).
-     * When `trimmedDb > 1.0`, the UI displays "Trimmed by X dB to protect headroom" and offers Full Range.
-     */
+    
     fun computePeqTrimmedDb(
         filters: List<PeqFilter>,
         fs: Double = 44100.0,
@@ -265,10 +236,7 @@ object AutoEq {
         return max(0.0, maxRaw - maxLimited)
     }
 
-    /**
-     * Converts GraphicEQ frequency-gain pairs to the 31-band `correction31` array (v5 Section 16.5).
-     * Matches Golden Vector B in Section 16.7.
-     */
+    
     fun graphicToCorrection31(
         points: List<Pair<Double, Double>>,
         strength: Double = 0.8,
@@ -303,11 +271,7 @@ object AutoEq {
         }
     }
 
-    /**
-     * Legacy Tier 1 mapping (v5 Section 16.4 & Section 19):
-     * Reads each native band's frequency range `[minMilliHz, maxMilliHz]` from `Equalizer.getBandFreqRange(b)`
-     * and averages the 31-band curve over all render centers within that band, capped at +4 dB.
-     */
+    
     fun map31ToNativeBands(
         curve31: DoubleArray,
         bandFreqRangesMilliHz: List<IntArray>
@@ -335,10 +299,7 @@ object AutoEq {
             .split(' ')
             .filter { it.isNotEmpty() && it !in NOISE }
 
-    /**
-     * Device-to-AutoEq entry match score (0..1, v5 Section 16.5).
-     * Suggest only when >= 0.6 and always let the user confirm.
-     */
+    
     fun matchScore(deviceName: String, entryName: String): Double {
         val q = tokens(deviceName)
         val n = tokens(entryName).toSet()
@@ -357,9 +318,7 @@ object AutoEq {
         }
     }
 
-    /**
-     * Exports filters or 31-band curve as EqualizerAPO / AutoEq text (v5 Section 16.6 & 17.2 F9).
-     */
+    
     fun exportToParametricText(preampDb: Double, filters: List<PeqFilter>): String {
         val sb = StringBuilder()
         sb.append(String.format(Locale.US, "Preamp: %.2f dB\n", preampDb))
@@ -388,10 +347,7 @@ object AutoEq {
         return "GraphicEQ: $pairs"
     }
 
-    /**
-     * Starter index lines in exact AutoEq `results/INDEX.md` format so the app works offline on first run
-     * and merges seamlessly with the live GitHub `INDEX.md`.
-     */
+    
     val STARTER_INDEX_MD = """
         # AutoEq Index
         - [Sony WH-1000XM5](./oratory1990/over-ear/Sony%20WH-1000XM5) by oratory1990 on GRAS 43AG-7
@@ -409,14 +365,6 @@ object AutoEq {
     """.trimIndent()
 }
 
-/**
- * AutoEq Network & Cache Repository (v5 Section 16.2, 16.3, 16.5):
- * - HTTPS only with host allow-list
- * - ETag conditional requests (`If-None-Match`), 24h index cache TTL, 15m manual refresh gap
- * - Rate-limit handling (403/429 backoff: Retry-After or 1m -> 10m -> 60m)
- * - Size caps: 8 MB index, 64 KB profile
- * - Fallback chain: `ParametricEQ.txt` -> `FixedBandEQ.txt` -> `GraphicEQ.txt` -> Starter built-in filters
- */
 class AutoEqRepo(
     private val dir: File,
     private val http: OkHttpClient = defaultOkHttpClient(),
@@ -589,9 +537,7 @@ class AutoEqRepo(
         starterProfileTextFor(e, suffix)
     }
 
-    /**
-     * ParametricEQ first, then FixedBandEQ, then GraphicEQ (v5 Section 16.5).
-     */
+    
     suspend fun load(
         e: IndexEntry,
         strength: Double = 0.8,

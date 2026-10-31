@@ -68,3 +68,9 @@ A modern, system-wide Android audio equalizer built with **Kotlin** and **Jetpac
 
 * **[Shizuku](https://shizuku.rikka.app/)** by **[Rikka](https://github.com/RikkaApps/Shizuku)** — Enables non-root system-level session discovery and management through user-authorized elevated APIs.
 * **[AutoEq](https://github.com/jaakkopasanen/AutoEq)** by **[Jaakko Pasanen](https://github.com/jaakkopasanen)** — The comprehensive open-source headphone calibration dataset and equalization profiles.
+
+---
+
+## License
+
+This project is licensed under the **GNU General Public License v3.0** (GPL-3.0) — see the [LICENSE](LICENSE) file for details.

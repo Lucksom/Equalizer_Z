@@ -135,9 +135,6 @@ data class ModeStatusInfo(
     val activeSessionsCount: Int = 0
 )
 
-/**
- * Output-route profiles (v4 Section 6)
- */
 enum class OutputRoute(
     val id: String,
     val label: String,
@@ -183,9 +180,6 @@ enum class OutputRoute(
     )
 }
 
-/**
- * 6-band Multiband Compressor (Ceilings) configuration (v4 Section 5.2)
- */
 data class MbcConfig(
     val attackMs: FloatArray,
     val releaseMs: FloatArray,
@@ -212,9 +206,6 @@ data class PresetConfig(
     val isBuiltIn: Boolean = true
 )
 
-/**
- * Parametric filter entry for Headphone Correction Profiles (v4 Section 8.1)
- */
 data class ParametricCorrectionFilter(
     val type: FilterType,
     val fcHz: Double,
@@ -236,10 +227,6 @@ data class HeadphoneProfile(
     val isApproximation: Boolean = false
 )
 
-/**
- * Per-device profile memory (v5 Section 16.6 & 17.2 F2):
- * Keyed by `route + productName (+ address if available)` and auto-restored within 300 ms on connect.
- */
 data class DeviceProfileMemory(
     val deviceKey: String,
     val routeId: String,
@@ -258,10 +245,6 @@ data class DeviceProfileMemory(
     val daxProfileId: Int = 2 // 0=Dynamic, 1=Movie, 2=Music, 3=Voice (equalizer.db device_routing_memory)
 )
 
-/**
- * Personal Hearing Curve (v5 Section 17.2 F5):
- * Per-ear offsets at 6 test frequencies (250, 500, 1k, 2k, 4k, 8k Hz), capped at ±6 dB, strength 0.5.
- */
 data class PersonalHearingCurve(
     val enabled: Boolean = false,
     val leftEarDb: List<Float> = listOf(0f, 0f, 0f, 0f, 0f, 0f),  // 250, 500, 1k, 2k, 4k, 8k Hz
@@ -569,10 +552,7 @@ object EqConstants {
 
     val HEARING_TEST_FREQS_HZ = doubleArrayOf(250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0)
 
-    /**
-     * Returns 6-band MBC config for the preset, optionally applying Night Mode (v5 Section 17.2 F8):
-     * Night mode lowers the 6 ceiling thresholds (-6 dB) and raises the ratios (+1.5), keeping makeup unchanged.
-     */
+    
     fun mbcForPreset(preset: PresetConfig?, nightMode: Boolean = false): MbcConfig {
         val base = preset?.mbcOverride ?: DEFAULT_MBC_CONFIG
         if (!nightMode) return base

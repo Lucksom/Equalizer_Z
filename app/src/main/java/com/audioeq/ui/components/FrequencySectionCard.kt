@@ -75,15 +75,6 @@ import kotlin.math.roundToInt
 
 private val FREQ_LABELS = listOf("31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k")
 
-/**
- * Equalizer Card (`main#eq`) matching `audio-eq-v7.html`:
- * 1. `eq-head`: 56x56dp `#power` button + "Equalizer" title & `#eqSub` + `.route` pill (`tertiaryC`)
- * 2. `.headroom`: "Headroom" label + `.meter` fill bar + `#ceilText` dB readout (warns above 4.0 dB)
- * 3. `.curve` (`#curveWrap`): 220dp live cubic-spline response curve with gradient area fill
- * 4. `.zones`: Proportional `Bass` (1.9), `Mids` (2.6), `Treble` (2.4), `Air` (1.2) top-bordered strip
- * 5. `.bands` (`#bands`): 10 vertical band sliders (`31`..`16k` Hz) with `.db` readout, bipolar `.rail-fill`,
- *    `.knob` handle, smooth vertical pointer dragging, and double-tap to reset to 0.0 dB.
- */
 @Composable
 fun EqualizerCard(
     masterEnabled: Boolean = true,
@@ -555,15 +546,6 @@ private fun V7VerticalBandSlider(
     }
 }
 
-/**
- * Tone Card (`section#toneCard`) placed directly below Equalizer, matching `audio-eq-v7.html`:
- * - `.enhance-head`: 40x40dp icon badge + "Tone" + "Tilt, intensity and contour"
- * - `.tone-grid` (2 columns): Bass tilt (`-6..+6 dB`, step `0.5`) and Treble tilt (`-6..+6 dB`, step `0.5`)
- * - Intensity 3-segment control (`Light 0.6×`, `Standard 1.0×`, `Deep+ 1.3×`)
- * - `.hairline` divider
- * - Volume contour switch (`"Lifts bass and treble at low volume"`)
- * - A/B loudness compare switch (`"Level-matched bypass comparison"`)
- */
 @Composable
 fun ToneCard(
     masterEnabled: Boolean,
@@ -818,9 +800,6 @@ private fun ToneTiltMiniCard(
     }
 }
 
-/**
- * Reusable Segmented Pill Row (`.seg`) matching `audio-eq-v7.html`.
- */
 @Composable
 fun <T> V7SegmentedRow(
     options: List<Pair<T, String>>,
@@ -877,9 +856,6 @@ fun <T> V7SegmentedRow(
     }
 }
 
-/**
- * Reusable Switch Row (`.switch-row` + `.sw`) matching `audio-eq-v7.html`.
- */
 @Composable
 fun V7SwitchRow(
     title: String,
@@ -924,9 +900,6 @@ fun V7SwitchRow(
     }
 }
 
-/**
- * M3 Pill Switch (`.sw`, 50x30dp) matching `audio-eq-v7.html`.
- */
 @Composable
 fun V7PillSwitch(
     checked: Boolean,

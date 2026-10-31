@@ -9,11 +9,6 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-/**
- * Standard Audio EQ Cookbook Biquad Filter implementation (Direct Form II Transposed)
- * Supports Low-Shelf, Peaking EQ, High-Shelf, High-Pass (Butterworth), and Linkwitz-Riley 2nd-order stages.
- * Also computes exact complex transfer function |H(e^jw)| in dB for live frequency response graphing.
- */
 class BiquadFilter {
     var b0: Double = 1.0
         private set
@@ -141,9 +136,7 @@ class BiquadFilter {
         return out
     }
 
-    /**
-     * Evaluates magnitude response |H(e^{jw})| in dB at frequency fHz.
-     */
+    
     fun magnitudeDbAt(fHz: Double, sampleRate: Double = 48000.0): Double {
         val w = 2.0 * PI * fHz / sampleRate
         val cosW = cos(w)

@@ -279,23 +279,14 @@ object EqMath {
 
     private fun log2(x: Double): Double = ln(x) / ln(2.0)
 
-    /**
-     * Section 4.1 Normalization Rule:
-     * Divide each raw value by 16.0 to get dB, subtract the midrange mean (indices 5..10, 656–2250 Hz)
-     * so 1 kHz sits at 0.0 dB, and clamp to [-12.0, +6.0] dB.
-     */
+    
     fun normalizeIeq20(raw16: IntArray): DoubleArray {
         val db = DoubleArray(20) { raw16[it] / 16.0 }
         val midMean = (5..10).map { db[it] }.average()
         return DoubleArray(20) { (db[it] - midMean).coerceIn(-12.0, 6.0) }
     }
 
-    /**
-     * Section 3.2 Step 1 — Quarter-dB Quantization (GeqView):
-     * - rem < 0.25 -> fl
-     * - 0.25 <= rem <= 0.75 -> fl + 0.5
-     * - rem > 0.75 -> fl + 1.0
-     */
+    
     fun quantizeQuarterDb(rawDb: Double): Double {
         val fl = floor(rawDb)
         val rem = abs(rawDb - fl)
@@ -306,10 +297,7 @@ object EqMath {
         }
     }
 
-    /**
-     * Section 3.2 Step 2 — 10-to-20 Band Midpoint Mapping (GeqView):
-     * Maps 10 quantized UI slider gains Q[0..9] to 20 Bark-spaced bands B[0..19] in dB.
-     */
+    
     fun sliders10ToDax20Db(sliders10Db: DoubleArray): DoubleArray {
         val q = DoubleArray(10) { i ->
             quantizeQuarterDb(sliders10Db.getOrElse(i) { 0.0 }.coerceIn(-12.0, 12.0))
@@ -326,18 +314,13 @@ object EqMath {
         return b
     }
 
-    /**
-     * Section 3.2 Step 3 — Fixed-Point Integer Scaling (dax-default.xml & OEM Bridge):
-     * Multiplies 20-band dB gains by 16 ([-192, +192] for ±12 dB; hardware bound [-576, +576]).
-     */
+    
     fun sliders10ToDax20Int(sliders10Db: DoubleArray): IntArray {
         val b = sliders10ToDax20Db(sliders10Db)
         return IntArray(20) { k -> (b[k] * 16.0).roundToInt().coerceIn(-576, 576) }
     }
 
-    /**
-     * Section 3.3 Monotone Cubic Hermite Interpolation (PCHIP) on log2(f) with zero end slopes.
-     */
+    
     fun pchip(xs: DoubleArray, ys: DoubleArray, x: Double): Double {
         val n = xs.size
         if (x <= xs[0]) return ys[0]
@@ -374,12 +357,7 @@ object EqMath {
         return DoubleArray(31) { pchip(xs, gains20, log2(RENDER_31_HZ[it])) }
     }
 
-    /**
-     * Section 3.4 Reverse-Engineered 7-Band Cascaded High-Shelf Biquad Math (EqualizerView):
-     * Given 7 band levels L[0..6] in [-12, +12] dB at transition frequencies
-     * fc = [75, 175, 350, 900, 1750, 3500] Hz, Q = 1.0, fs = 44100 Hz:
-     * Base linear gain g_base = 10^(L[0]/20) cascaded with 6 2nd-order High-Shelf biquads.
-     */
+    
     fun evaluateCascaded7BandDb(
         levels7Db: DoubleArray,
         atHz: Double,
@@ -435,12 +413,7 @@ object EqMath {
         return 10.0 * log10(totalMag2.coerceAtLeast(1e-18))
     }
 
-    /**
-     * Section 3.5 Reverse-Engineered Personal Hearing Compensation (CustomizedSoundModel):
-     * Converts 6-frequency audiogram dB thresholds at [250, 500, 1000, 2000, 4000, 8000] Hz
-     * using INIT_VOLUME_DB = -42 and VOLUME_DIV_DB = 3:
-     * step[k] = round((earDb[k] + 42.0) / 3.0)
-     */
+    
     fun earDbToCustomizedSoundSteps(earDb6: List<Float>): IntArray {
         return IntArray(6) { k ->
             val db = earDb6.getOrElse(k) { 0f }.toDouble()
@@ -451,10 +424,7 @@ object EqMath {
     fun formatCustomizedSoundStepsCsv(earDb6: List<Float>): String =
         earDbToCustomizedSoundSteps(earDb6).joinToString(",")
 
-    /**
-     * Evaluates personal hearing compensation across the 31 render bands (mean of Left & Right ear offsets,
-     * scaled by strength and tapered above 10 kHz).
-     */
+    
     fun computePersonalHearing31(
         leftEar6Db: List<Float>,
         rightEar6Db: List<Float>,
@@ -480,19 +450,14 @@ object EqMath {
         }
     }
 
-    /**
-     * Section 4.3 Dialog Enhancer Bell Curve:
-     * Smooth Hann-window bell over 800 Hz..4500 Hz (+0.45 dB per step).
-     */
+    
     fun dialogEnhancerDb(freqHz: Double, steps: Int): Double {
         if (steps <= 0 || freqHz < 800.0 || freqHz > 4500.0) return 0.0
         val pos = (log2(freqHz) - log2(800.0)) / (log2(4500.0) - log2(800.0))
         return (steps * 0.45) * 0.5 * (1.0 - cos(2.0 * PI * pos))
     }
 
-    /**
-     * Section 6.2 ISO-226 Equal-Loudness Volume Contour interpolation.
-     */
+    
     fun volumeContour10(v: Double): DoubleArray {
         if (v >= CONTOUR_VS[0]) return CONTOUR_ROWS[0].clone()
         if (v <= CONTOUR_VS.last()) return CONTOUR_ROWS.last().clone()
@@ -501,9 +466,7 @@ object EqMath {
         return DoubleArray(10) { CONTOUR_ROWS[k][it] + (CONTOUR_ROWS[k + 1][it] - CONTOUR_ROWS[k][it]) * t }
     }
 
-    /**
-     * Section 5.3 Pink-Noise Weighted Power Mean (dB); bands below 100 Hz count half weight.
-     */
+    
     fun pinkGainDb(curve31: DoubleArray): Double {
         var sum = 0.0
         var weight = 0.0
@@ -515,9 +478,7 @@ object EqMath {
         return 10.0 * log10(sum / weight)
     }
 
-    /**
-     * Section 6.3 AutoEq Parametric Biquad Evaluation (RBJ Cookbook at 44100 Hz).
-     */
+    
     fun biquadDb(f: PeqFilter, atHz: Double, fs: Double = 44100.0): Double {
         val a = 10.0.pow(f.gainDb / 40.0)
         val w0 = 2.0 * PI * f.fc / fs
@@ -565,10 +526,7 @@ object EqMath {
         return 10.0 * log10(mag2(b) / mag2(d))
     }
 
-    /**
-     * Section 6.3 AutoEq 31-Band Headphone Correction Curve with high-frequency taper (10..14 kHz)
-     * and clamping to [-12.0, +6.0] dB (+3.0 dB above 6 kHz).
-     */
+    
     fun evaluateAutoEq31(
         filters: List<PeqFilter>,
         strength: Double = 0.8,
@@ -585,9 +543,7 @@ object EqMath {
         (raw * taper).coerceIn(-12.0, hiCap) * strength
     }
 
-    /**
-     * Section 6.4 Speaker Self-Calibration Target Curve & Correction Math.
-     */
+    
     fun speakerTargetDb(f: Double): Double {
         val a = SPK_ANCHORS
         if (f <= a.first().first) return a.first().second
@@ -657,11 +613,7 @@ object EqMath {
         }
     }
 
-    /**
-     * Section 3.1 Rule 3 — UI Headroom Meter (ceilingLoadDb):
-     * ceilingLoadDb = max(0.0, max(effective[i]) - 3.0)
-     * Warn in UI when ceilingLoadDb > 4.0 dB.
-     */
+    
     fun computeCeilingLoadDb(effective31: DoubleArray): Float {
         val peak = effective31.maxOrNull() ?: 0.0
         return max(0.0, peak - 3.0).toFloat()
@@ -680,9 +632,7 @@ object OemDaxBridge {
     private const val EFFECT_TYPE_GEQ = 0
     private const val DAX_PARAM_ID_GEQ_BAND_GAINS = 110
 
-    /**
-     * Queries AudioEffect descriptors to see if the OEM hardware effect UUID is present on this device.
-     */
+    
     fun isHardwareDaxSupported(): Boolean {
         return try {
             val descriptors = AudioEffect.queryEffects() ?: return false
@@ -694,14 +644,7 @@ object OemDaxBridge {
         }
     }
 
-    /**
-     * Section 7.2 Binary Packet Layout for 20-Band GEQ (`setParameter(5, byte[96])` Little-Endian):
-     * - Offset 0: int32 = 0 (EFFECT_TYPE_GEQ)
-     * - Offset 4: int32 = 21 (1 parameter ID + 20 band values)
-     * - Offset 8: int32 = 110 (DAX_PARAM_ID_GEQ_BAND_GAINS)
-     * - Offset 12..91: int32[20] = round(bandDb[k] * 16.0)
-     * - Offset 92: int32 = 0 (trailing alignment padding)
-     */
+    
     fun buildGeq96BytePacket(band20Fixed16: IntArray): ByteArray {
         val buf = ByteBuffer.allocate(96).order(ByteOrder.LITTLE_ENDIAN)
         buf.putInt(EFFECT_TYPE_GEQ)
@@ -715,12 +658,7 @@ object OemDaxBridge {
         return buf.array()
     }
 
-    /**
-     * Section 7.3 Binary Packet for Profile Switch (12 Bytes Little-Endian):
-     * - Offset 0: int32 = 0
-     * - Offset 4: int32 = 1
-     * - Offset 8: int32 = profileId (0=Dynamic, 1=Movie, 2=Music, 3=Voice)
-     */
+    
     fun buildProfile12BytePacket(profileId: Int): ByteArray {
         val buf = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
         buf.putInt(0)
@@ -729,10 +667,7 @@ object OemDaxBridge {
         return buf.array()
     }
 
-    /**
-     * Instantiates the hidden AudioEffect(UUID, UUID, priority, audioSession) via reflection
-     * when running in Root or Shell/Shizuku mode and sends the binary parameter packets.
-     */
+    
     class SessionHandle(sessionId: Int = 0) {
         private var effectInstance: AudioEffect? = null
         private var setParamMethod: java.lang.reflect.Method? = null
@@ -1049,10 +984,7 @@ class MasterEqController(private val sessionId: Int) {
         applyTier1Fallback(state)
     }
 
-    /**
-     * Call on Preset, Profile, Route, AutoEq, or Intensity change:
-     * Preserves unity inputGainDb (0.0 dB) and upward makeupDb so boosting bass NEVER lowers volume.
-     */
+    
     fun loadFullState(state: EngineState, glideMs: Double = 250.0) {
         handler.post {
             activeState = state
@@ -1073,10 +1005,7 @@ class MasterEqController(private val sessionId: Int) {
         }
     }
 
-    /**
-     * Call while dragging sliders or changing system volume:
-     * Freezes makeupDb and inputGainDb so slider boosts/cuts are never fought (Section 3.1 Rule 2).
-     */
+    
     fun updateSlidersOrVolume(state: EngineState, glideMs: Double = 60.0) {
         handler.post {
             activeState = state
@@ -1181,7 +1110,7 @@ class MasterEqController(private val sessionId: Int) {
                 bFx.enabled = activeGate && targetBassStrength > 0
                 if (activeGate && targetBassStrength > 0) {
                     val buf = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(targetBassStrength).array()
-                    vendorSetParamMethod?.invoke(bFx, 1 /* PARAM_STRENGTH */, buf)
+                    vendorSetParamMethod?.invoke(bFx, 1, buf)
                 }
             }
         } catch (_: Throwable) {

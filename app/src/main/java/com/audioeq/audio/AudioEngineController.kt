@@ -58,16 +58,6 @@ data class DeviceDiagnostics(
     val avgBinderWriteCostMs: Double = 0.0
 )
 
-/**
- * AudioEngineController wired to Equalizer Master Database & Engineering Specification (v6):
- * - Hosts `MasterEqController` (`MasterEqEngine.kt`) per active audio session (and Global Session 0 for Root/Shizuku)
- * - Supports all 3 Operating Modes:
- *   1. `ROOT_GLOBAL` (Global Session 0 `DynamicsProcessing` + Optional OEM Hardware Bridge `9d4921da-8225-4f29-aefa-39537a04bcaa`)
- *   2. `SHIZUKU_GLOBAL` (Global Session 0 `DynamicsProcessing` + `dumpsys media.audio_flinger` via Shizuku UserService or DUMP permission)
- *   3. `LEGACY_TIER2_DP` / `LEGACY_TIER1_NATIVE` (Per-app `audioSessionId` via `ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION`)
- * - Executes `MasterEqController.loadFullState(state, glideMs = 250.0)` on Profile, Preset, Route, AutoEq, or Intensity change
- * - Executes `MasterEqController.updateSlidersOrVolume(state, glideMs = 60.0)` while dragging sliders or changing system volume
- */
 class AudioEngineController(private val context: Context) {
 
     private class SessionEffectBundle(
@@ -619,10 +609,7 @@ class AudioEngineController(private val context: Context) {
         )
     }
 
-    /**
-     * Section 9 & Section 10 Step 3 — Called on Profile, Preset, Route, AutoEq, or Intensity COMMIT:
-     * Recomputes `inputGainDb` and `makeupDb` via `EqMath` and `MasterEqController.loadFullState(newState, glideMs = 250.0)`.
-     */
+    
     fun loadEngineState(
         mode: EngineMode,
         enabled: Boolean,
@@ -698,10 +685,7 @@ class AudioEngineController(private val context: Context) {
         loadAllSessions(glideMs = 250.0)
     }
 
-    /**
-     * Section 9 & Section 10 Step 4 — Called while dragging any of the 10 sliders or changing system volume:
-     * Freezes `makeupDb` and `inputGainDb` and calls `MasterEqController.updateSlidersOrVolume(newState, glideMs = 60.0)`.
-     */
+    
     fun updateSlidersOrContourFast(
         enabled: Boolean,
         abCompare: Boolean,

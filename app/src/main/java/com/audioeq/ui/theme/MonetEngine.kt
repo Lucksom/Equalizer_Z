@@ -20,11 +20,6 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-/**
- * OKLCH Dynamic Color (Material You / Monet) Engine ported 1:1 from `audio-eq-v7.html`.
- * Generates full perceptual tonal ramps (tones 10..99) for Primary, Secondary, Tertiary,
- * and Neutral palettes from any seed hex color or wallpaper image.
- */
 @Immutable
 data class OklchColor(
     val l: Double,
@@ -325,10 +320,7 @@ object MonetEngine {
         }
     }
 
-    /**
-     * Extracts the most saturated mid-tone pixel (0.15 < L < 0.90) from a Bitmap,
-     * matching `seedFromImage` in `audio-eq-v7.html`.
-     */
+    
     fun extractSeedHexFromBitmap(bitmap: Bitmap): String {
         val scaled = Bitmap.createScaledBitmap(bitmap, 48, 48, true)
         var bestHex = "#6750a4"

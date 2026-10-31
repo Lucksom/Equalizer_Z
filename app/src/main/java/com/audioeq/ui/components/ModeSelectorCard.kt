@@ -58,12 +58,6 @@ import com.audioeq.model.EngineMode
 import com.audioeq.model.ModeStatusInfo
 import com.audioeq.shizuku.ShizukuState
 
-/**
- * Top Horizontal Engine Mode Selector Bar with 3 profiles (v5 APK-only):
- * 1. Legacy (Works globally without ADB, Shizuku, or Root)
- * 2. ADB / Shizuku
- * 3. Root (APK-only su helper: session discovery, start-on-boot, codec readout & BT absolute-volume control)
- */
 @Composable
 fun ModeSelectorCard(
     selectedMode: EngineMode,

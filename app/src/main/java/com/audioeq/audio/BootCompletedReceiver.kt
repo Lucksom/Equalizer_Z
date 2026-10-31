@@ -11,11 +11,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 
-/**
- * APK-only Start-on-Boot receiver (v5 Section 17.2 F12 & Section 18.2):
- * Restores the equalizer engine when `BOOT_COMPLETED` fires if `startOnBoot` is enabled,
- * and in Root mode invokes the non-flashing `su` session helper.
- */
 class BootCompletedReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
         if (context == null || intent?.action != Intent.ACTION_BOOT_COMPLETED) return

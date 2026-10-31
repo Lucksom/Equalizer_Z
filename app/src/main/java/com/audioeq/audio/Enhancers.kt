@@ -9,11 +9,6 @@ import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
-/**
- * PCHIP render with precomputed basis values.
- * Mathematically identical to `Dsp.renderCurve` (max difference < 1e-12 dB over 2000 random slider sets),
- * with zero per-band slope array allocations.
- */
 object FastRender {
     private fun log2(x: Double): Double = ln(x) / ln(2.0)
 
@@ -44,7 +39,7 @@ object FastRender {
         }
     }
 
-    /** Thread-safe zero-allocation render using caller-provided or local scratch buffers. */
+    
     @Synchronized
     fun render(y: DoubleArray, out: DoubleArray) {
         val d0 = (y[1] - y[0]) / H[0]
@@ -85,10 +80,6 @@ object FastRender {
     }
 }
 
-/**
- * Built-in Virtualizer wrapper for Acoustic Profiles (Dynamic / Movie).
- * Debounces binder calls (moves >= 20 or 0) and selects BINAURAL on headphones vs TRANSAURAL on speaker.
- */
 @Suppress("DEPRECATION")
 class VirtualizerFx(sessionId: Int) {
     private var fx: Virtualizer? = try {
@@ -99,7 +90,7 @@ class VirtualizerFx(sessionId: Int) {
     private var lastStrength = -1
     private var lastMode = Int.MIN_VALUE
 
-    /** False when the effect is missing or reports no virtualization for this route. */
+    
     fun supported(small: Boolean): Boolean {
         val f = fx ?: return false
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return true
@@ -115,7 +106,7 @@ class VirtualizerFx(sessionId: Int) {
         }
     }
 
-    /** a: 0..1. small: built-in speaker (transaural) versus headphones (binaural). */
+    
     fun apply(a: Double, small: Boolean, enabledGate: Boolean = true) {
         val f = fx ?: return
         try {
@@ -161,10 +152,6 @@ class VirtualizerFx(sessionId: Int) {
     }
 }
 
-/**
- * Legacy Tier 1 BassBoost wrapper.
- * Only used when DynamicsProcessing is NOT active (when DynamicsProcessing is active, BassBoost is forced to 0).
- */
 class BassBoostFx(sessionId: Int) {
     private var fx: BassBoost? = try {
         BassBoost(0, sessionId)

@@ -39,11 +39,6 @@ data class CachedAutoEqRow(
     val etag: String?
 )
 
-/**
- * Equalizer Master Database (`equalizer.db` — Section 8 of equalizer-master-db-v6.md):
- * Implements the 5-table SQLite schema and seeds all 4 Acoustic Profiles (`dax_profiles`)
- * and all 6 Musical Presets (`eq_presets`) on creation.
- */
 class EqualizerDatabaseHelper(context: Context) : SQLiteOpenHelper(
     context.applicationContext,
     DATABASE_NAME,

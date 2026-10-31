@@ -34,19 +34,6 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-/**
- * Audio EQ Deep Optimization v5 DSP Core (Sections 3, 5, 6, 7, 8, 9, 16, 17).
- *
- * Implements:
- * - 31-band third-octave PCHIP monotone cubic renderer (`RENDER_HZ`, `RENDER_CUT`)
- * - 6-band Multiband Compressor ceilings aligned to render band upper edges (`MBC_CUT`: 90, 359, 1437, 5747, 11494, 20000 Hz)
- * - Pink-noise power mean (`pinkGainDb`) makeup gain model frozen during slider drags
- * - Equal-loudness volume contour interpolation (`contour`)
- * - AutoEq 44.1 kHz parametric & graphic headphone profile evaluation (`computeHeadphoneCorrection31`)
- * - Guided Speaker Self-Calibration (`computeSpeakerCorrection` + acoustic sweep analyzer)
- * - Per-channel Left/Right EQ & Balance (F4) + Personal Hearing Curve (F5) + USB Bit-Perfect (F7) + Night Mode (F8)
- * - Throttled (~33 Hz) delta-only `DynamicsProcessing` binder writer (`EqEngine`) with 20-band and 10-band fallbacks
- */
 object Dsp {
     val SLIDER_HZ = doubleArrayOf(31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0)
     val RENDER_HZ = DoubleArray(31) { 20.0 * 2.0.pow(it / 3.0) }
@@ -81,9 +68,7 @@ object Dsp {
 
     private fun log2(x: Double): Double = ln(x) / ln(2.0)
 
-    /**
-     * Monotone cubic (PCHIP) interpolation with zero end slopes (flat beyond 31 Hz and 16 kHz).
-     */
+    
     fun pchip(xs: DoubleArray, ys: DoubleArray, x: Double): Double {
         val n = xs.size
         if (x <= xs[0]) return ys[0]
@@ -115,9 +100,7 @@ object Dsp {
         return DoubleArray(31) { pchip(xs, sliderDb, log2(RENDER_HZ[it])) }
     }
 
-    /**
-     * Pink-noise power gain of a 31-band curve (dB); bands below 100 Hz count half weight (v5 Section 5.3).
-     */
+    
     fun pinkGainDb(db: DoubleArray): Double {
         var s = 0.0
         var w = 0.0
@@ -129,9 +112,7 @@ object Dsp {
         return 10.0 * log10(s / w)
     }
 
-    /**
-     * Volume-adaptive equal-loudness contour interpolation (v5 Section 7).
-     */
+    
     fun contour(
         v: Double,
         vs: DoubleArray = CONTOUR_VS,
@@ -144,11 +125,7 @@ object Dsp {
         return DoubleArray(10) { rows[k][it] + (rows[k + 1][it] - rows[k][it]) * t }
     }
 
-    /**
-     * Evaluates a HeadphoneProfile's parametric or graphic filters at the 31 render centers at 44.1 kHz,
-     * tapers logarithmically between 10 kHz and 14 kHz, clamps to [-12, +6] (+3 above 6 kHz, or +10 if fullRange),
-     * adds optional Tilt shelves (105 Hz LSC / 6 kHz HSC), and scales by `strength` (default 0.8) per v5 Section 8.1 & 16.4.
-     */
+    
     fun computeHeadphoneCorrection31(
         profile: HeadphoneProfile?,
         strength: Double = 0.8,
@@ -194,10 +171,7 @@ object Dsp {
         return AutoEq.computePeqTrimmedDb(peqFilters, 44100.0, fullRange, tiltBassDb, tiltTrebleDb)
     }
 
-    /**
-     * Personal Hearing Curve (v5 Section 17.2 F5):
-     * Interpolates the 6 per-ear test frequencies (250, 500, 1k, 2k, 4k, 8k Hz), capped at ±6 dB, with strength 0.5.
-     */
+    
     fun computeHearingCurve31(earOffsets6Db: List<Float>, strength: Float = 0.5f): DoubleArray {
         if (earOffsets6Db.size < 6 || earOffsets6Db.all { abs(it) < 0.05f }) return DoubleArray(31)
         val xs = DoubleArray(6) { log2(EqConstants.HEARING_TEST_FREQS_HZ[it]) }
@@ -221,9 +195,7 @@ object Dsp {
         return a[k].second + (a[k + 1].second - a[k].second) * t
     }
 
-    /**
-     * Computes 31-band speaker calibration correction from measured 31-band dB response (v5 Section 8.2).
-     */
+    
     fun computeSpeakerCorrection(
         measDb: DoubleArray,
         valid: BooleanArray,
@@ -245,10 +217,7 @@ object Dsp {
         }
     }
 
-    /**
-     * Computes `effective` 31-band curve and `ceilingLoad` (Headroom meter: max(0, max(effective) - 3), v5 Section 3 & Enhancers Section 3).
-     * Uses precomputed PCHIP basis (`FastRender`) and sums `taste + correction31 + enhancer31 + hearing31`, clamped to [-15, +10] dB.
-     */
+    
     fun computeEffective31(layers: Layers, withContour: Boolean = true, channel: Int = 0): DoubleArray {
         val uDb = if (channel == 1 && layers.rightUserDb != null) layers.rightUserDb else layers.userDb
         val hearing31 = if (channel == 1) layers.hearingRight31 else layers.hearingLeft31
@@ -271,9 +240,6 @@ object Dsp {
     }
 }
 
-/**
- * Detects the active output route from AudioManager (v5 Section 6 & 9).
- */
 fun detectCurrentRoute(am: AudioManager): OutputRoute {
     val types = try {
         am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map { it.type }
@@ -289,9 +255,6 @@ fun detectCurrentRoute(am: AudioManager): OutputRoute {
     }
 }
 
-/**
- * Attempts to suggest a matching HeadphoneProfile from connected AudioDeviceInfo.productName.
- */
 fun detectConnectedDeviceProductName(am: AudioManager): String? {
     return try {
         am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
@@ -308,9 +271,6 @@ fun detectConnectedDeviceProductName(am: AudioManager): String? {
     }
 }
 
-/**
- * Builds the Per-Device Memory key `route + productName (+ address if OS provides it)` (v5 Section 16.5 & 17.2 F2).
- */
 fun buildCurrentDeviceKey(am: AudioManager): String {
     val route = detectCurrentRoute(am)
     if (route == OutputRoute.SPEAKER) return "speaker:${Build.MODEL}"
@@ -333,10 +293,6 @@ fun buildCurrentDeviceKey(am: AudioManager): String {
     return if (addr != null) "${route.id}:$prod:$addr" else "${route.id}:$prod"
 }
 
-/**
- * Android 14+ (API 34+) USB DAC Bit-Perfect Mixer Helper (v5 Section 17.2 F7):
- * Queries `getSupportedMixerAttributes` for `MIXER_BEHAVIOR_BIT_PERFECT` and toggles `setPreferredMixerAttributes`.
- */
 object UsbBitPerfectHelper {
     fun isBitPerfectSupported(am: AudioManager): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return false
@@ -406,15 +362,6 @@ class Layers(
     }
 }
 
-/**
- * Per-session v5 `EqEngine` wrapping `DynamicsProcessing` (v5 Section 9 + Enhancers Spec Section 5):
- * 1. Own `HandlerThread("eq-writer", THREAD_PRIORITY_FOREGROUND)`: every binder call leaves the UI thread.
- * 2. `Layers` carries `enhancer31` with defensive copies.
- * 3. Per-tick path allocates nothing except the `EqBand`/`MbcBand` objects the API requires.
- * 4. PCHIP slopes are computed once per change, and basis values per band are precomputed (`FastRender`).
- * 5. Adaptive tick interval (`30..100 ms`) based on measured EMA binder write cost (`writeCostMs()`).
- * 6. Fix: `setEnabled(false)` is never undone by the enable-status listener (`wantEnabled` flag).
- */
 class EqEngine(
     val sessionId: Int,
     private val compatibility10Band: Boolean = false,
@@ -471,7 +418,7 @@ class EqEngine(
     @Volatile
     private var writeEmaMs = 0.0
 
-    /** Average binder write cost in ms, for diagnostics / debug overlay. */
+    
     fun writeCostMs(): Double = writeEmaMs
 
     fun start(): Boolean {
@@ -524,7 +471,7 @@ class EqEngine(
         return false
     }
 
-    /** Fills `out` with the 31 target gains for `channel` (0=L, 1=R). Zero heap allocations. */
+    
     private fun effectiveInto(l: Layers, withContour: Boolean, channel: Int, out: DoubleArray) {
         val uDb = if (channel == 1 && l.rightUserDb != null) l.rightUserDb else l.userDb
         val hearing31 = if (channel == 1) l.hearingRight31 else l.hearingLeft31
@@ -544,10 +491,7 @@ class EqEngine(
         return Dsp.computeEffective31(l, withContour, channel)
     }
 
-    /**
-     * Preset, route, profile, or intensity COMMIT. Never while a slider is being dragged.
-     * Preserves unity input gain (0.0 dB) so bass boosts never suppress overall volume.
-     */
+    
     fun load(
         l: Layers,
         m: MbcConfig,
@@ -577,10 +521,7 @@ class EqEngine(
         }
     }
 
-    /**
-     * Slider drags, enhancer drags, and volume contour changes.
-     * Never touches input gain, makeup gain, or MBC parameters.
-     */
+    
     fun update(l: Layers, glideMs: Double = 60.0) {
         handler.post {
             val prevBalance = currentBalanceDb
@@ -597,10 +538,7 @@ class EqEngine(
         }
     }
 
-    /**
-     * A/B compare at matched loudness (v5 Section 10):
-     * When `abBypass` is true, pre-EQ bands are zeroed while keeping `inputDb + makeupDb` active.
-     */
+    
     fun setAbCompareMode(abBypass: Boolean) {
         if (isAbBypassCompare != abBypass) {
             isAbBypassCompare = abBypass
@@ -831,9 +769,6 @@ class EqEngine(
     }
 }
 
-/**
- * Speaker Self-Calibration Result (v5 Section 8.2)
- */
 data class SpeakerCalibrationResult(
     val measured31Db: DoubleArray,
     val correction31Db: DoubleArray,
@@ -843,9 +778,6 @@ data class SpeakerCalibrationResult(
     val message: String
 )
 
-/**
- * Runs the guided Speaker Self-Calibration procedure (v5 Section 8.2).
- */
 object SpeakerCalibrationRunner {
 
     suspend fun runGuidedCalibration(
@@ -997,9 +929,6 @@ object SpeakerCalibrationRunner {
     }
 }
 
-/**
- * Plays a gentle -24 dBFS pure sine tone in the Left (`0`) or Right (`1`) ear for Personal Hearing Curve (v5 Section 17.2 F5).
- */
 object HearingTonePlayer {
     suspend fun playTestTone(freqHz: Double, channel: Int, durationMs: Int = 450) = withContext(Dispatchers.Default) {
         try {

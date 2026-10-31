@@ -31,14 +31,6 @@ import androidx.compose.ui.unit.sp
 import com.audioeq.ui.theme.JetBrainsMonoFontFamily
 import com.audioeq.ui.theme.LocalMonetPalette
 
-/**
- * Live Frequency Response Curve (`.curve` / `#curveWrap`) matching `audio-eq-v7.html`:
- * - 220dp height, `sLow` container with `22.dp` radius and `1.dp` `outlineV` border
- * - Vertical grid lines at 100 Hz (18%), 1 kHz (50%), 10 kHz (82%)
- * - Dashed 0 dB center line + `+12`, `0`, `−12` dB labels
- * - Smooth cubic spline through the 10 effective band gains (`xs = 36, 108, ..., 684 / 720`)
- * - Vertical gradient area fill (`primary` 38% -> 0%) + glow stroke
- */
 @Composable
 fun FrequencyResponseGraph(
     displayGainsDb: List<Float>,

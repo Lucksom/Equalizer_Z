@@ -53,7 +53,7 @@ object ShizukuManager {
             if (requestCode == REQUEST_CODE) refresh()
         }
 
-    /** Call once, from Application.onCreate(). */
+    
     fun init(context: Context) {
         appContext = context.applicationContext
         runCatching {
@@ -105,7 +105,7 @@ object ShizukuManager {
         if (newState == ShizukuState.READY && service == null) bind()
     }
 
-    /** "root" when Shizuku was started with root, otherwise "adb". */
+    
     fun privilege(): String = try {
         when {
             !Shizuku.pingBinder() -> "none"
@@ -118,7 +118,7 @@ object ShizukuManager {
 
     // ---- Permission ----------------------------------------------------------
 
-    /** Shows Shizuku's permission dialog. Safe to call from a button click. */
+    
     fun requestPermission() {
         refresh()
         runCatching {
@@ -132,7 +132,7 @@ object ShizukuManager {
         }
     }
 
-    /** Opens the Shizuku app so the user can start the service or re-allow this app. */
+    
     fun openShizukuApp() {
         val ctx = appContext ?: return
         val intent = ctx.packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE)
@@ -186,7 +186,7 @@ object ShizukuManager {
         service = null
     }
 
-    /** Runs a shell command as shell/root. Keep output small (Binder limit is about 1 MB). */
+    
     suspend fun exec(command: String): Result<String> = runCatching {
         check(_state.value == ShizukuState.READY) { "Shizuku is not ready: ${_state.value}" }
         val s = service ?: CompletableDeferred<IUserService>().let { d ->
@@ -201,7 +201,7 @@ object ShizukuManager {
         out
     }
 
-    /** If UserService is already bound, executes command synchronously on current background thread. */
+    
     fun execIfBound(command: String): String? {
         if (_state.value != ShizukuState.READY) return null
         val s = service ?: run {

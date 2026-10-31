@@ -109,14 +109,6 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/**
- * Save Custom Preset Dialog (`#saveWrap`) matching `audio-eq-v7.html`:
- * - Rounded 28dp card (`sHigh` background, `1.dp` `outlineV` border, `22.dp` padding)
- * - Title: "Save custom preset"
- * - Subtitle: "Stores your current 10-band curve as a quick preset chip."
- * - Input field (`maxLength = 24`, placeholder `"e.g., Studio Tabla Live"`)
- * - Cancel ghost button + Save primary button
- */
 @Composable
 fun SavePresetDialog(
     currentPreampDb: Float = -3.0f,
@@ -255,13 +247,6 @@ fun RootWarningDialog(
     )
 }
 
-/**
- * Sound Calibration Bottom Sheet (v5 Section 8, 16 & 17 F1/F2/F3/F5/F9):
- * 1. AutoEq Headphone Correction (GitHub catalog search, Suggested match >= 0.6, 44.1 kHz RBJ biquad evaluation,
- *    Strength slider, Full Range +10 dB switch, Trimmed dB notice, Tilt Bass/Treble shelves, Import/Export text, MIT attribution)
- * 2. Guided Speaker Self-Calibration Wizard (RECORD_AUDIO, 3 sweeps at -18 dBFS, 20 ms IR window, >= 20% RMS improvement check)
- * 3. Personal Hearing Curve (Per-ear 6-band tone test at -24 dBFS with EQ bypassed, ±6 dB cap, 0.5 strength)
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SoundCalibrationSheet(
@@ -1145,11 +1130,6 @@ fun SoundCalibrationSheet(
     }
 }
 
-/**
- * Blind ABX & Loudness-Matched A/B Tester Bottom Sheet (v5 Section 17.2 F6):
- * Randomizes hidden source `X` between `A` (Bypass at matched loudness) and `B` (Active EQ)
- * and scores user identification accuracy.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AbxBlindTestSheet(

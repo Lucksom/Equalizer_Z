@@ -48,14 +48,6 @@ import com.audioeq.ui.theme.JetBrainsMonoFontFamily
 import com.audioeq.ui.theme.LocalMonetPalette
 import com.audioeq.ui.theme.SpaceGroteskFontFamily
 
-/**
- * Top Bar (`header.top`) matching `audio-eq-v7.html`:
- * - `.brand` 46x46dp icon box (`primaryC` background, `onPrimaryC` 3-band EQ icon)
- * - `h1` "Audio EQ" + `#sub` subtitle (`"<Preset> · <Engine>"` or `"All features are off"`)
- * - `.engine-pill` (`#enginePill`) with glowing green LED dot and `#engineText`
- * - `#master` 46x46dp power button (toggles `masterEnabled` — global power for Equalizer and every effect)
- * - `#settingsBtn` 46x46dp gear button (opens DSP Engine Settings & Diagnostics sheet)
- */
 @Composable
 fun TopBarHeader(
     masterEnabled: Boolean,
@@ -282,9 +274,6 @@ fun TopBarHeader(
     }
 }
 
-/**
- * Dismissible Tonal Status Banner (`#banner`) matching `audio-eq-v7.html`.
- */
 @Composable
 fun StatusBanner(
     message: String,
@@ -328,12 +317,6 @@ fun StatusBanner(
     }
 }
 
-/**
- * Presets Card (`aside#presetCard`) matching `audio-eq-v7.html`:
- * - `.kicker`: "PRESETS" on left + monospace `#presetTag` on right
- * - `.chips` (`#presetChips`): Flex-wrap FlowRow of preset chips (`Flat`, `Balanced Deep`,
- *   `Bass Boost`, `Vocal Clarity`, `Percussion`, `Cinema`, plus user custom presets with `✕` delete icon)
- */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PresetsCard(

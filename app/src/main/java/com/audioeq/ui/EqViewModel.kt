@@ -146,12 +146,7 @@ data class EqUiState(
     val activePresetDisplayName: String
         get() = presets.find { it.id == selectedPresetId }?.name ?: "Custom"
 
-    /**
-     * Computes the composite gain at 10-band index [i]:
-     * - Top power button (`masterEnabled == false`) disables EVERYTHING (returns 0f).
-     * - Equalizer power button (`isEnabled == false`) disables ONLY the 10-band Equalizer sliders/preset curve,
-     *   while Tone and Audio Enhancers & Profiles continue to operate independently!
-     */
+    
     fun effectiveGainDb(i: Int): Float {
         if (!masterEnabled || isAbCompare || diagnostics.usbBitPerfectActive) return 0f
         val baseGains = activeSlidersGainsDb
@@ -609,9 +604,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Imports user-pasted ParametricEQ or GraphicEQ text (v5 Section 16.6 & 17.2 F9).
-     */
+    
     fun importCustomAutoEqText(name: String, text: String) {
         val trimmedText = text.trim()
         val peq = AutoEq.parsePeq(trimmedText)
@@ -645,9 +638,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         applyPresetOrContextLoad()
     }
 
-    /**
-     * Exports the active headphone correction as ParametricEQ or GraphicEQ text (v5 Section 16.6 & 17.2 F9).
-     */
+    
     fun exportActiveCorrectionText(): String {
         val s = _uiState.value
         val prof = s.selectedHeadphoneProfile
@@ -789,10 +780,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    /**
-     * Called on preset, route, headphone profile, speaker calibration, or intensity COMMIT.
-     * Recomputes `inputGainDb` and `makeupGainDb` and glides 250 ms.
-     */
+    
     private fun applyPresetOrContextLoad(persistNow: Boolean = true) {
         val s = _uiState.value
         val layers = buildCurrentLayers(s)
@@ -859,10 +847,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Fast path for continuous slider drags and volume contour steps:
-     * Freezes `inputGainDb`, `makeupGainDb`, and MBC parameters, glides 60 ms, and never calls `probeCapabilities()`.
-     */
+    
     private fun applySliderOrContourFast(persistNow: Boolean = true) {
         val s = _uiState.value
         val layers = buildCurrentLayers(s)
@@ -1338,9 +1323,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         selectPreset(flat)
     }
 
-    /**
-     * Continuous slider drag update: freezes `inputGainDb` and `makeupGainDb` (v5 Section 5.3 & 9).
-     */
+    
     fun updateBandGain(bandIndex: Int, newGainDb: Float) {
         val clamped = newGainDb.coerceIn(-12f, 12f)
         _uiState.update { state ->
