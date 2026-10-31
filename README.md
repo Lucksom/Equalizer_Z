@@ -2,6 +2,12 @@
 
 A modern, system-wide Android audio equalizer built with **Kotlin** and **Jetpack Compose**, featuring Material Design 3 and dynamic Monet theming. It delivers rich sound customization, headphone calibration, and acoustic profiles without requiring root or system file modifications.
 
+<p align="center">
+  <img src="screenshots/screenshot_1.png" width="31%" alt="10-Band Graphic Equalizer" />
+  <img src="screenshots/screenshot_2.png" width="31%" alt="Sound Profiles and Enhancers" />
+  <img src="screenshots/screenshot_3.png" width="31%" alt="AutoEq Calibration and Tools" />
+</p>
+
 ---
 
 ## Key Features
