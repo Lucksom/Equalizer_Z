@@ -182,8 +182,8 @@ data class EngineState(
     val mbc: MbcSettings = EqMath.DEFAULT_MBC,
     val tier1Native5Db: FloatArray = FloatArray(5),
     val tier1BassBoost: Short = 0,
-    val hearing31Db: DoubleArray = DoubleArray(31), // Personal Hearing Compensation (CustomizedSoundModel)
-    val dolbyBoseConfig: DolbyBoseDspConfig = DolbyBoseDspConfig()
+    val hearing31Db: DoubleArray = DoubleArray(31),
+    val enhancerConfig: EnhancerConfig = EnhancerConfig()
 )
 
 // ============================================================================
@@ -622,13 +622,6 @@ object EqMath {
         }
     }
 
-    /**
-     * Section 3.1 & Section 9 Master Signal Chain + Dolby DAP & Bose MiSound DSP:
-     * Combines User 10-band Sliders (x Intensity), Dolby IEQ (ieq_detailed, ieq_balanced, ieq_warm, ieq_custom),
-     * Bass Enhancer (+ Virtual Bass Harmonic Synthesis), Dialogue Enhancer (1-4 kHz Formant Peaking + <=180 Hz Ambient Ducking),
-     * Bose Profile (Dynamic & Balanced), Route Offsets, ISO-226 Volume Contour,
-     * Correction31 (AutoEq / Speaker Cal), and Personal Hearing, clamped to [-15.0, +15.0] dB.
-     */
     fun computeEffective31(s: EngineState, includeContour: Boolean): DoubleArray {
         if (s.flatBypass) return DoubleArray(31)
 
@@ -638,20 +631,19 @@ object EqMath {
             DoubleArray(10)
         }
         val route10 = if (s.route == AudioRoute.SPEAKER && s.correction31Db.any { it != 0.0 }) {
-            DoubleArray(10) // Speaker calibration replaces static speaker route offsets
+            DoubleArray(10)
         } else {
             s.route.offsets10Db
         }
 
-        // Composite 10-band delta from Dolby IEQ + Bass Enhancer (Virtual Bass) + Dialogue Enhancer + Bose Profile
-        val dolbyBose10 = DolbyBoseDspMath.computeComposite10BandDeltaDb(
-            config = s.dolbyBoseConfig,
+        val enhancer10 = EnhancerMath.computeComposite10BandDeltaDb(
+            config = s.enhancerConfig,
             userCustom10Db = s.userSliders10Db
         )
 
         val combined10 = DoubleArray(10) { i ->
             s.userSliders10Db.getOrElse(i) { 0.0 } * s.intensity +
-                dolbyBose10[i] +
+                enhancer10[i] +
                 route10[i] +
                 contour10[i]
         }
@@ -659,7 +651,7 @@ object EqMath {
 
         return DoubleArray(31) { i ->
             val f = RENDER_31_HZ[i]
-            val voiceLowCut = if (!s.profile.virtualBassSpk && !s.dolbyBoseConfig.bassEnhancerEnabled && f < 80.0) -4.0 else 0.0
+            val voiceLowCut = if (!s.profile.virtualBassSpk && !s.enhancerConfig.bassEnhancerEnabled && f < 80.0) -4.0 else 0.0
             val taste = userAndDsp31[i] + voiceLowCut + s.hearing31Db.getOrElse(i) { 0.0 }
             (taste + s.correction31Db.getOrElse(i) { 0.0 }).coerceIn(-15.0, 15.0)
         }
@@ -905,7 +897,7 @@ class MasterEqController(private val sessionId: Int) {
                     for (i in 0 until 10) {
                         val b = getBand(i)
                         b.isEnabled = true
-                        b.cutoffFrequency = DolbyBoseDspMath.FREQ_CUTOFFS_10[i]
+                        b.cutoffFrequency = EnhancerMath.FREQ_CUTOFFS_10[i]
                         b.gain = 0f
                         setBand(i, b)
                     }
@@ -998,31 +990,31 @@ class MasterEqController(private val sessionId: Int) {
             }
 
             if (vendorVirtualizerEffect == null &&
-                descriptors?.any { it.uuid == DolbyBoseDspMath.UUID_VIRTUALIZER_MZ } == true
+                descriptors?.any { it.uuid == EnhancerMath.UUID_VIRTUALIZER_MZ } == true
             ) {
                 vendorVirtualizerEffect = ctor.newInstance(
                     AudioEffect.EFFECT_TYPE_VIRTUALIZER,
-                    DolbyBoseDspMath.UUID_VIRTUALIZER_MZ,
+                    EnhancerMath.UUID_VIRTUALIZER_MZ,
                     0,
                     sessionId
                 )
             }
             if (vendorBassBoostEffect == null &&
-                descriptors?.any { it.uuid == DolbyBoseDspMath.UUID_BASS_BOOST_MZ } == true
+                descriptors?.any { it.uuid == EnhancerMath.UUID_BASS_BOOST_MZ } == true
             ) {
                 vendorBassBoostEffect = ctor.newInstance(
                     AudioEffect.EFFECT_TYPE_BASS_BOOST,
-                    DolbyBoseDspMath.UUID_BASS_BOOST_MZ,
+                    EnhancerMath.UUID_BASS_BOOST_MZ,
                     0,
                     sessionId
                 )
             }
             if (vendorEnvReverbEffect == null &&
-                descriptors?.any { it.uuid == DolbyBoseDspMath.UUID_ENV_REVERB_MZ } == true
+                descriptors?.any { it.uuid == EnhancerMath.UUID_ENV_REVERB_MZ } == true
             ) {
                 vendorEnvReverbEffect = ctor.newInstance(
                     AudioEffect.EFFECT_TYPE_ENV_REVERB,
-                    DolbyBoseDspMath.UUID_ENV_REVERB_MZ,
+                    EnhancerMath.UUID_ENV_REVERB_MZ,
                     0,
                     sessionId
                 )
@@ -1067,8 +1059,8 @@ class MasterEqController(private val sessionId: Int) {
             inputGainDb = 0.0f
 
             val levelerBonus = if (state.profile.levelerOn) 1.0f else 0.5f
-            val bassBonus = if (state.dolbyBoseConfig.bassEnhancerEnabled) {
-                1.0f * (state.dolbyBoseConfig.bassEnhancerStrength.coerceIn(0, 100) / 100f)
+            val bassBonus = if (state.enhancerConfig.bassEnhancerEnabled) {
+                1.0f * (state.enhancerConfig.bassEnhancerStrength.coerceIn(0, 100) / 100f)
             } else 0f
 
             makeupDb = if (state.flatBypass) {
@@ -1092,20 +1084,14 @@ class MasterEqController(private val sessionId: Int) {
         }
     }
 
-    /**
-     * Applies Meizu Square Sound 3D Virtualizer (Section 4 & 7: strength 650/1000, BINAURAL mode, linear flat PostEq),
-     * Live Music EnvironmentalReverb (Section 5: 26-Byte PARAM_PROPERTIES = 10 Little-Endian packet),
-     * and BassBoostMz (Section 6: strength 0..1000).
-     */
     private fun applyAuxiliaryEffects(state: EngineState) {
-        val cfg = state.dolbyBoseConfig
+        val cfg = state.enhancerConfig
         val activeGate = state.enabled && !state.flatBypass
-        val is3dMode = cfg.boseProfile == BoseProfile.EFFECT_3D
+        val is3dMode = cfg.profile == AudioProfile.EFFECT_3D
 
-        // 1. VirtualizerMz (725d7fa7-9219-4f71-8fa7-240a6d489387) / Android Virtualizer (strength = 650, BINAURAL)
         val targetVirtStrength: Short = when {
             !activeGate -> 0
-            is3dMode -> DolbyBoseDspMath.VIRTUALIZER_3D_STRENGTH // 650
+            is3dMode -> EnhancerMath.VIRTUALIZER_3D_STRENGTH
             else -> state.profile.virtualizerStrength
         }
         try {
@@ -1113,7 +1099,7 @@ class MasterEqController(private val sessionId: Int) {
                 vFx.enabled = activeGate && targetVirtStrength > 0
                 if (activeGate && targetVirtStrength > 0) {
                     val buf = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(targetVirtStrength).array()
-                    vendorSetParamMethod?.invoke(vFx, 1 /* PARAM_STRENGTH */, buf)
+                    vendorSetParamMethod?.invoke(vFx, 1, buf)
                 }
             }
         } catch (_: Throwable) {
@@ -1134,14 +1120,13 @@ class MasterEqController(private val sessionId: Int) {
         } catch (_: Throwable) {
         }
 
-        // Section 7: Set linear flat response on DynamicsProcessing PostEq stages when 3D mode is active
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && is3dMode) {
             try {
                 dp?.let { engine ->
                     for (i in 0 until 10) {
                         engine.setPostEqBandAllChannelsTo(
                             i,
-                            DynamicsProcessing.EqBand(true, DolbyBoseDspMath.FREQ_CUTOFFS_10[i], 0.0f)
+                            DynamicsProcessing.EqBand(true, EnhancerMath.FREQ_CUTOFFS_10[i], 0.0f)
                         )
                     }
                 }
@@ -1149,15 +1134,14 @@ class MasterEqController(private val sessionId: Int) {
             }
         }
 
-        // 2. EnvironmentalReverbMz (38a6a248-94be-4007-bbe1-337d7dc49e6d) / Android EnvironmentalReverb (26-byte Little-Endian PARAM_PROPERTIES=10)
-        val isLiveMusic = activeGate && cfg.boseProfile == BoseProfile.LIVE_MUSIC
+        val isLiveMusic = activeGate && cfg.profile == AudioProfile.LIVE_MUSIC
         try {
-            val props = DolbyBoseDspMath.DEFAULT_LIVE_MUSIC_REVERB
+            val props = EnhancerMath.DEFAULT_LIVE_MUSIC_REVERB
             vendorEnvReverbEffect?.let { vFx ->
                 vFx.enabled = isLiveMusic
                 if (isLiveMusic) {
                     val packet26 = props.to26ByteLittleEndianPacket()
-                    vendorSetParamMethod?.invoke(vFx, DolbyBoseDspMath.ENV_REVERB_PARAM_PROPERTIES, packet26)
+                    vendorSetParamMethod?.invoke(vFx, EnhancerMath.ENV_REVERB_PARAM_PROPERTIES, packet26)
                 }
             }
         } catch (_: Throwable) {
@@ -1166,7 +1150,7 @@ class MasterEqController(private val sessionId: Int) {
             envReverb?.let { rev ->
                 rev.enabled = isLiveMusic
                 if (isLiveMusic) {
-                    val p = DolbyBoseDspMath.DEFAULT_LIVE_MUSIC_REVERB
+                    val p = EnhancerMath.DEFAULT_LIVE_MUSIC_REVERB
                     val settings = EnvironmentalReverb.Settings().apply {
                         roomLevel = p.roomLevelMb
                         roomHFLevel = p.roomHfLevelMb
@@ -1251,7 +1235,7 @@ class MasterEqController(private val sessionId: Int) {
                 )
                 val m = mbc
                 if (m != null) {
-                    val cfg = state.dolbyBoseConfig
+                    val cfg = state.enhancerConfig
                     val ieqStrength = cfg.ieqAmount.coerceIn(0, 16) / 16.0f
                     val deFactor = if (cfg.dialogueEnhancerEnabled) {
                         cfg.dialogueAmount.coerceIn(0, 16) / 16.0f
@@ -1366,7 +1350,7 @@ class MasterEqController(private val sessionId: Int) {
                 val m = mbc
                 if (m != null) {
                     var anyMbcBandChanged = false
-                    val cfg = activeState.dolbyBoseConfig
+                    val cfg = activeState.enhancerConfig
                     val bassFactor = if (cfg.bassEnhancerEnabled) {
                         cfg.bassEnhancerStrength.coerceIn(0, 100) / 100.0f
                     } else 0f

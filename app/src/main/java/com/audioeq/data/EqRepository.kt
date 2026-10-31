@@ -8,9 +8,9 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import com.audioeq.audio.BoseProfile
+import com.audioeq.audio.AudioProfile
 import com.audioeq.audio.DaxProfile
-import com.audioeq.audio.DolbyBoseDspConfig
+import com.audioeq.audio.EnhancerConfig
 import com.audioeq.audio.EqMath
 import com.audioeq.audio.IeqPreset
 import com.audioeq.model.DeviceProfileMemory
@@ -63,7 +63,7 @@ data class PersistedEqPreferences(
     val compatibility10Band: Boolean = false,
     val transientMode: Boolean = false,
     val rootWarningAccepted: Boolean = false,
-    val dolbyBoseConfig: DolbyBoseDspConfig = DolbyBoseDspConfig(),
+    val enhancerConfig: EnhancerConfig = EnhancerConfig(),
     val themeMode: String = "dark",
     val seedHex: String = "#6750a4"
 )
@@ -112,16 +112,16 @@ class EqRepository(private val context: Context) {
         val COMPAT_10_BAND = booleanPreferencesKey("compatibility_10_band")
         val TRANSIENT_MODE = booleanPreferencesKey("transient_mode")
         val ROOT_WARNING_ACCEPTED = booleanPreferencesKey("root_warning_accepted")
-        val IEQ_PRESET_ID = stringPreferencesKey("dolby_ieq_preset_id")
-        val IEQ_AMOUNT = intPreferencesKey("dolby_ieq_amount")
-        val IEQ_CUSTOM_10_CSV = stringPreferencesKey("dolby_ieq_custom_10_csv")
-        val DIALOGUE_ENABLED = booleanPreferencesKey("dolby_dialogue_enabled")
-        val DIALOGUE_AMOUNT = intPreferencesKey("dolby_dialogue_amount")
-        val DIALOGUE_DUCKING = intPreferencesKey("dolby_dialogue_ducking")
-        val BASS_ENHANCER_ENABLED = booleanPreferencesKey("dolby_bass_enhancer_enabled")
-        val BASS_ENHANCER_STRENGTH = intPreferencesKey("dolby_bass_enhancer_strength")
-        val VIRTUAL_BASS_ENABLED = booleanPreferencesKey("dolby_virtual_bass_enabled")
-        val BOSE_PROFILE_ID = stringPreferencesKey("bose_profile_id")
+        val IEQ_PRESET_ID = stringPreferencesKey("ieq_preset_id")
+        val IEQ_AMOUNT = intPreferencesKey("ieq_amount")
+        val IEQ_CUSTOM_10_CSV = stringPreferencesKey("ieq_custom_10_csv")
+        val DIALOGUE_ENABLED = booleanPreferencesKey("dialogue_enabled")
+        val DIALOGUE_AMOUNT = intPreferencesKey("dialogue_amount")
+        val DIALOGUE_DUCKING = intPreferencesKey("dialogue_ducking")
+        val BASS_ENHANCER_ENABLED = booleanPreferencesKey("bass_enhancer_enabled")
+        val BASS_ENHANCER_STRENGTH = intPreferencesKey("bass_enhancer_strength")
+        val VIRTUAL_BASS_ENABLED = booleanPreferencesKey("virtual_bass_enabled")
+        val AUDIO_PROFILE_ID = stringPreferencesKey("profile_id")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val SEED_HEX = stringPreferencesKey("monet_seed_hex")
     }
@@ -198,7 +198,7 @@ class EqRepository(private val context: Context) {
             compatibility10Band = prefs[Keys.COMPAT_10_BAND] ?: false,
             transientMode = prefs[Keys.TRANSIENT_MODE] ?: false,
             rootWarningAccepted = prefs[Keys.ROOT_WARNING_ACCEPTED] ?: false,
-            dolbyBoseConfig = DolbyBoseDspConfig(
+            enhancerConfig = EnhancerConfig(
                 ieqPreset = IeqPreset.fromId(prefs[Keys.IEQ_PRESET_ID] ?: IeqPreset.OFF.id),
                 ieqAmount = (prefs[Keys.IEQ_AMOUNT] ?: 10).coerceIn(0, 16),
                 ieqCustom10Db = ieqCustom10,
@@ -208,7 +208,7 @@ class EqRepository(private val context: Context) {
                 bassEnhancerEnabled = prefs[Keys.BASS_ENHANCER_ENABLED] ?: false,
                 bassEnhancerStrength = (prefs[Keys.BASS_ENHANCER_STRENGTH] ?: 80).coerceIn(0, 100),
                 virtualBassEnabled = prefs[Keys.VIRTUAL_BASS_ENABLED] ?: false,
-                boseProfile = BoseProfile.fromId(prefs[Keys.BOSE_PROFILE_ID] ?: BoseProfile.OFF.id)
+                profile = AudioProfile.fromId(prefs[Keys.AUDIO_PROFILE_ID] ?: AudioProfile.OFF.id)
             ),
             themeMode = prefs[Keys.THEME_MODE] ?: "dark",
             seedHex = prefs[Keys.SEED_HEX] ?: "#6750a4"
@@ -252,7 +252,7 @@ class EqRepository(private val context: Context) {
         speakerCalStrength: Float,
         compatibility10Band: Boolean,
         transientMode: Boolean,
-        dolbyBoseConfig: DolbyBoseDspConfig = DolbyBoseDspConfig(),
+        enhancerConfig: EnhancerConfig = EnhancerConfig(),
         themeMode: String = "dark",
         seedHex: String = "#6750a4"
     ) {
@@ -287,16 +287,16 @@ class EqRepository(private val context: Context) {
             prefs[Keys.SPEAKER_CAL_STRENGTH] = speakerCalStrength
             prefs[Keys.COMPAT_10_BAND] = compatibility10Band
             prefs[Keys.TRANSIENT_MODE] = transientMode
-            prefs[Keys.IEQ_PRESET_ID] = dolbyBoseConfig.ieqPreset.id
-            prefs[Keys.IEQ_AMOUNT] = dolbyBoseConfig.ieqAmount.coerceIn(0, 16)
-            prefs[Keys.IEQ_CUSTOM_10_CSV] = dolbyBoseConfig.ieqCustom10Db.joinToString(",")
-            prefs[Keys.DIALOGUE_ENABLED] = dolbyBoseConfig.dialogueEnhancerEnabled
-            prefs[Keys.DIALOGUE_AMOUNT] = dolbyBoseConfig.dialogueAmount.coerceIn(0, 16)
-            prefs[Keys.DIALOGUE_DUCKING] = dolbyBoseConfig.dialogueDucking.coerceIn(0, 8)
-            prefs[Keys.BASS_ENHANCER_ENABLED] = dolbyBoseConfig.bassEnhancerEnabled
-            prefs[Keys.BASS_ENHANCER_STRENGTH] = dolbyBoseConfig.bassEnhancerStrength.coerceIn(0, 100)
-            prefs[Keys.VIRTUAL_BASS_ENABLED] = dolbyBoseConfig.virtualBassEnabled
-            prefs[Keys.BOSE_PROFILE_ID] = dolbyBoseConfig.boseProfile.id
+            prefs[Keys.IEQ_PRESET_ID] = enhancerConfig.ieqPreset.id
+            prefs[Keys.IEQ_AMOUNT] = enhancerConfig.ieqAmount.coerceIn(0, 16)
+            prefs[Keys.IEQ_CUSTOM_10_CSV] = enhancerConfig.ieqCustom10Db.joinToString(",")
+            prefs[Keys.DIALOGUE_ENABLED] = enhancerConfig.dialogueEnhancerEnabled
+            prefs[Keys.DIALOGUE_AMOUNT] = enhancerConfig.dialogueAmount.coerceIn(0, 16)
+            prefs[Keys.DIALOGUE_DUCKING] = enhancerConfig.dialogueDucking.coerceIn(0, 8)
+            prefs[Keys.BASS_ENHANCER_ENABLED] = enhancerConfig.bassEnhancerEnabled
+            prefs[Keys.BASS_ENHANCER_STRENGTH] = enhancerConfig.bassEnhancerStrength.coerceIn(0, 100)
+            prefs[Keys.VIRTUAL_BASS_ENABLED] = enhancerConfig.virtualBassEnabled
+            prefs[Keys.AUDIO_PROFILE_ID] = enhancerConfig.profile.id
             prefs[Keys.THEME_MODE] = themeMode
             prefs[Keys.SEED_HEX] = seedHex
         }

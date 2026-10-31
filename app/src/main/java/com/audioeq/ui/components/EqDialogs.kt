@@ -1352,19 +1352,6 @@ private fun CalibrationCurvePreview(
     }
 }
 
-/**
- * DSP Engine Settings & Diagnostics Sheet (`#sheet`) matching `audio-eq-v7.html` & `audio-eq-v7-components.md`:
- * 1. Audio engine (`Legacy`, `ADB / Shizuku`, `Root`)
- * 2. Channel balance & dual-channel EQ (`Independent left / right 10-band EQ` + `L/R channel balance`)
- * 3. Renderer, USB DAC & boot (`Start equalizer on boot`, `Compatibility mode (10 bands)`,
- *    `Transient mode (time resolution)`, `Try Dolby control (experimental)`)
- * 4. Sub-bass Butterworth high-pass (`Cutoff` 0..200 Hz, 0 = Off)
- * 5. Hardware & audio effect diagnostics (14 key-value rows)
- * 6. Keep equalizer alive (Battery optimization settings button)
- * 7. Appearance (Theme `System`/`Light`/`Dark` + Dynamic color Monet seed swatches, custom color picker,
- *    `"From wallpaper"` photo picker seed extractor, 9-step OKLCH tonal ramp strip, seed/hue meta, and
- *    Primary / Secondary / Tertiary role preview badges)
- */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsAndDiagnosticsSheet(

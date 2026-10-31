@@ -28,7 +28,7 @@ A modern, system-wide Android audio equalizer built with **Kotlin** and **Jetpac
   * **Balanced**: Natural, full-bodied audio balance.
   * **Warm**: Smooth, rich low-mid response.
   * **Custom**: User-tunable target response.
-* **Bose Profiles**:
+* **Sound Profiles**:
   * **Dynamic**: Energetic tuning with enhanced sub-bass and airy highs.
   * **Balanced**: Smooth, neutral tuning for extended listening.
   * **3D**: Binaural spatial audio with wide acoustic imaging.

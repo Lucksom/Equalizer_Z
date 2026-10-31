@@ -43,7 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.audioeq.ui.components.AbxBlindTestSheet
-import com.audioeq.ui.components.DolbyBoseDspCard
+import com.audioeq.ui.components.EnhancerCard
 import com.audioeq.ui.components.EqualizerCard
 import com.audioeq.ui.components.PresetsCard
 import com.audioeq.ui.components.RootWarningDialog
@@ -224,10 +224,10 @@ fun AudioEqScreen(
                                     onToggleAbCompare = { viewModel.setAbCompare(it) }
                                 )
 
-                                DolbyBoseDspCard(
-                                    config = state.dolbyBoseConfig,
+                                EnhancerCard(
+                                    config = state.enhancerConfig,
                                     masterEnabled = state.masterEnabled && !state.diagnostics.usbBitPerfectActive,
-                                    onSelectBoseProfile = { viewModel.selectBoseProfile(it) },
+                                    onSelectProfile = { viewModel.selectProfile(it) },
                                     onSelectIeqPreset = { viewModel.selectIeqPreset(it) },
                                     onIeqAmountChange = { viewModel.updateIeqAmount(it) },
                                     onIeqCustomBandChange = { idx, db -> viewModel.updateIeqCustomBand(idx, db) },
@@ -238,7 +238,7 @@ fun AudioEqScreen(
                                     onToggleBassEnhancer = { viewModel.setBassEnhancerEnabled(it) },
                                     onBassEnhancerStrengthChange = { viewModel.updateBassEnhancerStrength(it) },
                                     onToggleVirtualBass = { viewModel.setVirtualBassEnabled(it) },
-                                    onResetDolbyBose = { viewModel.resetDolbyBoseDsp() },
+                                    onResetEnhancers = { viewModel.resetEnhancers() },
                                     onOpenCalibration = { viewModel.openCalibrationSheet() },
                                     onOpenAbxTest = { viewModel.openAbxSheet() }
                                 )
@@ -326,10 +326,10 @@ fun AudioEqScreen(
                         }
 
                         item {
-                            DolbyBoseDspCard(
-                                config = state.dolbyBoseConfig,
+                            EnhancerCard(
+                                config = state.enhancerConfig,
                                 masterEnabled = state.masterEnabled && !state.diagnostics.usbBitPerfectActive,
-                                onSelectBoseProfile = { viewModel.selectBoseProfile(it) },
+                                onSelectProfile = { viewModel.selectProfile(it) },
                                 onSelectIeqPreset = { viewModel.selectIeqPreset(it) },
                                 onIeqAmountChange = { viewModel.updateIeqAmount(it) },
                                 onIeqCustomBandChange = { idx, db -> viewModel.updateIeqCustomBand(idx, db) },
@@ -340,7 +340,7 @@ fun AudioEqScreen(
                                 onToggleBassEnhancer = { viewModel.setBassEnhancerEnabled(it) },
                                 onBassEnhancerStrengthChange = { viewModel.updateBassEnhancerStrength(it) },
                                 onToggleVirtualBass = { viewModel.setVirtualBassEnabled(it) },
-                                onResetDolbyBose = { viewModel.resetDolbyBoseDsp() },
+                                onResetEnhancers = { viewModel.resetEnhancers() },
                                 onOpenCalibration = { viewModel.openCalibrationSheet() },
                                 onOpenAbxTest = { viewModel.openAbxSheet() }
                             )

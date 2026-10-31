@@ -53,9 +53,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.audioeq.audio.BoseProfile
-import com.audioeq.audio.DolbyBoseDspConfig
-import com.audioeq.audio.DolbyBoseDspMath
+import com.audioeq.audio.AudioProfile
+import com.audioeq.audio.EnhancerConfig
+import com.audioeq.audio.EnhancerMath
 import com.audioeq.audio.IeqPreset
 import com.audioeq.ui.theme.JetBrainsMonoFontFamily
 import com.audioeq.ui.theme.LocalMonetPalette
@@ -63,19 +63,11 @@ import com.audioeq.ui.theme.SpaceGroteskFontFamily
 import java.util.Locale
 import kotlin.math.roundToInt
 
-/**
- * Audio Enhancers & Profiles Card (`section#enhanceCard`):
- * 1. Bose Profiles (`Off`, `Dynamic`, `Balanced`, `3D`, `Live Music`)
- * 2. Intelligent Equalizer (`Detailed`, `Balanced`, `Warm`, `Custom` + second row `Off (disable IEQ)` + `IEQ strength 0..16`)
- * 3. Dialogue Enhancer (switch + `Dialogue amount 0..16` + `Ambient low-frequency ducking (≤ 180 Hz)`: `Off (0 dB)`, `Default (−2)`, `Strong (−4)`)
- * 4. Bass Enhancer (switch + `Bass boost level` slider `0..100%` without volume suppression + `Virtual bass harmonic synthesis` switch)
- * 5. Bottom tonal buttons: `Calibration` and `ABX test`
- */
 @Composable
-fun DolbyBoseDspCard(
-    config: DolbyBoseDspConfig,
+fun EnhancerCard(
+    config: EnhancerConfig,
     masterEnabled: Boolean,
-    onSelectBoseProfile: (BoseProfile) -> Unit,
+    onSelectProfile: (AudioProfile) -> Unit,
     onSelectIeqPreset: (IeqPreset) -> Unit,
     onIeqAmountChange: (Int) -> Unit,
     onIeqCustomBandChange: (Int, Float) -> Unit,
@@ -86,7 +78,7 @@ fun DolbyBoseDspCard(
     onToggleBassEnhancer: (Boolean) -> Unit,
     onBassEnhancerStrengthChange: (Int) -> Unit,
     onToggleVirtualBass: (Boolean) -> Unit,
-    onResetDolbyBose: () -> Unit,
+    onResetEnhancers: () -> Unit,
     onOpenCalibration: () -> Unit,
     onOpenAbxTest: () -> Unit,
     modifier: Modifier = Modifier
@@ -115,7 +107,7 @@ fun DolbyBoseDspCard(
                 color = palette.outlineV.copy(alpha = 0.55f),
                 shape = RoundedCornerShape(28.dp)
             )
-            .testTag("dolby_bose_dsp_card"),
+            .testTag("enhancers_card"),
         shape = RoundedCornerShape(28.dp),
         color = palette.sCont
     ) {
@@ -125,7 +117,6 @@ fun DolbyBoseDspCard(
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Card Header (.enhance-head)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -198,13 +189,12 @@ fun DolbyBoseDspCard(
                     }
                 }
 
-                // #enhanceReset (.ghost-btn)
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
-                        .clickable(enabled = masterEnabled) { onResetDolbyBose() }
+                        .clickable(enabled = masterEnabled) { onResetEnhancers() }
                         .padding(horizontal = 10.dp, vertical = 6.dp)
-                        .testTag("reset_dolby_bose_button"),
+                        .testTag("reset_enhancers_button"),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
@@ -224,9 +214,6 @@ fun DolbyBoseDspCard(
                 }
             }
 
-            // ====================================================================
-            // 1. BOSE PROFILES (.block) — Off, Dynamic, Balanced, 3D, Live Music
-            // ====================================================================
             EnhancerBlockSurface {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -243,14 +230,14 @@ fun DolbyBoseDspCard(
                         BlockIconBox {
                             Icon(
                                 imageVector = Icons.Default.Speaker,
-                                contentDescription = "Bose Profiles",
+                                contentDescription = "Profiles",
                                 tint = palette.primary,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Bose Profiles",
+                                text = "Profiles",
                                 fontFamily = SpaceGroteskFontFamily,
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 15.sp,
@@ -259,7 +246,7 @@ fun DolbyBoseDspCard(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = config.boseProfile.subtitle,
+                                text = config.profile.subtitle,
                                 fontSize = 12.sp,
                                 color = palette.onVar,
                                 maxLines = 1,
@@ -269,40 +256,35 @@ fun DolbyBoseDspCard(
                     }
 
                     PillBadge(
-                        text = config.boseProfile.title,
-                        active = config.boseProfile != BoseProfile.OFF
+                        text = config.profile.title,
+                        active = config.profile != AudioProfile.OFF
                     )
                 }
 
-                // Row 1: Off | Dynamic | Balanced
                 V7SegmentedRow(
                     options = listOf(
-                        BoseProfile.OFF to "Off",
-                        BoseProfile.DYNAMIC to "Dynamic",
-                        BoseProfile.BALANCED to "Balanced"
+                        AudioProfile.OFF to "Off",
+                        AudioProfile.DYNAMIC to "Dynamic",
+                        AudioProfile.BALANCED to "Balanced"
                     ),
-                    selectedValue = config.boseProfile,
+                    selectedValue = config.profile,
                     enabled = masterEnabled,
-                    onSelect = onSelectBoseProfile,
-                    modifier = Modifier.testTag("bose_segmented_row")
+                    onSelect = onSelectProfile,
+                    modifier = Modifier.testTag("profile_segmented_row")
                 )
 
-                // Row 2: 3D | Live Music (Square Sound VirtualizerMz & EnvironmentalReverbMz)
                 V7SegmentedRow(
                     options = listOf(
-                        BoseProfile.EFFECT_3D to "3D",
-                        BoseProfile.LIVE_MUSIC to "Live Music"
+                        AudioProfile.EFFECT_3D to "3D",
+                        AudioProfile.LIVE_MUSIC to "Live Music"
                     ),
-                    selectedValue = config.boseProfile,
+                    selectedValue = config.profile,
                     enabled = masterEnabled,
-                    onSelect = onSelectBoseProfile,
-                    modifier = Modifier.testTag("bose_spatial_segmented_row")
+                    onSelect = onSelectProfile,
+                    modifier = Modifier.testTag("profile_spatial_segmented_row")
                 )
             }
 
-            // ====================================================================
-            // 2. INTELLIGENT EQUALIZER (.block)
-            // ====================================================================
             EnhancerBlockSurface {
                 val ieqPct = ((config.ieqAmount / 16.0f) * 100f).roundToInt()
                 val ieqBadgeText = if (config.ieqPreset == IeqPreset.OFF) {
@@ -487,7 +469,7 @@ fun DolbyBoseDspCard(
                                     .padding(12.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                DolbyBoseDspMath.FREQ_LABELS_10.forEachIndexed { idx, freqLabel ->
+                                EnhancerMath.FREQ_LABELS_10.forEachIndexed { idx, freqLabel ->
                                     val bandVal = config.ieqCustom10Db.getOrElse(idx) { 0f }
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
@@ -532,9 +514,6 @@ fun DolbyBoseDspCard(
                 }
             }
 
-            // ====================================================================
-            // 3. DIALOGUE ENHANCER (.block)
-            // ====================================================================
             EnhancerBlockSurface {
                 val deFormant2kDb = 6.25f * (config.dialogueAmount / 16.0f)
                 val deSubText = if (config.dialogueEnhancerEnabled) {
@@ -663,11 +642,8 @@ fun DolbyBoseDspCard(
                 }
             }
 
-            // ====================================================================
-            // 4. BASS ENHANCER (.block) — with Volume-Preserving Bass Slider
-            // ====================================================================
             EnhancerBlockSurface {
-                val peakSubShelfDb = DolbyBoseDspMath.bassEnhancerBandBoostDb(
+                val peakSubShelfDb = EnhancerMath.bassEnhancerBandBoostDb(
                     bandIndex = 1,
                     strengthPct = config.bassEnhancerStrength,
                     virtualBassEnabled = config.virtualBassEnabled
@@ -790,9 +766,6 @@ fun DolbyBoseDspCard(
                 )
             }
 
-            // ====================================================================
-            // 6. BOTTOM ACTION BUTTONS (Calibration & ABX test)
-            // ====================================================================
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)

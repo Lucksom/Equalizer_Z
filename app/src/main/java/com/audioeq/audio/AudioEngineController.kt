@@ -100,7 +100,7 @@ class AudioEngineController(private val context: Context) {
         correction31 = DoubleArray(31)
     )
     private var lastDaxProfile: DaxProfile = DaxProfile.MUSIC
-    private var lastDolbyBoseConfig: DolbyBoseDspConfig = DolbyBoseDspConfig()
+    private var lastEnhancerConfig: EnhancerConfig = EnhancerConfig()
     private var lastMbc: MbcConfig = EqConstants.DEFAULT_MBC_CONFIG
     private var lastRouteBaseDb: Float = -3.0f
     private var lastLimiterDb: Float = -1.0f
@@ -581,7 +581,7 @@ class AudioEngineController(private val context: Context) {
         enabled: Boolean,
         flatBypass: Boolean,
         daxProfile: DaxProfile,
-        dolbyBoseConfig: DolbyBoseDspConfig,
+        enhancerConfig: EnhancerConfig,
         layers: Layers,
         mbc: MbcConfig,
         tier1Native5Db: FloatArray,
@@ -615,7 +615,7 @@ class AudioEngineController(private val context: Context) {
             tier1Native5Db = tier1Native5Db.clone(),
             tier1BassBoost = bassBoostStrength.coerceIn(0, 1000).toShort(),
             hearing31Db = hearing31,
-            dolbyBoseConfig = dolbyBoseConfig
+            enhancerConfig = enhancerConfig
         )
     }
 
@@ -628,7 +628,7 @@ class AudioEngineController(private val context: Context) {
         enabled: Boolean,
         abCompare: Boolean,
         daxProfile: DaxProfile = DaxProfile.MUSIC,
-        dolbyBoseConfig: DolbyBoseDspConfig = lastDolbyBoseConfig,
+        enhancerConfig: EnhancerConfig = lastEnhancerConfig,
         layers: Layers,
         mbc: MbcConfig,
         routeBaseDb: Float,
@@ -643,39 +643,38 @@ class AudioEngineController(private val context: Context) {
         lastEnabled = enabled && !(usbBitPerfectEnabled && getCurrentRoute() == OutputRoute.USB)
         lastAbCompare = abCompare
         lastDaxProfile = daxProfile
-        lastDolbyBoseConfig = dolbyBoseConfig
+        lastEnhancerConfig = enhancerConfig
         lastLayers = layers
         lastMbc = mbc
         lastRouteBaseDb = routeBaseDb
         lastLimiterDb = limiterDb
-        val anyDolbyBoseActive = dolbyBoseConfig.ieqPreset != IeqPreset.OFF ||
-            dolbyBoseConfig.dialogueEnhancerEnabled ||
-            dolbyBoseConfig.bassEnhancerEnabled ||
-            dolbyBoseConfig.boseProfile != BoseProfile.OFF
+        val anyEnhancerActive = enhancerConfig.ieqPreset != IeqPreset.OFF ||
+            enhancerConfig.dialogueEnhancerEnabled ||
+            enhancerConfig.bassEnhancerEnabled ||
+            enhancerConfig.profile != AudioProfile.OFF
         val anyToneOrCalActive = layers.contourDb.any { kotlin.math.abs(it) > 0.01 } ||
             layers.correction31.any { kotlin.math.abs(it) > 0.01 } ||
             layers.hearingLeft31.any { kotlin.math.abs(it) > 0.01 } ||
             layers.hearingRight31.any { kotlin.math.abs(it) > 0.01 }
-        lastFlatBypass = flatBypass && daxProfile == DaxProfile.MUSIC && !anyDolbyBoseActive && !anyToneOrCalActive
+        lastFlatBypass = flatBypass && daxProfile == DaxProfile.MUSIC && !anyEnhancerActive && !anyToneOrCalActive
 
         lastTier1Native5Db = tier1Native5Db.copyOf()
-        lastBassBoostStrength = if (dolbyBoseConfig.bassEnhancerEnabled) {
-            max(bassBoostStrength, dolbyBoseConfig.bassBoostStrengthPermille.toInt())
+        lastBassBoostStrength = if (enhancerConfig.bassEnhancerEnabled) {
+            max(bassBoostStrength, enhancerConfig.bassBoostStrengthPermille.toInt())
         } else {
             bassBoostStrength
         }
-        lastVirtualizerStrength = if (dolbyBoseConfig.boseProfile == BoseProfile.EFFECT_3D) {
-            DolbyBoseDspMath.VIRTUALIZER_3D_STRENGTH.toInt()
+        lastVirtualizerStrength = if (enhancerConfig.profile == AudioProfile.EFFECT_3D) {
+            EnhancerMath.VIRTUALIZER_3D_STRENGTH.toInt()
         } else {
             max(virtualizerStrength, daxProfile.virtualizerStrength.toInt())
         }
 
-        // Compute volume-preserving inputGainDb (0.0 dB), upward makeupDb, and ceilingLoadDb synchronously
         val masterState = buildMasterEngineState(
             enabled = lastEnabled && !lastAbCompare,
             flatBypass = lastFlatBypass,
             daxProfile = lastDaxProfile,
-            dolbyBoseConfig = lastDolbyBoseConfig,
+            enhancerConfig = lastEnhancerConfig,
             layers = lastLayers,
             mbc = lastMbc,
             tier1Native5Db = lastTier1Native5Db,
@@ -684,8 +683,8 @@ class AudioEngineController(private val context: Context) {
         currentInputGainDb = 0.0f
 
         val levelerBonus = if (masterState.profile.levelerOn) 1.0f else 0.5f
-        val bassBonus = if (dolbyBoseConfig.bassEnhancerEnabled) {
-            1.0f * (dolbyBoseConfig.bassEnhancerStrength.coerceIn(0, 100) / 100f)
+        val bassBonus = if (enhancerConfig.bassEnhancerEnabled) {
+            1.0f * (enhancerConfig.bassEnhancerStrength.coerceIn(0, 100) / 100f)
         } else 0f
         currentMakeupGainDb = if (masterState.flatBypass) {
             0f
@@ -707,7 +706,7 @@ class AudioEngineController(private val context: Context) {
         enabled: Boolean,
         abCompare: Boolean,
         daxProfile: DaxProfile = lastDaxProfile,
-        dolbyBoseConfig: DolbyBoseDspConfig = lastDolbyBoseConfig,
+        enhancerConfig: EnhancerConfig = lastEnhancerConfig,
         layers: Layers,
         flatBypass: Boolean,
         tier1Native5Db: FloatArray = lastTier1Native5Db,
@@ -716,20 +715,20 @@ class AudioEngineController(private val context: Context) {
         lastEnabled = enabled && !(usbBitPerfectEnabled && getCurrentRoute() == OutputRoute.USB)
         lastAbCompare = abCompare
         lastDaxProfile = daxProfile
-        lastDolbyBoseConfig = dolbyBoseConfig
+        lastEnhancerConfig = enhancerConfig
         lastLayers = layers
         lastTier1Native5Db = tier1Native5Db.copyOf()
-        val anyDolbyBoseActive = dolbyBoseConfig.ieqPreset != IeqPreset.OFF ||
-            dolbyBoseConfig.dialogueEnhancerEnabled ||
-            dolbyBoseConfig.bassEnhancerEnabled ||
-            dolbyBoseConfig.boseProfile != BoseProfile.OFF
+        val anyEnhancerActive = enhancerConfig.ieqPreset != IeqPreset.OFF ||
+            enhancerConfig.dialogueEnhancerEnabled ||
+            enhancerConfig.bassEnhancerEnabled ||
+            enhancerConfig.profile != AudioProfile.OFF
         val anyToneOrCalActive = layers.contourDb.any { kotlin.math.abs(it) > 0.01 } ||
             layers.correction31.any { kotlin.math.abs(it) > 0.01 } ||
             layers.hearingLeft31.any { kotlin.math.abs(it) > 0.01 } ||
             layers.hearingRight31.any { kotlin.math.abs(it) > 0.01 }
-        lastFlatBypass = flatBypass && daxProfile == DaxProfile.MUSIC && !anyDolbyBoseActive && !anyToneOrCalActive
-        lastBassBoostStrength = if (dolbyBoseConfig.bassEnhancerEnabled) {
-            dolbyBoseConfig.bassBoostStrengthPermille.toInt()
+        lastFlatBypass = flatBypass && daxProfile == DaxProfile.MUSIC && !anyEnhancerActive && !anyToneOrCalActive
+        lastBassBoostStrength = if (enhancerConfig.bassEnhancerEnabled) {
+            enhancerConfig.bassBoostStrengthPermille.toInt()
         } else {
             lastBassBoostStrength
         }
@@ -738,7 +737,7 @@ class AudioEngineController(private val context: Context) {
             enabled = lastEnabled && !lastAbCompare,
             flatBypass = lastFlatBypass,
             daxProfile = lastDaxProfile,
-            dolbyBoseConfig = lastDolbyBoseConfig,
+            enhancerConfig = lastEnhancerConfig,
             layers = lastLayers,
             mbc = lastMbc,
             tier1Native5Db = lastTier1Native5Db,
@@ -816,9 +815,9 @@ class AudioEngineController(private val context: Context) {
 
     private fun loadAllSessions(glideMs: Double) {
         val isSmallSpeaker = getCurrentRoute() == OutputRoute.SPEAKER &&
-            lastDolbyBoseConfig.boseProfile != BoseProfile.EFFECT_3D
-        val surroundAmount = if (lastDolbyBoseConfig.boseProfile == BoseProfile.EFFECT_3D) {
-            DolbyBoseDspMath.VIRTUALIZER_3D_STRENGTH / 1000.0
+            lastEnhancerConfig.profile != AudioProfile.EFFECT_3D
+        val surroundAmount = if (lastEnhancerConfig.profile == AudioProfile.EFFECT_3D) {
+            EnhancerMath.VIRTUALIZER_3D_STRENGTH / 1000.0
         } else {
             lastDaxProfile.virtualizerStrength / 1000.0
         }
@@ -828,7 +827,7 @@ class AudioEngineController(private val context: Context) {
             enabled = lastEnabled && !lastAbCompare,
             flatBypass = lastFlatBypass,
             daxProfile = lastDaxProfile,
-            dolbyBoseConfig = lastDolbyBoseConfig,
+            enhancerConfig = lastEnhancerConfig,
             layers = lastLayers,
             mbc = lastMbc,
             tier1Native5Db = lastTier1Native5Db,

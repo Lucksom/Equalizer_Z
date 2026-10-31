@@ -552,8 +552,8 @@ object EqConstants {
             )
         ),
         HeadphoneProfile(
-            id = "bose_qc_ultra",
-            name = "Bose QuietComfort Ultra",
+            id = "qc_ultra",
+            name = "QuietComfort Ultra",
             category = "over_ear",
             source = "AutoEQ / Harman OE Target",
             license = "MIT",

@@ -45,7 +45,7 @@ class DspReferenceMonitor(
         limiterThresholdDb: Float = -0.5f,
         widths: SectionWidths = SectionWidths(),
         qOverrides: Map<Int, Float> = emptyMap(),
-        boseProfile: BoseProfile = BoseProfile.OFF,
+        profile: AudioProfile = AudioProfile.OFF,
         bypassed: Boolean = false,
         abCompare: Boolean = false
     ) {
@@ -58,7 +58,7 @@ class DspReferenceMonitor(
             limiterThresholdDb = limiterThresholdDb,
             widths = widths,
             qOverrides = qOverrides,
-            boseProfile = boseProfile,
+            profile = profile,
             bypassed = bypassed,
             abCompare = abCompare
         )

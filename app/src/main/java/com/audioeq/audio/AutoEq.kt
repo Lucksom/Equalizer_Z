@@ -402,7 +402,7 @@ object AutoEq {
         - [Samsung Galaxy Buds2 Pro](./oratory1990/in-ear/Samsung%20Galaxy%20Buds2%20Pro) by oratory1990
         - [Google Pixel Buds Pro](./rtings/in-ear/Google%20Pixel%20Buds%20Pro) by rtings
         - [Audio-Technica ATH-M50x](./oratory1990/over-ear/Audio-Technica%20ATH-M50x) by oratory1990
-        - [Bose QuietComfort Ultra Headphones](./rtings/over-ear/Bose%20QuietComfort%20Ultra%20Headphones) by rtings
+        - [QuietComfort Ultra Headphones](./rtings/over-ear/QuietComfort%20Ultra%20Headphones) by rtings
         - [Beyerdynamic DT 990 Pro](./oratory1990/over-ear/Beyerdynamic%20DT%20990%20Pro) by oratory1990
         - [Moondrop Blessing 3](./crinacle/711%20in-ear/Moondrop%20Blessing%203) by crinacle
         - [HIFIMAN Sundara](./oratory1990/over-ear/HIFIMAN%20Sundara) by oratory1990

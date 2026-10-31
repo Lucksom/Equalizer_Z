@@ -308,7 +308,7 @@ class AudioEqUnitTest {
             limiterThresholdDb = -0.5f,
             widths = SectionWidths(),
             qOverrides = percussion.qOverrides,
-            boseProfile = com.audioeq.audio.BoseProfile.EFFECT_3D,
+            profile = com.audioeq.audio.AudioProfile.EFFECT_3D,
             bypassed = false,
             abCompare = false
         )
@@ -322,7 +322,6 @@ class AudioEqUnitTest {
     fun fastRender_matchesFullPchipRenderCurve() {
         val rng = Random(7)
 
-        // FastRender vs Dsp.renderCurve across 2000 random 10-band vectors (< 1e-9 dB)
         repeat(2000) {
             val y10 = DoubleArray(10) { rng.nextDouble(-12.0, 12.0) }
             val fast = FastRender.renderToNewArray(y10)
@@ -336,68 +335,58 @@ class AudioEqUnitTest {
 
     @Test
     fun v6MasterEqEngine_matchesDaxAndMathSpec() {
-        // 1. Verify 20-Band Bark/ERB frequencies from dax-default.xml
         assertEquals(20, com.audioeq.audio.EqMath.DAX_20_HZ.size)
         assertEquals(47.0, com.audioeq.audio.EqMath.DAX_20_HZ[0], 0.01)
         assertEquals(19688.0, com.audioeq.audio.EqMath.DAX_20_HZ[19], 0.01)
 
-        // 2. Verify 10-to-20 Band Quarter-dB Quantization & Midpoint Mapping (GeqView.java)
         val sliders10 = doubleArrayOf(3.5, 4.5, 2.5, -2.5, -1.5, 0.0, 1.0, 2.5, 2.5, 1.5)
         val dax20Int = com.audioeq.audio.EqMath.sliders10ToDax20Int(sliders10)
         assertEquals(20, dax20Int.size)
-        assertEquals(56, dax20Int[0])  // 3.5 * 16 = 56
-        assertEquals(64, dax20Int[1])  // midpoint(3.5, 4.5) = 4.0 * 16 = 64
-        assertEquals(72, dax20Int[2])  // 4.5 * 16 = 72
-        assertEquals(24, dax20Int[18]) // 1.5 * 16 = 24
-        assertEquals(24, dax20Int[19]) // duplicated band 18 -> 24
+        assertEquals(56, dax20Int[0])
+        assertEquals(64, dax20Int[1])
+        assertEquals(72, dax20Int[2])
+        assertEquals(24, dax20Int[18])
+        assertEquals(24, dax20Int[19])
 
-        // 3. Verify 96-byte Little-Endian OEM DAX packet layout
         val pkt96 = com.audioeq.audio.OemDaxBridge.buildGeq96BytePacket(dax20Int)
         assertEquals(96, pkt96.size)
         val pkt12 = com.audioeq.audio.OemDaxBridge.buildProfile12BytePacket(2)
         assertEquals(12, pkt12.size)
 
-        // 4. Verify 7-Band Cascaded High-Shelf Biquad Math (EqualizerView.java)
         val flat7 = DoubleArray(7) { 0.0 }
         assertEquals(0.0, com.audioeq.audio.EqMath.evaluateCascaded7BandDb(flat7, 1000.0), 0.01)
 
-        // 5. Verify Personal Hearing Compensation (CustomizedSoundModel.java: INIT=-42, DIV=3)
         val zeroEar = listOf(0f, 0f, 0f, 0f, 0f, 0f)
         val steps = com.audioeq.audio.EqMath.earDbToCustomizedSoundSteps(zeroEar)
-        assertTrue(steps.all { it == 14 }) // (0 - (-42)) / 3 = 14
+        assertTrue(steps.all { it == 14 })
 
-        // 6. Verify 4 Acoustic Profiles (Dynamic, Movie, Music, Voice)
         assertEquals(4, com.audioeq.audio.DaxProfile.entries.size)
         assertEquals(0.75, com.audioeq.audio.DaxProfile.MOVIE.ieqAmountSpk, 0.001)
         assertEquals(6, com.audioeq.audio.DaxProfile.VOICE.dialogSteps)
     }
 
     @Test
-    fun dolbyBoseNonRootDsp_matchesSpecification() {
-        // 1. Q4 fixed-point conversion: dB = raw / 16.0
-        assertEquals(7.4375f, com.audioeq.audio.DolbyBoseDspMath.q4RawToDb(119), 0.0001f)
+    fun enhancerDsp_matchesSpecification() {
+        assertEquals(7.4375f, com.audioeq.audio.EnhancerMath.q4RawToDb(119), 0.0001f)
 
-        // 2. Intelligent Equalizer (IEQ) 4 subsets: Detailed, Balanced, Warm, Custom
         val ieqSubsets = com.audioeq.audio.IeqPreset.entries.filter { it != com.audioeq.audio.IeqPreset.OFF }
         assertEquals(
             listOf("Detailed", "Balanced", "Warm", "Custom"),
             ieqSubsets.map { it.title }
         )
-        assertEquals(3.63f, com.audioeq.audio.DolbyBoseDspMath.IEQ_DETAILED_10[4], 0.01f)
-        assertEquals(1.63f, com.audioeq.audio.DolbyBoseDspMath.IEQ_BALANCED_10[2], 0.01f)
-        assertEquals(1.50f, com.audioeq.audio.DolbyBoseDspMath.IEQ_WARM_10[5], 0.01f)
+        assertEquals(3.63f, com.audioeq.audio.EnhancerMath.IEQ_DETAILED_10[4], 0.01f)
+        assertEquals(1.63f, com.audioeq.audio.EnhancerMath.IEQ_BALANCED_10[2], 0.01f)
+        assertEquals(1.50f, com.audioeq.audio.EnhancerMath.IEQ_WARM_10[5], 0.01f)
 
-        // 3. Bose Profiles (Off, Dynamic, Balanced, 3D, Live Music)
         assertEquals(
             listOf("Off", "Dynamic", "Balanced", "3D", "Live Music"),
-            com.audioeq.audio.BoseProfile.entries.map { it.title }
+            com.audioeq.audio.AudioProfile.entries.map { it.title }
         )
-        assertEquals(4.0f, com.audioeq.audio.DolbyBoseDspMath.BOSE_DYNAMIC_10[0], 0.01f)
-        assertEquals(4.0f, com.audioeq.audio.DolbyBoseDspMath.BOSE_DYNAMIC_10[9], 0.01f)
-        assertEquals(-3.0f, com.audioeq.audio.DolbyBoseDspMath.BOSE_BALANCED_10[5], 0.01f)
+        assertEquals(4.0f, com.audioeq.audio.EnhancerMath.PROFILE_DYNAMIC_10[0], 0.01f)
+        assertEquals(4.0f, com.audioeq.audio.EnhancerMath.PROFILE_DYNAMIC_10[9], 0.01f)
+        assertEquals(-3.0f, com.audioeq.audio.EnhancerMath.PROFILE_BALANCED_10[5], 0.01f)
 
-        // 4. Bass Enhancer (with slider & Virtual Bass Harmonic Synthesis) + Dialogue Enhancer
-        val cfg = com.audioeq.audio.DolbyBoseDspConfig(
+        val cfg = com.audioeq.audio.EnhancerConfig(
             ieqPreset = com.audioeq.audio.IeqPreset.DETAILED,
             ieqAmount = 10,
             dialogueEnhancerEnabled = true,
@@ -406,81 +395,68 @@ class AudioEqUnitTest {
             bassEnhancerEnabled = true,
             bassEnhancerStrength = 80,
             virtualBassEnabled = true,
-            boseProfile = com.audioeq.audio.BoseProfile.DYNAMIC
+            profile = com.audioeq.audio.AudioProfile.DYNAMIC
         )
-        val composite = com.audioeq.audio.DolbyBoseDspMath.computeComposite10BandDeltaDb(cfg)
+        val composite = com.audioeq.audio.EnhancerMath.computeComposite10BandDeltaDb(cfg)
         assertEquals(10, composite.size)
-        // Band 1 (63 Hz) at 80% Bass Enhancer (+6.40 dB): Bose Dynamic (+1.0) + IEQ Detailed (-4.20 * 10/16 = -2.625) + Bass Enhancer (+6.40) - Dialogue Ducking (-2.0) = +2.775
         assertEquals(2.775, composite[1], 0.02)
-        // Band 6 (2 kHz): Bose Dynamic (0.0) + IEQ Detailed (-0.44 * 10/16 = -0.275) + Dialogue Enhancer (+6.25) = +5.975
         assertEquals(5.975, composite[6], 0.02)
 
-        // At 100% Bass Enhancer strength (Power Bass 1000/1000), band 0 = +9.0 dB, band 1 = +8.0 dB
-        assertEquals(9.0f, com.audioeq.audio.DolbyBoseDspMath.bassEnhancerBandBoostDb(0, 100, true), 0.01f)
-        assertEquals(8.0f, com.audioeq.audio.DolbyBoseDspMath.bassEnhancerBandBoostDb(1, 100, true), 0.01f)
+        assertEquals(9.0f, com.audioeq.audio.EnhancerMath.bassEnhancerBandBoostDb(0, 100, true), 0.01f)
+        assertEquals(8.0f, com.audioeq.audio.EnhancerMath.bassEnhancerBandBoostDb(1, 100, true), 0.01f)
 
-        // 5. Volume-Preserving Headroom: never attenuates global input gain when bass increases
         val maxPos = composite.maxOf { it.toFloat() }
-        val headroom = com.audioeq.audio.DolbyBoseDspMath.computeSafeHeadroomDb(maxPos)
+        val headroom = com.audioeq.audio.EnhancerMath.computeSafeHeadroomDb(maxPos)
         assertEquals(0.0f, headroom, 0.001f)
     }
 
     @Test
     fun squareSoundMeizuAndIndependentPower_matchSpecification() {
-        // 1. Meizu 20-char preset decoding: G_dB[k] = parseInt(payload.substring(2k, 2k+2)) - 10
         assertEquals(
             listOf(0f, 0f, 0f, 0f, 0f, 0f, -4f, -4f, -4f, -6f),
-            com.audioeq.audio.DolbyBoseDspMath.decodeMeizuPresetPayload("10101010101006060604")
+            com.audioeq.audio.EnhancerMath.decodeMeizuPresetPayload("10101010101006060604")
         )
         assertEquals(
             listOf(3f, 3f, 1f, 2f, -1f, -1f, 0f, 1f, 2f, 4f),
-            com.audioeq.audio.DolbyBoseDspMath.decodeMeizuPresetPayload("13131112090910111214")
+            com.audioeq.audio.EnhancerMath.decodeMeizuPresetPayload("13131112090910111214")
         )
         assertEquals(
             listOf(4f, 3f, -2f, -4f, -1f, 2f, 5f, 6f, 6f, 6f),
-            com.audioeq.audio.DolbyBoseDspMath.decodeMeizuPresetPayload("14130806091215161616")
+            com.audioeq.audio.EnhancerMath.decodeMeizuPresetPayload("14130806091215161616")
         )
         assertEquals(
             listOf(-1f, 2f, 4f, 4f, 3f, 0f, -1f, -1f, -1f, -1f),
-            com.audioeq.audio.DolbyBoseDspMath.decodeMeizuPresetPayload("09121414131009090909")
+            com.audioeq.audio.EnhancerMath.decodeMeizuPresetPayload("09121414131009090909")
         )
 
-        // 2. Woodworth Spherical Head ITD for 3D Effect (r = 0.0875 m, c = 343 m/s, theta = 35 deg)
-        val itdSec = com.audioeq.audio.DolbyBoseDspMath.computeWoodworthItdSeconds()
+        val itdSec = com.audioeq.audio.EnhancerMath.computeWoodworthItdSeconds()
         assertEquals(0.0003022, itdSec, 0.000001)
-        val exactDelay48k = com.audioeq.audio.DolbyBoseDspMath.computeWoodworthDelaySamplesExact(48000.0)
-        assertEquals(14.5, exactDelay48k, 0.05) // D = τ * fs = 0.0003022 * 48000 ≈ 14.5 samples
-        val delaySamples48k = com.audioeq.audio.DolbyBoseDspMath.computeWoodworthDelaySamples(48000.0)
-        assertEquals(15, delaySamples48k) // Integer rounded for discrete buffer fallbacks
+        val exactDelay48k = com.audioeq.audio.EnhancerMath.computeWoodworthDelaySamplesExact(48000.0)
+        assertEquals(14.5, exactDelay48k, 0.05)
+        val delaySamples48k = com.audioeq.audio.EnhancerMath.computeWoodworthDelaySamples(48000.0)
+        assertEquals(15, delaySamples48k)
 
-        // 3. 26-Byte Little-Endian EnvironmentalReverbMz Live Music binary packet
-        val props = com.audioeq.audio.MeizuLiveMusicReverbProperties()
+        val props = com.audioeq.audio.LiveMusicReverbProperties()
         val packet26 = props.to26ByteLittleEndianPacket()
         assertEquals(26, packet26.size)
-        val decodedProps = com.audioeq.audio.MeizuLiveMusicReverbProperties.from26ByteLittleEndianPacket(packet26)
+        val decodedProps = com.audioeq.audio.LiveMusicReverbProperties.from26ByteLittleEndianPacket(packet26)
         assertEquals(props, decodedProps)
 
-        // 4. Independent Power Controls:
-        //    - Top button (masterEnabled = false) disables EVERYTHING (Equalizer + Tone + Enhancers)
-        //    - Equalizer button (isEnabled = false, masterEnabled = true) disables ONLY Equalizer while Tone & Enhancers stay active!
         val stateBothOn = com.audioeq.ui.EqUiState(
             masterEnabled = true,
             isEnabled = true,
             gainsDb = List(10) { 4.0f },
             tiltBassDb = 3.0f,
             volumeContourEnabled = false,
-            dolbyBoseConfig = com.audioeq.audio.DolbyBoseDspConfig(
-                boseProfile = com.audioeq.audio.BoseProfile.DYNAMIC
+            enhancerConfig = com.audioeq.audio.EnhancerConfig(
+                profile = com.audioeq.audio.AudioProfile.DYNAMIC
             )
         )
-        // Band 0 when both on: 4.0 (EQ) + 3.0 (Tilt) + 4.0 (Bose Dynamic) = 11.0 dB
         assertEquals(11.0f, stateBothOn.effectiveGainDb(0), 0.05f)
 
-        // Equalizer off, Master on: EQ (4.0) is off, but Tilt (3.0) + Bose Dynamic (4.0) = 7.0 dB still active!
         val stateEqOffOnly = stateBothOn.copy(isEnabled = false)
         assertEquals(7.0f, stateEqOffOnly.effectiveGainDb(0), 0.05f)
 
-        // Top Master off: EVERYTHING disabled -> 0.0 dB
         val stateMasterOff = stateBothOn.copy(masterEnabled = false)
         assertEquals(0.0f, stateMasterOff.effectiveGainDb(0), 0.01f)
     }
