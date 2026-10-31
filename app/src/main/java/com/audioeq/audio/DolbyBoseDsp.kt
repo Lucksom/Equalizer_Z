@@ -152,23 +152,32 @@ object DolbyBoseDspMath {
 
     /**
      * Woodworth Contralateral Delay (ITD) in seconds:
-     * τ = (r / c) * (θ + sin(θ))
-     * For r = 0.0875 m, c = 343 m/s, θ = 35° (0.6109 rad): τ ≈ 0.0003022 s (302.2 µs)
+     * τ = (r / c) * (sin(θ) + θ)
+     * For r = 0.0875 m, c = 343 m/s, θ = 35° (0.6109 rad):
+     * τ = (0.0875 / 343) * (0.5736 + 0.6109) = 0.0002551 * 1.1845 = 0.0003022 s (302.2 µs)
      */
     fun computeWoodworthItdSeconds(
         headRadiusM: Double = HEAD_RADIUS_M,
         soundSpeedMps: Double = SOUND_SPEED_MPS,
         azimuthRad: Double = AZIMUTH_35_RAD
     ): Double {
-        return (headRadiusM / soundSpeedMps) * (azimuthRad + sin(azimuthRad))
+        return (headRadiusM / soundSpeedMps) * (sin(azimuthRad) + azimuthRad)
     }
 
     /**
-     * Woodworth Contralateral Delay in integer samples at `sampleRateHz`:
-     * At fs = 48000 Hz, D = round(0.0003022 * 48000) = 15 samples.
+     * Woodworth Contralateral Delay in exact fractional samples:
+     * At fs = 48000 Hz: D = τ * fs = 0.0003022 * 48000 ≈ 14.5 samples.
+     */
+    fun computeWoodworthDelaySamplesExact(sampleRateHz: Double = DEFAULT_SAMPLE_RATE_HZ): Double {
+        return computeWoodworthItdSeconds() * sampleRateHz
+    }
+
+    /**
+     * Woodworth Contralateral Delay in integer samples:
+     * D_int = round(14.5) = 15 samples.
      */
     fun computeWoodworthDelaySamples(sampleRateHz: Double = DEFAULT_SAMPLE_RATE_HZ): Int {
-        return (computeWoodworthItdSeconds() * sampleRateHz).roundToInt().coerceAtLeast(1)
+        return computeWoodworthDelaySamplesExact(sampleRateHz).roundToInt().coerceAtLeast(1)
     }
 
     /**

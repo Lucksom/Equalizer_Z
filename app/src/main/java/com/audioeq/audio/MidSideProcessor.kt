@@ -53,7 +53,9 @@ class MidSideProcessor(private val sampleRate: Double = 48000.0) {
     private val hp11314B = BiquadFilter()
 
     // --- Section 4: 3D Sound Effects (VirtualizerMz) State ---
-    // Woodworth ITD delay line: D = round(τ * fs), τ = (0.0875 / 343.0) * (0.6109 + sin(0.6109)) ≈ 302.2 µs (15 samples @ 48 kHz)
+    // Woodworth ITD: τ = (r / c) * (sin(θ) + θ) = (0.0875 / 343) * (0.5736 + 0.6109) = 0.0003022 s (302.2 µs)
+    // At fs = 48000 Hz: D = τ * fs = 0.0003022 * 48000 ≈ 14.5 samples
+    private val woodworthDelayExact: Double = DolbyBoseDspMath.computeWoodworthDelaySamplesExact(sampleRate)
     private val woodworthDelaySamples: Int = DolbyBoseDspMath.computeWoodworthDelaySamples(sampleRate)
     private val itdRingSize = 64
     private val itdDelayLineL = DoubleArray(itdRingSize)
@@ -207,7 +209,10 @@ class MidSideProcessor(private val sampleRate: Double = 48000.0) {
         val gCross = 0.38 * virtStrength
         val alphaShadow = headShadowAlpha
         val oneMinusAlpha = 1.0 - alphaShadow
-        val dSamples = woodworthDelaySamples.coerceIn(1, itdRingSize - 1)
+        // Exact Woodworth fractional delay D = τ * fs = 0.0003022 * 48000 ≈ 14.5 samples
+        val dClamped = woodworthDelayExact.coerceIn(1.0, (itdRingSize - 2).toDouble())
+        val dInt = dClamped.toInt()
+        val dFrac = dClamped - dInt
 
         var idx = 0
         for (frame in 0 until frameCount) {
@@ -239,13 +244,19 @@ class MidSideProcessor(private val sampleRate: Double = 48000.0) {
                     right += harmOutR
                 }
 
-                // Section 4: 3D Sound Effects (Woodworth Contralateral ITD + 850 Hz Head-Shadow LPF + 65% Wet/Dry Matrix)
+                // Section 4: 3D Sound Effects (Woodworth Contralateral ITD D=14.5 samples + 850 Hz Head-Shadow LPF + 65% Wet/Dry Matrix)
                 if (profile == BoseProfile.EFFECT_3D) {
                     itdDelayLineL[itdWriteIdx] = left
                     itdDelayLineR[itdWriteIdx] = right
-                    val readIdx = (itdWriteIdx - dSamples + itdRingSize) and (itdRingSize - 1)
-                    val delayedL = itdDelayLineL[readIdx]
-                    val delayedR = itdDelayLineR[readIdx]
+
+                    // Exact Woodworth fractional delay D = τ * fs = 0.0003022 * 48000 ≈ 14.5 samples
+                    val dClamped = woodworthDelayExact.coerceIn(1.0, (itdRingSize - 2).toDouble())
+                    val dInt = dClamped.toInt()
+                    val frac = dClamped - dInt
+                    val readIdx0 = (itdWriteIdx - dInt + itdRingSize) and (itdRingSize - 1)
+                    val readIdx1 = (itdWriteIdx - dInt - 1 + itdRingSize) and (itdRingSize - 1)
+                    val delayedL = (1.0 - frac) * itdDelayLineL[readIdx0] + frac * itdDelayLineL[readIdx1]
+                    val delayedR = (1.0 - frac) * itdDelayLineR[readIdx0] + frac * itdDelayLineR[readIdx1]
                     itdWriteIdx = (itdWriteIdx + 1) and (itdRingSize - 1)
 
                     // Time-domain difference equation: s[n] = (1 - α) * x[n - D] + α * s[n - 1]

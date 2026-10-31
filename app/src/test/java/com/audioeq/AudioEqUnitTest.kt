@@ -448,8 +448,10 @@ class AudioEqUnitTest {
         // 2. Woodworth Spherical Head ITD for 3D Effect (r = 0.0875 m, c = 343 m/s, theta = 35 deg)
         val itdSec = com.audioeq.audio.DolbyBoseDspMath.computeWoodworthItdSeconds()
         assertEquals(0.0003022, itdSec, 0.000001)
+        val exactDelay48k = com.audioeq.audio.DolbyBoseDspMath.computeWoodworthDelaySamplesExact(48000.0)
+        assertEquals(14.5, exactDelay48k, 0.05) // D = τ * fs = 0.0003022 * 48000 ≈ 14.5 samples
         val delaySamples48k = com.audioeq.audio.DolbyBoseDspMath.computeWoodworthDelaySamples(48000.0)
-        assertEquals(15, delaySamples48k)
+        assertEquals(15, delaySamples48k) // Integer rounded for discrete buffer fallbacks
 
         // 3. 26-Byte Little-Endian EnvironmentalReverbMz Live Music binary packet
         val props = com.audioeq.audio.MeizuLiveMusicReverbProperties()
