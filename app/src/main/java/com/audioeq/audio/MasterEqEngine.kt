@@ -812,12 +812,15 @@ class MasterEqController(private val sessionId: Int) {
 
     private var dp: DynamicsProcessing? = null
     private var preEq: DynamicsProcessing.Eq? = null
+    private var postEq: DynamicsProcessing.Eq? = null
     private var mbc: DynamicsProcessing.Mbc? = null
 
     private var nativeEq: Equalizer? = null
     private var bassBoost: BassBoost? = null
     private var virtualizer: Virtualizer? = null
     private var envReverb: EnvironmentalReverb? = null
+    private var vendorVirtualizerEffect: AudioEffect? = null
+    private var vendorBassBoostEffect: AudioEffect? = null
     private var vendorEnvReverbEffect: AudioEffect? = null
     private var vendorSetParamMethod: java.lang.reflect.Method? = null
     private var oemBridge: OemDaxBridge.SessionHandle? = null
@@ -873,7 +876,7 @@ class MasterEqController(private val sessionId: Int) {
                     2,
                     true, 31,
                     true, 6,
-                    false, 0,
+                    true, 10,
                     true
                 ).build()
                 val engine = DynamicsProcessing(0, sessionId, cfg)
@@ -898,10 +901,21 @@ class MasterEqController(private val sessionId: Int) {
                         setBand(i, b)
                     }
                 }
+                val initPostEq = DynamicsProcessing.Eq(true, true, 10).apply {
+                    for (i in 0 until 10) {
+                        val b = getBand(i)
+                        b.isEnabled = true
+                        b.cutoffFrequency = DolbyBoseDspMath.FREQ_CUTOFFS_10[i]
+                        b.gain = 0f
+                        setBand(i, b)
+                    }
+                }
                 engine.setPreEqAllChannelsTo(initPreEq)
                 engine.setMbcAllChannelsTo(initMbc)
+                engine.setPostEqAllChannelsTo(initPostEq)
                 engine.setPreEqBandAllChannelsTo(0, initPreEq.getBand(0))
                 engine.setMbcBandAllChannelsTo(0, initMbc.getBand(0))
+                engine.setPostEqBandAllChannelsTo(0, initPostEq.getBand(0))
                 engine.setInputGainAllChannelsTo(inputGainDb)
                 engine.enabled = true
 
@@ -920,6 +934,7 @@ class MasterEqController(private val sessionId: Int) {
                 }
 
                 preEq = initPreEq
+                postEq = initPostEq
                 mbc = initMbc
                 dp = engine
                 hasEffectControl = true
@@ -933,6 +948,7 @@ class MasterEqController(private val sessionId: Int) {
                 }
                 dp = null
                 preEq = null
+                postEq = null
                 mbc = null
                 // Fall through to Legacy Tier 1
             }
@@ -965,34 +981,53 @@ class MasterEqController(private val sessionId: Int) {
                 envReverb = null
             }
         }
-        if (vendorEnvReverbEffect == null) {
-            try {
-                val descriptors = AudioEffect.queryEffects()
-                val hasVendorReverb = descriptors?.any { it.uuid == DolbyBoseDspMath.UUID_ENV_REVERB_MZ } == true
-                if (hasVendorReverb) {
-                    val ctor = AudioEffect::class.java.getConstructor(
-                        UUID::class.java,
-                        UUID::class.java,
-                        Int::class.javaPrimitiveType,
-                        Int::class.javaPrimitiveType
-                    )
-                    ctor.isAccessible = true
-                    vendorEnvReverbEffect = ctor.newInstance(
-                        AudioEffect.EFFECT_TYPE_ENV_REVERB,
-                        DolbyBoseDspMath.UUID_ENV_REVERB_MZ,
-                        0,
-                        sessionId
-                    )
-                    vendorSetParamMethod = AudioEffect::class.java.getMethod(
-                        "setParameter",
-                        Int::class.javaPrimitiveType,
-                        ByteArray::class.java
-                    ).apply { isAccessible = true }
-                }
-            } catch (_: Throwable) {
-                vendorEnvReverbEffect = null
-                vendorSetParamMethod = null
+        try {
+            val descriptors = AudioEffect.queryEffects()
+            val ctor = AudioEffect::class.java.getConstructor(
+                UUID::class.java,
+                UUID::class.java,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType
+            ).apply { isAccessible = true }
+            if (vendorSetParamMethod == null) {
+                vendorSetParamMethod = AudioEffect::class.java.getMethod(
+                    "setParameter",
+                    Int::class.javaPrimitiveType,
+                    ByteArray::class.java
+                ).apply { isAccessible = true }
             }
+
+            if (vendorVirtualizerEffect == null &&
+                descriptors?.any { it.uuid == DolbyBoseDspMath.UUID_VIRTUALIZER_MZ } == true
+            ) {
+                vendorVirtualizerEffect = ctor.newInstance(
+                    AudioEffect.EFFECT_TYPE_VIRTUALIZER,
+                    DolbyBoseDspMath.UUID_VIRTUALIZER_MZ,
+                    0,
+                    sessionId
+                )
+            }
+            if (vendorBassBoostEffect == null &&
+                descriptors?.any { it.uuid == DolbyBoseDspMath.UUID_BASS_BOOST_MZ } == true
+            ) {
+                vendorBassBoostEffect = ctor.newInstance(
+                    AudioEffect.EFFECT_TYPE_BASS_BOOST,
+                    DolbyBoseDspMath.UUID_BASS_BOOST_MZ,
+                    0,
+                    sessionId
+                )
+            }
+            if (vendorEnvReverbEffect == null &&
+                descriptors?.any { it.uuid == DolbyBoseDspMath.UUID_ENV_REVERB_MZ } == true
+            ) {
+                vendorEnvReverbEffect = ctor.newInstance(
+                    AudioEffect.EFFECT_TYPE_ENV_REVERB,
+                    DolbyBoseDspMath.UUID_ENV_REVERB_MZ,
+                    0,
+                    sessionId
+                )
+            }
+        } catch (_: Throwable) {
         }
     }
 
@@ -1015,6 +1050,7 @@ class MasterEqController(private val sessionId: Int) {
         }
         dp = null
         preEq = null
+        postEq = null
         mbc = null
         activeMode = OperatingMode.LEGACY_TIER1_NATIVE
         initTier1Fallback()
@@ -1057,26 +1093,36 @@ class MasterEqController(private val sessionId: Int) {
     }
 
     /**
-     * Applies Meizu Square Sound 3D Virtualizer (Section 4 & 7: strength 650/1000, BINAURAL mode),
+     * Applies Meizu Square Sound 3D Virtualizer (Section 4 & 7: strength 650/1000, BINAURAL mode, linear flat PostEq),
      * Live Music EnvironmentalReverb (Section 5: 26-Byte PARAM_PROPERTIES = 10 Little-Endian packet),
      * and BassBoostMz (Section 6: strength 0..1000).
      */
     private fun applyAuxiliaryEffects(state: EngineState) {
         val cfg = state.dolbyBoseConfig
         val activeGate = state.enabled && !state.flatBypass
+        val is3dMode = cfg.boseProfile == BoseProfile.EFFECT_3D
 
-        // 1. VirtualizerMz / Android Virtualizer (3D Sound Effects: strength = 650, BINAURAL)
+        // 1. VirtualizerMz (725d7fa7-9219-4f71-8fa7-240a6d489387) / Android Virtualizer (strength = 650, BINAURAL)
+        val targetVirtStrength: Short = when {
+            !activeGate -> 0
+            is3dMode -> DolbyBoseDspMath.VIRTUALIZER_3D_STRENGTH // 650
+            else -> state.profile.virtualizerStrength
+        }
+        try {
+            vendorVirtualizerEffect?.let { vFx ->
+                vFx.enabled = activeGate && targetVirtStrength > 0
+                if (activeGate && targetVirtStrength > 0) {
+                    val buf = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(targetVirtStrength).array()
+                    vendorSetParamMethod?.invoke(vFx, 1 /* PARAM_STRENGTH */, buf)
+                }
+            }
+        } catch (_: Throwable) {
+        }
         try {
             virtualizer?.let { v ->
-                val is3dMode = cfg.boseProfile == BoseProfile.EFFECT_3D
-                val targetStrength: Short = when {
-                    !activeGate -> 0
-                    is3dMode -> DolbyBoseDspMath.VIRTUALIZER_3D_STRENGTH // 650
-                    else -> state.profile.virtualizerStrength
-                }
-                v.enabled = activeGate && targetStrength > 0
-                if (v.strengthSupported && targetStrength > 0) {
-                    v.setStrength(targetStrength)
+                v.enabled = activeGate && targetVirtStrength > 0
+                if (v.strengthSupported && targetVirtStrength > 0) {
+                    v.setStrength(targetVirtStrength)
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && is3dMode && activeGate) {
                     try {
@@ -1088,7 +1134,22 @@ class MasterEqController(private val sessionId: Int) {
         } catch (_: Throwable) {
         }
 
-        // 2. EnvironmentalReverbMz / Android EnvironmentalReverb (Live Music: 26-byte Little-Endian PARAM_PROPERTIES=10)
+        // Section 7: Set linear flat response on DynamicsProcessing PostEq stages when 3D mode is active
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && is3dMode) {
+            try {
+                dp?.let { engine ->
+                    for (i in 0 until 10) {
+                        engine.setPostEqBandAllChannelsTo(
+                            i,
+                            DynamicsProcessing.EqBand(true, DolbyBoseDspMath.FREQ_CUTOFFS_10[i], 0.0f)
+                        )
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+
+        // 2. EnvironmentalReverbMz (38a6a248-94be-4007-bbe1-337d7dc49e6d) / Android EnvironmentalReverb (26-byte Little-Endian PARAM_PROPERTIES=10)
         val isLiveMusic = activeGate && cfg.boseProfile == BoseProfile.LIVE_MUSIC
         try {
             val props = DolbyBoseDspMath.DEFAULT_LIVE_MUSIC_REVERB
@@ -1124,15 +1185,25 @@ class MasterEqController(private val sessionId: Int) {
         } catch (_: Throwable) {
         }
 
-        // 3. BassBoostMz / Android BassBoost (Power Bass & Bass Enhancer slider: 0..1000)
+        // 3. BassBoostMz (42b10000-0010-0000-0000-0002a5d5c51b) / Android BassBoost (0..1000)
+        val targetBassStrength: Short = when {
+            !activeGate -> 0
+            cfg.bassEnhancerEnabled -> cfg.bassBoostStrengthPermille
+            state.tier1BassBoost > 0 -> state.tier1BassBoost
+            else -> 0
+        }
+        try {
+            vendorBassBoostEffect?.let { bFx ->
+                bFx.enabled = activeGate && targetBassStrength > 0
+                if (activeGate && targetBassStrength > 0) {
+                    val buf = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(targetBassStrength).array()
+                    vendorSetParamMethod?.invoke(bFx, 1 /* PARAM_STRENGTH */, buf)
+                }
+            }
+        } catch (_: Throwable) {
+        }
         try {
             bassBoost?.let { bb ->
-                val targetBassStrength: Short = when {
-                    !activeGate -> 0
-                    cfg.bassEnhancerEnabled -> cfg.bassBoostStrengthPermille
-                    state.tier1BassBoost > 0 -> state.tier1BassBoost
-                    else -> 0
-                }
                 bb.enabled = activeGate && targetBassStrength > 0
                 if (bb.strengthSupported && targetBassStrength > 0) {
                     bb.setStrength(targetBassStrength)
@@ -1379,6 +1450,14 @@ class MasterEqController(private val sessionId: Int) {
             } catch (_: Throwable) {
             }
             try {
+                vendorVirtualizerEffect?.release()
+            } catch (_: Throwable) {
+            }
+            try {
+                vendorBassBoostEffect?.release()
+            } catch (_: Throwable) {
+            }
+            try {
                 vendorEnvReverbEffect?.release()
             } catch (_: Throwable) {
             }
@@ -1388,6 +1467,8 @@ class MasterEqController(private val sessionId: Int) {
             bassBoost = null
             virtualizer = null
             envReverb = null
+            vendorVirtualizerEffect = null
+            vendorBassBoostEffect = null
             vendorEnvReverbEffect = null
             oemBridge = null
             thread.quitSafely()
