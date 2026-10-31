@@ -227,6 +227,39 @@ object DolbyBoseDspMath {
         195, 183, 165, 136, 100, 59, 34, 7, -54, -235
     )
 
+    // Sub-band groupings mapping 20 Dolby bands (0..19) into 10 ISO bands (0..9)
+    val DOLBY_20_TO_ISO_10_GROUPS: Array<IntArray> = arrayOf(
+        intArrayOf(0),          // Band 0 (31.5 Hz): 47 Hz
+        intArrayOf(0, 1),       // Band 1 (63 Hz): 47 + 141 Hz
+        intArrayOf(1, 2),       // Band 2 (125 Hz): 141 + 234 Hz
+        intArrayOf(2, 3),       // Band 3 (250 Hz): 234 + 328 Hz
+        intArrayOf(4, 5),       // Band 4 (500 Hz): 469 + 656 Hz
+        intArrayOf(6, 7, 8),    // Band 5 (1000 Hz): 844 + 1031 + 1313 Hz (Vocal reference)
+        intArrayOf(9, 10),      // Band 6 (2000 Hz): 1688 + 2250 Hz
+        intArrayOf(11, 12, 13), // Band 7 (4000 Hz): 3000 + 3750 + 4688 Hz
+        intArrayOf(14, 15, 16), // Band 8 (8000 Hz): 5813 + 7125 + 9000 Hz
+        intArrayOf(17, 18, 19)  // Band 9 (16000 Hz): 11250 + 13875 + 19688 Hz
+    )
+
+    /**
+     * 1.C 20-Band Intelligent Equalizer (IEQ) -> 10-Band ISO Decimation Formula:
+     * G_ISO[k] = 10 * log10( (1 / N_k) * sum_{j in Band_k} 10^((Target_raw[j] / 16) / 10) ) - G_ref(1031Hz)
+     */
+    fun decimate20BandRawTo10BandIso(raw20: IntArray): FloatArray {
+        if (raw20.size < 20) return FloatArray(NUM_BANDS)
+        val gRefDb = q4RawToDb(raw20[7]).toDouble() // Band index 7 = 1031 Hz vocal reference
+        return FloatArray(NUM_BANDS) { k ->
+            val indices = DOLBY_20_TO_ISO_10_GROUPS[k]
+            var powerSum = 0.0
+            for (j in indices) {
+                val db = q4RawToDb(raw20[j]).toDouble()
+                powerSum += 10.0.pow(db / 10.0)
+            }
+            val meanPowerDb = 10.0 * kotlin.math.log10((powerSum / indices.size).coerceAtLeast(1e-12))
+            (meanPowerDb - gRefDb).toFloat()
+        }
+    }
+
     // --- Decimated 10-Band ISO Normalized Targets (from dap-default.xml, Q4 dB decimated to 10-Band ISO) ---
     val IEQ_OFF_10 = floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)
     val IEQ_DETAILED_10 = floatArrayOf(-6.50f, -4.20f, -1.44f, 0.75f, 3.63f, 0.00f, -0.44f, -2.19f, -6.50f, -8.50f)
