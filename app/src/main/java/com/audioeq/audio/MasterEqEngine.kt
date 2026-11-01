@@ -24,6 +24,8 @@ import com.audioeq.model.HeadphoneProfile
 import com.audioeq.model.OperatingMode
 import com.audioeq.model.OutputRoute
 import com.audioeq.model.PersonalHearingCurve
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -90,6 +92,8 @@ class MasterEqEngine(
     private val loudnessSessions = ConcurrentHashMap<Int, LoudnessEnhancer>()
     private val virtualizerSessions = ConcurrentHashMap<Int, Virtualizer>()
     private val bassBoostSessions = ConcurrentHashMap<Int, BassBoost>()
+    private val vendorBassBoostSessions = ConcurrentHashMap<Int, AudioEffect>()
+    private var vendorSetParamMethod: java.lang.reflect.Method? = null
     private val hardwareDaxSessions = ConcurrentHashMap<Int, AudioEffect>()
     private val lastAppliedL = ConcurrentHashMap<Int, FloatArray>()
     private val lastAppliedR = ConcurrentHashMap<Int, FloatArray>()
@@ -536,16 +540,34 @@ class MasterEqEngine(
     }
 
     private fun tryAttachHardwareDaxSession(sid: Int) {
-        if (!hardwareDaxSupported) return
         try {
+            val descriptors = AudioEffect.queryEffects()
             val ctor = AudioEffect::class.java.getConstructor(
                 UUID::class.java,
                 UUID::class.java,
                 Int::class.javaPrimitiveType,
                 Int::class.javaPrimitiveType
-            )
-            val fx = ctor.newInstance(EFFECT_TYPE_HARDWARE_DSP, EFFECT_UUID_IMPL_SW, 0, sid)
-            hardwareDaxSessions[sid] = fx
+            ).apply { isAccessible = true }
+            if (vendorSetParamMethod == null) {
+                vendorSetParamMethod = AudioEffect::class.java.getMethod(
+                    "setParameter",
+                    Int::class.javaPrimitiveType,
+                    ByteArray::class.java
+                ).apply { isAccessible = true }
+            }
+            if (descriptors?.any { it.uuid == EnhancerMath.UUID_BASS_BOOST_MZ } == true) {
+                val vBb = ctor.newInstance(
+                    AudioEffect.EFFECT_TYPE_BASS_BOOST,
+                    EnhancerMath.UUID_BASS_BOOST_MZ,
+                    0,
+                    sid
+                )
+                vendorBassBoostSessions[sid] = vBb
+            }
+            if (hardwareDaxSupported) {
+                val fx = ctor.newInstance(EFFECT_TYPE_HARDWARE_DSP, EFFECT_UUID_IMPL_SW, 0, sid)
+                hardwareDaxSessions[sid] = fx
+            }
         } catch (_: Throwable) {
         }
     }
@@ -576,6 +598,12 @@ class MasterEqEngine(
             }
         }
         bassBoostSessions.remove(sid)?.let {
+            try {
+                it.release()
+            } catch (_: Throwable) {
+            }
+        }
+        vendorBassBoostSessions.remove(sid)?.let {
             try {
                 it.release()
             } catch (_: Throwable) {
@@ -730,8 +758,7 @@ class MasterEqEngine(
                 } else {
                     k
                 }
-                val postReinforce = max(0.0, enhancerCurve31[idx31]) * 0.35
-                (profileDeltaL31[idx31] + postReinforce).coerceIn(-6.0, 9.0).toFloat()
+                profileDeltaL31[idx31].coerceIn(-6.0, 6.0).toFloat()
             }
         }
         val postR = FloatArray(bandCount) { k ->
@@ -742,23 +769,22 @@ class MasterEqEngine(
                 } else {
                     k
                 }
-                val postReinforce = max(0.0, enhancerCurve31[idx31]) * 0.35
-                (profileDeltaR31[idx31] + postReinforce).coerceIn(-6.0, 9.0).toFloat()
+                profileDeltaR31[idx31].coerceIn(-6.0, 6.0).toFloat()
             }
         }
 
         val anyEnhancerActive = params.enhancerConfig.isAnyActive()
         val leftInputGain = if (effectiveEnabled) (basePreamp + trimL).toFloat() else 0.0f
         val rightInputGain = if (effectiveEnabled) (basePreamp + trimR).toFloat() else 0.0f
-        val makeupPostGain = if (effectiveEnabled && anyEnhancerActive) 1.0f else 0.0f
+        val makeupPostGain = if (effectiveEnabled && anyEnhancerActive) 0.5f else 0.0f
 
         val cfg = params.enhancerConfig
         val isDynamicProfile = cfg.profile == AudioProfile.DYNAMIC
-        val hasBassMbc = cfg.bassEnhancerEnabled || cfg.virtualBassEnabled ||
-            isDynamicProfile || cfg.profile == AudioProfile.EFFECT_3D
         val hasDialogueMbc = cfg.dialogueEnhancerEnabled || isDynamicProfile
+        val deFactor = if (cfg.dialogueEnhancerEnabled) {
+            cfg.dialogueAmount.coerceIn(0, 16) / 16.0f
+        } else 0f
         val (miSpeechAttMs, miSpeechRelMs) = EnhancerMath.computeDynamicMiLevelerTimeConstantsMs(1.0)
-        val (miMusicAttMs, miMusicRelMs) = EnhancerMath.computeDynamicMiLevelerTimeConstantsMs(0.0)
         val miSurroundRatio = EnhancerMath.computeDynamicMiSurroundCompressorRatio(0.4).toFloat()
 
         for ((sid, dp) in dpSessions) {
@@ -804,40 +830,53 @@ class MasterEqEngine(
 
                 for (ch in 0..1) {
                     for (b in 0 until 6) {
+                        val meanBoost = max(
+                            0.0,
+                            Dsp.MBC_RANGE[b].map { idx ->
+                                val vL = targetL31.getOrElse(idx) { 0.0 }
+                                val vR = targetR31.getOrElse(idx) { 0.0 }
+                                max(vL, vR)
+                            }.average()
+                        ).toFloat()
                         val mbcBand = dp.getMbcBandByChannelIndex(ch, b)
                         mbcBand.isEnabled = effectiveEnabled
                         mbcBand.cutoffFrequency = Dsp.MBC_CUTOFFS[b]
                         when {
-                            b <= 1 && hasBassMbc -> {
-                                mbcBand.attackTime = if (isDynamicProfile) miMusicAttMs.toFloat() else 4.0f
-                                mbcBand.releaseTime = if (isDynamicProfile) miMusicRelMs.toFloat() else 75.0f
-                                mbcBand.ratio = if (cfg.virtualBassEnabled) 1.6f else if (isDynamicProfile) miSurroundRatio else 1.2f
-                                mbcBand.threshold = -14.0f
+                            // Stage 2: Bass & Virtual Bass bands (0 and 1: <=359 Hz): Volume-preserving upward density (high threshold so bass is NEVER ducked!)
+                            cfg.bassEnhancerEnabled && (b == 0 || b == 1) -> {
+                                mbcBand.attackTime = 15.0f
+                                mbcBand.releaseTime = 110.0f
+                                mbcBand.ratio = if (cfg.virtualBassEnabled) 2.0f else 1.6f
+                                mbcBand.threshold = (-1.0f + meanBoost).coerceAtMost(-0.5f)
                                 mbcBand.kneeWidth = 6.0f
-                                mbcBand.preGain = if (cfg.virtualBassEnabled) 1.2f else 0.6f
-                                mbcBand.postGain = makeupPostGain + (if (cfg.virtualBassEnabled) 1.6f else 1.0f)
+                                mbcBand.noiseGateThreshold = -85.0f
+                                mbcBand.expanderRatio = 1.0f
+                                mbcBand.preGain = 0.0f
+                                mbcBand.postGain = makeupPostGain
                             }
-                            b in 3..4 && hasDialogueMbc -> {
+                            b in 2..3 && hasDialogueMbc -> {
                                 mbcBand.attackTime = if (isDynamicProfile) miSpeechAttMs.toFloat() else 2.5f
                                 mbcBand.releaseTime = if (isDynamicProfile) miSpeechRelMs.toFloat() else 55.0f
-                                mbcBand.ratio = if (isDynamicProfile) miSurroundRatio else 1.25f
-                                mbcBand.threshold = -16.0f
-                                mbcBand.kneeWidth = 6.0f
-                                mbcBand.preGain = 0.8f
-                                mbcBand.postGain = makeupPostGain + 1.4f
+                                mbcBand.ratio = if (isDynamicProfile) miSurroundRatio else 1.0f + (0.8f * deFactor)
+                                mbcBand.threshold = -12.0f
+                                mbcBand.kneeWidth = 8.0f
+                                mbcBand.noiseGateThreshold = -75.0f
+                                mbcBand.expanderRatio = 1.0f
+                                mbcBand.preGain = 0.0f
+                                mbcBand.postGain = makeupPostGain + (1.6f * deFactor)
                             }
                             else -> {
                                 mbcBand.attackTime = Dsp.MBC_ATTACK_MS[b]
                                 mbcBand.releaseTime = Dsp.MBC_RELEASE_MS[b]
                                 mbcBand.ratio = 1.05f
-                                mbcBand.threshold = -0.8f
+                                mbcBand.threshold = (-6.0f + meanBoost).coerceAtMost(-0.8f)
                                 mbcBand.kneeWidth = 6.0f
+                                mbcBand.noiseGateThreshold = -85.0f
+                                mbcBand.expanderRatio = 1.0f
                                 mbcBand.preGain = 0.0f
                                 mbcBand.postGain = makeupPostGain
                             }
                         }
-                        mbcBand.noiseGateThreshold = -90.0f
-                        mbcBand.expanderRatio = 1.0f
                         dp.setMbcBandByChannelIndex(ch, b, mbcBand)
                     }
                 }
@@ -846,10 +885,10 @@ class MasterEqEngine(
                     true,
                     params.limiterEnabled && effectiveEnabled,
                     0,
-                    Dsp.LIM_ATTACK_MS,
-                    Dsp.LIM_RELEASE_MS,
-                    Dsp.LIM_RATIO,
-                    params.limiterCeilingDb.toFloat().coerceIn(-3.0f, -0.1f),
+                    1.0f,
+                    60.0f,
+                    10.0f,
+                    params.limiterCeilingDb.toFloat().coerceIn(-3.0f, -0.5f),
                     0.0f
                 )
                 dp.setLimiterAllChannelsTo(lim)
@@ -889,24 +928,31 @@ class MasterEqEngine(
             }
         }
 
-        val manualBassPermille = if (params.enhancerConfig.bassEnhancerEnabled) {
-            (params.enhancerConfig.bassEnhancerStrength.coerceIn(0, 100) * 10).coerceIn(0, 1000)
-        } else {
-            0
+        // BassBoostMz (42b10000-0010-0000-0000-0002a5d5c51b) / Android BassBoost (0..1000)
+        val targetBassStrength: Short = when {
+            !effectiveEnabled -> 0
+            cfg.bassEnhancerEnabled -> cfg.bassBoostStrengthPermille
+            else -> 0
         }
-        val virtualBassPermille = if (params.enhancerConfig.virtualBassEnabled) 550 else 0
-        val profileBassPermille = params.enhancerConfig.profile.bassBoostStrengthPermille
-        val bassStrengthPermille = max(
-            max(manualBassPermille, virtualBassPermille),
-            profileBassPermille
-        ).coerceIn(0, 1000)
+
+        for ((_, vFx) in vendorBassBoostSessions) {
+            try {
+                val wantBb = effectiveEnabled && targetBassStrength > 0
+                vFx.enabled = wantBb
+                if (wantBb) {
+                    val buf = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(targetBassStrength).array()
+                    vendorSetParamMethod?.invoke(vFx, 1, buf)
+                }
+            } catch (_: Throwable) {
+            }
+        }
 
         for ((_, bb) in bassBoostSessions) {
             try {
-                val wantBb = effectiveEnabled && bassStrengthPermille > 0
+                val wantBb = effectiveEnabled && targetBassStrength > 0
                 if (bb.enabled != wantBb) bb.enabled = wantBb
                 if (wantBb && bb.strengthSupported) {
-                    bb.setStrength(bassStrengthPermille.toShort())
+                    bb.setStrength(targetBassStrength)
                 }
             } catch (_: Throwable) {
             }
@@ -914,10 +960,8 @@ class MasterEqEngine(
 
         for ((_, le) in loudnessSessions) {
             try {
-                val wantLe = effectiveEnabled && anyEnhancerActive
-                if (le.enabled != wantLe) le.enabled = wantLe
-                val targetGainMb = if (wantLe) (makeupPostGain * 150f).roundToInt() else 0
-                le.setTargetGain(targetGainMb)
+                if (le.enabled) le.enabled = false
+                le.setTargetGain(0)
             } catch (_: Throwable) {
             }
         }

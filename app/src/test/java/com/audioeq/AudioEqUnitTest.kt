@@ -275,5 +275,22 @@ class AudioEqUnitTest {
         val (profL3D, profR3D) = EnhancerDsp.computeProfileSpatialLRDelta31(AudioProfile.EFFECT_3D)
         assertTrue("3D profile must produce dichotic L/R spatial stage", profL3D.indices.any { abs(profL3D[it] - profR3D[it]) > 1.0 })
         assertTrue("3D profile must have positive energy compensation", (profL3D.sum() + profR3D.sum()) > 0.0)
+
+        // Verify Bass Enhancer maximum boost is strictly 6.0 dB
+        val maxBassCfg = EnhancerConfig(
+            bassEnhancerEnabled = true,
+            bassEnhancerStrength = 100,
+            virtualBassEnabled = true
+        )
+        assertEquals(1000.toShort(), maxBassCfg.bassBoostStrengthPermille)
+        assertEquals(6.0f, EnhancerMath.bassEnhancerBandBoostDb(0, 100, true), 0.001f)
+        assertEquals(6.0f, EnhancerMath.bassEnhancerBandBoostDb(1, 100, true), 0.001f)
+        assertEquals(6.0f, EnhancerMath.bassEnhancerBandBoostDb(2, 100, true), 0.001f)
+        assertTrue(EnhancerMath.bassEnhancerBandBoostDb(3, 100, true) <= 6.0f)
+
+        val bass31 = EnhancerDsp.computeBassEnhancer31(maxBassCfg)
+        assertEquals(31, bass31.size)
+        assertEquals(6.0, bass31.maxOrNull() ?: 0.0, 0.01)
+        assertTrue("Bass Enhancer 31-band curve must never exceed 6.0 dB", bass31.all { it in 0.0..6.0 })
     }
 }

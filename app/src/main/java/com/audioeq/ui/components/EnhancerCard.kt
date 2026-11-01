@@ -21,8 +21,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -47,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.audioeq.audio.AudioProfile
 import com.audioeq.audio.EnhancerConfig
+import com.audioeq.audio.EnhancerMath
 import com.audioeq.audio.IeqPreset
 import com.audioeq.model.EqConstants
 import com.audioeq.ui.theme.JetBrainsMonoFontFamily
@@ -263,11 +266,27 @@ fun EnhancerCard(
                 }
             }
 
+            val peakSubShelfDb = EnhancerMath.bassEnhancerBandBoostDb(
+                bandIndex = 1,
+                strengthPct = config.bassEnhancerStrength,
+                virtualBassEnabled = config.virtualBassEnabled
+            )
+            val bassSubText = if (config.bassEnhancerEnabled) {
+                String.format(
+                    Locale.US,
+                    "+%.2f dB sub shelf · %d/1000 · No volume drop",
+                    peakSubShelfDb,
+                    config.bassBoostStrengthPermille.toInt()
+                )
+            } else {
+                "Off"
+            }
+
             EnhancerModuleCard(
                 title = "Bass Enhancer",
-                subtitle = "Sub-bass punch exciter & missing-fundamental harmonics",
+                subtitle = bassSubText,
                 badgeText = null,
-                isActive = config.bassEnhancerEnabled || config.virtualBassEnabled,
+                isActive = config.bassEnhancerEnabled,
                 headerTrailing = {
                     V7PillSwitch(
                         checked = config.bassEnhancerEnabled,
@@ -277,93 +296,74 @@ fun EnhancerCard(
                     )
                 },
                 iconContent = { tint ->
-                    Canvas(modifier = Modifier.size(18.dp)) {
-                        val w = size.width
-                        val h = size.height
-                        val s = Stroke(width = 1.7.dp.toPx(), cap = StrokeCap.Round)
-                        drawCircle(color = tint, radius = w * 0.40f, center = Offset(w * 0.5f, h * 0.5f), style = s)
-                        drawCircle(color = tint, radius = w * 0.16f, center = Offset(w * 0.5f, h * 0.5f))
-                    }
+                    Icon(
+                        imageVector = Icons.Default.Equalizer,
+                        contentDescription = "Bass Enhancer",
+                        tint = tint,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    AnimatedVisibility(visible = config.bassEnhancerEnabled) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Sub-bass punch & contour",
-                                    fontSize = 12.sp,
-                                    color = palette.onVar
-                                )
-                                Text(
-                                    text = "${config.bassEnhancerStrength}% (+${String.format(Locale.US, "%.1f", config.bassEnhancerStrength * 0.062f)} dB)",
-                                    fontFamily = JetBrainsMonoFontFamily,
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 11.sp,
-                                    color = palette.primary
-                                )
-                            }
-                            Slider(
-                                value = config.bassEnhancerStrength.toFloat(),
-                                onValueChange = { onBassStrengthChange(it.roundToInt()) },
-                                valueRange = 0f..100f,
-                                enabled = enabled,
-                                colors = SliderDefaults.colors(
-                                    thumbColor = palette.primary,
-                                    activeTrackColor = palette.primary,
-                                    inactiveTrackColor = palette.sHigh
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(28.dp)
-                                    .testTag("bass_strength_slider")
-                            )
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(palette.sHigh)
-                            .border(1.dp, palette.outlineV.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
-                            .clickable(enabled = enabled) { onToggleVirtualBass(!config.virtualBassEnabled) }
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Text(
-                                text = "Harmonic Virtual Bass",
-                                fontFamily = SpaceGroteskFontFamily,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 13.sp,
-                                color = palette.onSurface
-                            )
-                            Text(
-                                text = "2nd/3rd/4th harmonic generator (30–90 Hz → 75–270 Hz)",
-                                fontSize = 11.sp,
+                                text = "Bass boost level",
+                                fontSize = 12.sp,
                                 color = palette.onVar
                             )
+                            Text(
+                                text = String.format(
+                                    Locale.US,
+                                    "%d%% (+%.1f dB)",
+                                    config.bassEnhancerStrength,
+                                    peakSubShelfDb
+                                ),
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 12.sp,
+                                color = palette.primary,
+                                modifier = Modifier.testTag("bass_enhancer_strength_text")
+                            )
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        V7PillSwitch(
-                            checked = config.virtualBassEnabled,
+                        Slider(
+                            value = config.bassEnhancerStrength.toFloat(),
+                            onValueChange = { onBassStrengthChange(it.roundToInt()) },
+                            valueRange = 0f..100f,
+                            steps = 19,
                             enabled = enabled,
-                            onCheckedChange = { onToggleVirtualBass(it) },
-                            modifier = Modifier.testTag("virtual_bass_switch")
+                            colors = SliderDefaults.colors(
+                                thumbColor = palette.primary,
+                                activeTrackColor = palette.primary,
+                                inactiveTrackColor = palette.sTop
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(28.dp)
+                                .testTag("bass_enhancer_strength_slider")
                         )
                     }
+
+                    HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
+
+                    V7SwitchRow(
+                        title = "Virtual bass harmonic synthesis",
+                        subtitle = "H2 (−2 dB), H3 (−9 dB), H4 (−12 dB)",
+                        checked = config.virtualBassEnabled,
+                        enabled = enabled,
+                        onCheckedChange = onToggleVirtualBass,
+                        testTag = "virtual_bass_switch"
+                    )
                 }
             }
 

@@ -727,15 +727,39 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setBassEnhancerEnabled(enabled: Boolean) {
-        repository.updateEnhancerConfig { it.copy(bassEnhancerEnabled = enabled) }
+        repository.updateEnhancerConfig { cur ->
+            val nextStrength = if (enabled && cur.bassEnhancerStrength == 0) {
+                80
+            } else {
+                cur.bassEnhancerStrength
+            }
+            cur.copy(
+                bassEnhancerEnabled = enabled,
+                bassEnhancerStrength = nextStrength,
+                virtualBassEnabled = if (enabled) cur.virtualBassEnabled else false
+            )
+        }
     }
 
     fun updateBassEnhancerStrength(strength: Int) {
-        repository.updateEnhancerConfig { it.copy(bassEnhancerStrength = strength.coerceIn(0, 100)) }
+        val clamped = strength.coerceIn(0, 100)
+        repository.updateEnhancerConfig { cur ->
+            cur.copy(
+                bassEnhancerEnabled = clamped > 0,
+                bassEnhancerStrength = clamped,
+                virtualBassEnabled = if (clamped > 0) cur.virtualBassEnabled else false
+            )
+        }
     }
 
     fun setVirtualBassEnabled(enabled: Boolean) {
-        repository.updateEnhancerConfig { it.copy(virtualBassEnabled = enabled) }
+        repository.updateEnhancerConfig { cur ->
+            cur.copy(
+                bassEnhancerEnabled = if (enabled) true else cur.bassEnhancerStrength > 0,
+                bassEnhancerStrength = if (enabled && cur.bassEnhancerStrength == 0) 80 else cur.bassEnhancerStrength,
+                virtualBassEnabled = enabled
+            )
+        }
     }
 
     fun setAudioProfile(profile: AudioProfile) {

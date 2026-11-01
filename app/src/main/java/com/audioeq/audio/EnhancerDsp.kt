@@ -208,6 +208,9 @@ data class EnhancerConfig(
     val virtualBassEnabled: Boolean = false,
     val profile: AudioProfile = AudioProfile.OFF
 ) {
+    val bassBoostStrengthPermille: Short
+        get() = (bassEnhancerStrength.coerceIn(0, 100) * 10).toShort()
+
     fun isAnyActive(): Boolean =
         ieqPreset != IeqPreset.OFF ||
             dialogueEnhancerEnabled ||
@@ -238,6 +241,38 @@ object EnhancerMath {
     val IEQ_DETAILED_20_RAW: IntArray get() = EnhancerDsp.IEQ_DETAILED_Q4
     val IEQ_BALANCED_20_RAW: IntArray get() = EnhancerDsp.IEQ_BALANCED_Q4
     val IEQ_WARM_20_RAW: IntArray get() = EnhancerDsp.IEQ_WARM_Q4
+
+    val UUID_BASS_BOOST_MZ: java.util.UUID = java.util.UUID.fromString("42b10000-0010-0000-0000-0002a5d5c51b")
+
+    const val BASS_MAX_31_DB = 6.0f
+    const val BASS_MAX_62_DB = 6.0f
+    const val BASS_MAX_125_DB = 4.5f
+    const val BASS_MAX_250_DB = 3.0f
+
+    const val BASS_ENHANCER_BOOST_RAW = 96
+    const val BASS_ENHANCER_BOOST_DB = 96f / 16f
+    const val BASS_ENHANCER_CUTOFF_HZ = 504f
+    const val BASS_EXTRACTION_CUTOFF_HZ = 200f
+    const val VIRTUAL_BASS_H2_DB = -2.0f
+    const val VIRTUAL_BASS_H3_DB = -9.0f
+    const val VIRTUAL_BASS_H4_DB = -12.0f
+
+    fun bassEnhancerBandBoostDb(
+        bandIndex: Int,
+        strengthPct: Int,
+        virtualBassEnabled: Boolean
+    ): Float {
+        val factor = (strengthPct.coerceIn(0, 100) / 100.0f)
+        if (factor <= 0f) return 0f
+        val raw = when (bandIndex) {
+            0 -> BASS_MAX_31_DB * factor
+            1 -> BASS_MAX_62_DB * factor
+            2 -> (BASS_MAX_125_DB + (if (virtualBassEnabled) 1.5f else 0.0f)) * factor
+            3 -> (BASS_MAX_250_DB + (if (virtualBassEnabled) 1.2f else 0.0f)) * factor
+            else -> 0f
+        }
+        return raw.coerceIn(0f, 6.0f)
+    }
 
     const val HEAD_RADIUS_METERS: Double = 0.0875
     const val SPEED_OF_SOUND_MPS: Double = 343.0
@@ -457,7 +492,7 @@ object EnhancerDsp {
     const val VIRTUAL_BASS_OVERALL_GAIN_DB: Double = -4.5
     const val VIRTUAL_BASS_SLOPE_GAIN_DB_PER_OCT: Double = -1.5
     val VIRTUAL_BASS_MIX_FREQS_HZ: Pair<Double, Double> = 90.0 to 469.0
-    val VIRTUAL_BASS_HARMONIC_GAINS_DB: Triple<Double, Double, Double> = Triple(-6.0, -3.5, -5.0)
+    val VIRTUAL_BASS_HARMONIC_GAINS_DB: Triple<Double, Double, Double> = Triple(-2.0, -9.0, -12.0)
 
     fun ieqTarget20Db(
         preset: IeqPreset,
@@ -598,39 +633,18 @@ object EnhancerDsp {
     }
 
     fun computeBassEnhancer31(config: EnhancerConfig): DoubleArray {
-        val out = DoubleArray(Dsp.F_DP.size)
-        if (!config.bassEnhancerEnabled && !config.virtualBassEnabled) return out
-
-        if (config.bassEnhancerEnabled) {
-            val strength01 = (config.bassEnhancerStrength.coerceIn(0, 100) / 100.0)
-            val subGain = 7.4 * strength01
-            val punchGain = 4.8 * strength01
-            for (k in out.indices) {
-                val f = Dsp.F_DP[k]
-                out[k] += AutoEq.biquadDb("PK", 62.0, subGain, 0.75, f) +
-                    AutoEq.biquadDb("PK", 115.0, punchGain, 1.00, f)
-            }
+        if (!config.bassEnhancerEnabled) return DoubleArray(Dsp.F_DP.size)
+        val bass10 = DoubleArray(10) { i ->
+            EnhancerMath.bassEnhancerBandBoostDb(
+                bandIndex = i,
+                strengthPct = config.bassEnhancerStrength,
+                virtualBassEnabled = config.virtualBassEnabled
+            ).toDouble()
         }
-
-        if (config.virtualBassEnabled) {
-            val h2BoostDb = 3.8
-            val h3BoostDb = 4.5
-            val h4BoostDb = 3.0
-
-            for (k in out.indices) {
-                val f = Dsp.F_DP[k]
-                val subFoundation = AutoEq.biquadDb("LSC", 80.0, 2.5, 0.72, f)
-                val h2Band = AutoEq.biquadDb("PK", 115.0, h2BoostDb, 1.10, f)
-                val h3Band = AutoEq.biquadDb("PK", 175.0, h3BoostDb, 1.25, f)
-                val h4Band = AutoEq.biquadDb("PK", 235.0, h4BoostDb, 1.40, f)
-                out[k] += subFoundation + h2Band + h3Band + h4Band
-            }
+        val curve31 = Dsp.renderCurve(bass10)
+        return DoubleArray(Dsp.F_DP.size) { k ->
+            curve31[k].coerceIn(0.0, 6.0)
         }
-
-        for (k in out.indices) {
-            out[k] = out[k].coerceIn(0.0, 10.5)
-        }
-        return out
     }
 
     fun interpolate31AtFrequency(curve31: DoubleArray, fHz: Double): Double {
