@@ -48,7 +48,6 @@ import androidx.compose.ui.unit.sp
 import com.audioeq.audio.AudioProfile
 import com.audioeq.audio.EnhancerConfig
 import com.audioeq.audio.IeqPreset
-import com.audioeq.audio.StereoWideningMode
 import com.audioeq.model.EqConstants
 import com.audioeq.ui.theme.JetBrainsMonoFontFamily
 import com.audioeq.ui.theme.LocalMonetPalette
@@ -72,8 +71,6 @@ fun EnhancerCard(
     onToggleBassEnhancer: (Boolean) -> Unit = {},
     onBassStrengthChange: (Int) -> Unit = {},
     onToggleVirtualBass: (Boolean) -> Unit = {},
-    onSelectStereoWideningMode: (StereoWideningMode) -> Unit = {},
-    onReduceReverbAmountChange: (Int) -> Unit = {},
     onResetAllEnhancers: () -> Unit,
     onOpenCalibrationSheet: () -> Unit,
     onOpenAbxSheet: () -> Unit,
@@ -174,7 +171,7 @@ fun EnhancerCard(
                             drawArc(
                                 color = palette.onVar,
                                 startAngle = -210f,
-                                sweepAngle = 290f,
+                               sweepAngle = 290f,
                                 useCenter = false,
                                 style = s
                             )
@@ -220,92 +217,6 @@ fun EnhancerCard(
                     }
                 }
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("audio_profile_flow_row"),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    val profiles = AudioProfile.entries
-                    val row1 = profiles.take(3)
-                    val row2 = profiles.drop(3)
-
-                    listOf(row1, row2).forEach { rowProfiles ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(palette.sHigh)
-                                .border(1.dp, palette.outlineV.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
-                                .padding(3.dp),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            rowProfiles.forEach { prof ->
-                                val isSelected = config.profile == prof
-                                val bg by animateColorAsState(
-                                    targetValue = if (isSelected) palette.primary else Color.Transparent,
-                                    animationSpec = tween(160),
-                                    label = "profileSegBg_${prof.id}"
-                                )
-                                val fg by animateColorAsState(
-                                    targetValue = if (isSelected) palette.onPrimary else palette.onVar,
-                                    animationSpec = tween(160),
-                                    label = "profileSegFg_${prof.id}"
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(34.dp)
-                                        .clip(RoundedCornerShape(11.dp))
-                                        .background(bg)
-                                        .clickable(enabled = enabled) { onSelectProfile(prof) }
-                                        .testTag("audio_profile_chip_${prof.id}"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = prof.title,
-                                        fontFamily = SpaceGroteskFontFamily,
-                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                                        fontSize = 12.sp,
-                                        color = fg,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            EnhancerModuleCard(
-                title = "Stereo Widening",
-                subtitle = config.stereoWideningMode.subtitle,
-                badgeText = config.stereoWideningMode.title,
-                isActive = config.stereoWideningMode != StereoWideningMode.NO_EFFECT,
-                iconContent = { tint ->
-                    Canvas(modifier = Modifier.size(18.dp)) {
-                        val w = size.width
-                        val h = size.height
-                        val s = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-                        drawCircle(color = tint, radius = w * 0.12f, center = Offset(w * 0.5f, h * 0.5f))
-                        drawArc(
-                            color = tint,
-                            startAngle = 135f,
-                            sweepAngle = 90f,
-                            useCenter = false,
-                            style = s
-                        )
-                        drawArc(
-                            color = tint,
-                            startAngle = -45f,
-                            sweepAngle = 90f,
-                            useCenter = false,
-                            style = s
-                        )
-                    }
-                }
-            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -313,34 +224,33 @@ fun EnhancerCard(
                         .background(palette.sHigh)
                         .border(1.dp, palette.outlineV.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
                         .padding(3.dp)
-                        .testTag("stereo_widening_flow_row"),
+                        .testTag("audio_profile_flow_row"),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    StereoWideningMode.entries.forEach { mode ->
-                        val isSelected = config.stereoWideningMode == mode
+                    AudioProfile.entries.forEach { prof ->
+                        val isSelected = config.profile == prof
                         val bg by animateColorAsState(
                             targetValue = if (isSelected) palette.primary else Color.Transparent,
                             animationSpec = tween(160),
-                            label = "wideningSegBg_${mode.id}"
+                            label = "profileSegBg_${prof.id}"
                         )
                         val fg by animateColorAsState(
                             targetValue = if (isSelected) palette.onPrimary else palette.onVar,
                             animationSpec = tween(160),
-                            label = "wideningSegFg_${mode.id}"
+                            label = "profileSegFg_${prof.id}"
                         )
-
                         Box(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(34.dp)
                                 .clip(RoundedCornerShape(11.dp))
                                 .background(bg)
-                                .clickable(enabled = enabled) { onSelectStereoWideningMode(mode) }
-                                .testTag("stereo_widening_chip_${mode.id}"),
+                                .clickable(enabled = enabled) { onSelectProfile(prof) }
+                                .testTag("audio_profile_chip_${prof.id}"),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = mode.title,
+                                text = prof.title,
                                 fontFamily = SpaceGroteskFontFamily,
                                 fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
                                 fontSize = 12.sp,
@@ -349,57 +259,6 @@ fun EnhancerCard(
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
-                    }
-                }
-            }
-
-            val amt = config.reduceReverbAmount
-            val reverbBadge = if (amt == 0) "Off" else "Lv $amt (-${amt * 6} dB)"
-            EnhancerModuleCard(
-                title = "Reduce Reverb",
-                subtitle = "Wiener spectral subtraction damps room reflection decay",
-                badgeText = reverbBadge,
-                isActive = amt > 0,
-                iconContent = { tint ->
-                    Canvas(modifier = Modifier.size(18.dp)) {
-                        val w = size.width
-                        val h = size.height
-                        val sw = 1.8.dp.toPx()
-                        drawLine(tint, Offset(w * 0.18f, h * 0.22f), Offset(w * 0.18f, h * 0.78f), strokeWidth = sw, cap = StrokeCap.Round)
-                        drawLine(tint, Offset(w * 0.40f, h * 0.34f), Offset(w * 0.40f, h * 0.66f), strokeWidth = sw, cap = StrokeCap.Round)
-                        drawLine(tint, Offset(w * 0.62f, h * 0.42f), Offset(w * 0.62f, h * 0.58f), strokeWidth = sw, cap = StrokeCap.Round)
-                        drawLine(tint, Offset(w * 0.84f, h * 0.47f), Offset(w * 0.84f, h * 0.53f), strokeWidth = sw, cap = StrokeCap.Round)
-                    }
-                }
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Slider(
-                        value = amt.toFloat(),
-                        onValueChange = { onReduceReverbAmountChange(it.roundToInt()) },
-                        valueRange = 0f..9f,
-                        steps = 8,
-                        enabled = enabled,
-                        colors = SliderDefaults.colors(
-                            thumbColor = palette.primary,
-                            activeTrackColor = palette.primary,
-                            inactiveTrackColor = palette.sHigh
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(28.dp)
-                            .testTag("reduce_reverb_slider")
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("0 (Bypass)", fontFamily = JetBrainsMonoFontFamily, fontSize = 10.sp, color = palette.onVar)
-                        Text("Near (2)", fontFamily = JetBrainsMonoFontFamily, fontSize = 10.sp, color = palette.onVar)
-                        Text("Mid (5)", fontFamily = JetBrainsMonoFontFamily, fontSize = 10.sp, color = palette.onVar)
-                        Text("Max (9)", fontFamily = JetBrainsMonoFontFamily, fontSize = 10.sp, color = palette.onVar)
                     }
                 }
             }

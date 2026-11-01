@@ -6,11 +6,12 @@ import com.audioeq.audio.BassContour
 import com.audioeq.audio.DialogueMode
 import com.audioeq.audio.DspV4Engine
 import com.audioeq.audio.EnhancerConfig
+import com.audioeq.audio.EnhancerDsp
 import com.audioeq.audio.EnhancerMath
 import com.audioeq.audio.Enhancers
 import com.audioeq.audio.IeqPreset
 import com.audioeq.audio.MidSideProcessor
-import com.audioeq.audio.StereoWideningMode
+import com.audioeq.audio.ThreeDAudioMode
 import com.audioeq.model.EqConstants
 import com.audioeq.model.EqMode
 import org.junit.Assert.assertEquals
@@ -59,11 +60,9 @@ class AudioEqUnitTest {
     @Test
     fun verifyEnhancerMathAndAutoHeadroomTrim() {
         val cfg = EnhancerConfig(
-            profile = AudioProfile.MOVIE,
+            profile = AudioProfile.DYNAMIC,
             ieqPreset = IeqPreset.BALANCED,
             ieqIntensity = 1.0f,
-            stereoWideningMode = StereoWideningMode.MIDDLE,
-            reduceReverbAmount = 2,
             dialogueEnhancerEnabled = true,
             dialogueGain = 4,
             dialogueMode = DialogueMode.BROADCAST,
@@ -88,36 +87,69 @@ class AudioEqUnitTest {
     }
 
     @Test
-    fun verifyStereoWideningAndReduceReverbSpecifications() {
-        assertEquals(0, StereoWideningMode.NO_EFFECT.dapAmount)
-        assertEquals(16, StereoWideningMode.NEAR.dapAmount)
-        assertEquals(35, StereoWideningMode.MIDDLE.dapAmount)
-        assertEquals(103, StereoWideningMode.FAR.dapAmount)
+    fun verifyThreeDAudioDynamicProfileAndBalancedIeqSpecifications() {
+        // Verify Live Music and Movie profiles are removed; only Off, Dynamic, Balanced, 3D exist
+        val profileIds = AudioProfile.entries.map { it.id }
+        assertEquals(listOf("profile_off", "profile_dynamic", "profile_balanced", "profile_3d"), profileIds)
 
-        assertEquals(1.000, EnhancerMath.computeStereoWidthScalar(0), 0.001)
-        assertEquals(1.250, EnhancerMath.computeStereoWidthScalar(16), 0.001)
-        assertEquals(1.546875, EnhancerMath.computeStereoWidthScalar(35), 0.001)
-        assertEquals(2.609375, EnhancerMath.computeStereoWidthScalar(103), 0.001)
+        // 1. 3D Audio (Spatializer & Virtualizer Engine) Spec
+        assertEquals(0, ThreeDAudioMode.NO_EFFECT.azimuthDeg)
+        assertEquals(16, ThreeDAudioMode.NEAR.azimuthDeg)
+        assertEquals(35, ThreeDAudioMode.MIDDLE.azimuthDeg)
+        assertEquals(103, ThreeDAudioMode.FAR.azimuthDeg)
 
-        assertEquals(0.00, EnhancerMath.computeStereoSideGainDb(0), 0.01)
-        assertEquals(1.938, EnhancerMath.computeStereoSideGainDb(16), 0.02)
-        assertEquals(3.789, EnhancerMath.computeStereoSideGainDb(35), 0.02)
-        assertEquals(8.331, EnhancerMath.computeStereoSideGainDb(103), 0.02)
+        assertEquals(0, ThreeDAudioMode.NO_EFFECT.itdDelaySamples48k)
+        assertEquals(7, ThreeDAudioMode.NEAR.itdDelaySamples48k)
+        assertEquals(14, ThreeDAudioMode.MIDDLE.itdDelaySamples48k)
+        assertEquals(34, ThreeDAudioMode.FAR.itdDelaySamples48k)
 
-        assertEquals(0.00, EnhancerMath.reduceReverbGamma(0), 0.001)
-        assertEquals(0.85, EnhancerMath.reduceReverbGamma(1), 0.001)
-        assertEquals(1.20, EnhancerMath.reduceReverbGamma(2), 0.001)
-        assertEquals(2.25, EnhancerMath.reduceReverbGamma(5), 0.001)
-        assertEquals(3.65, EnhancerMath.reduceReverbGamma(9), 0.001)
+        assertEquals(7, EnhancerMath.computeWoodworthItdSamples(16, 48000))
+        assertEquals(0.141, EnhancerMath.computeWoodworthItdMs(16), 0.002)
+        assertEquals(0.302, EnhancerMath.computeWoodworthItdMs(35), 0.002)
+        assertEquals(34, EnhancerMath.computeWoodworthItdSamples(103, 48000))
+        assertEquals(0.707, EnhancerMath.computeWoodworthItdMs(103), 0.002)
 
-        assertEquals(0.0, EnhancerMath.reduceReverbSuppressionFloorDb(0), 0.001)
-        assertEquals(-12.0, EnhancerMath.reduceReverbSuppressionFloorDb(2), 0.001)
-        assertEquals(-54.0, EnhancerMath.reduceReverbSuppressionFloorDb(9), 0.001)
+        assertEquals(0.9939, EnhancerMath.decodeQ15Linear(32568), 0.0002)
+        assertEquals(0.2500, EnhancerMath.decodeQ15Linear(8192), 0.0002)
+        assertEquals(0.3407, EnhancerMath.decodeQ15Linear(11164), 0.0002)
+        assertEquals(0.1553, EnhancerMath.decodeQ15Linear(5090), 0.0002)
 
-        val wienerGainBypass = EnhancerMath.computeWienerReverbGain(0, 0.25, 1.0)
-        assertEquals(1.0, wienerGainBypass, 1e-6)
-        val wienerGainLv2 = EnhancerMath.computeWienerReverbGain(2, 0.25, 1.0)
-        assertEquals(0.40, wienerGainLv2, 0.01)
+        val shadowBeta = EnhancerMath.computeCranialShadowBeta(850.0, 48000)
+        assertTrue("850 Hz cranial shadow beta at 48 kHz should be ~0.105", shadowBeta in 0.09..0.12)
+
+        // 2. Dynamic Profile (id="0") Media Intelligence Steering Spec
+        assertEquals(4, EnhancerDsp.DYNAMIC_PROFILE_SPECS.size)
+        assertEquals(0.0, EnhancerMath.computeDynamicMiVirtualizerGain(0.1, 0.1, 0.8), 1e-6)
+        assertEquals(1.0, EnhancerMath.computeDynamicMiVirtualizerGain(0.7, 0.2, 0.1), 1e-6)
+        assertEquals(0.35, EnhancerMath.computeDynamicMiVirtualizerGain(0.0, 1.0, 0.0), 1e-6)
+
+        val (speechAtt, speechRel) = EnhancerMath.computeDynamicMiLevelerTimeConstantsMs(1.0)
+        assertEquals(20.0, speechAtt, 1e-6)
+        assertEquals(200.0, speechRel, 1e-6)
+        val (musicAtt, musicRel) = EnhancerMath.computeDynamicMiLevelerTimeConstantsMs(0.0)
+        assertEquals(150.0, musicAtt, 1e-6)
+        assertEquals(800.0, musicRel, 1e-6)
+
+        assertEquals(1.0, EnhancerMath.computeDynamicMiSurroundCompressorRatio(0.0), 1e-6)
+        assertEquals(2.5, EnhancerMath.computeDynamicMiSurroundCompressorRatio(1.0), 1e-6)
+
+        // 3. Balance (Balanced IEQ Profile) Spec
+        assertEquals(20, EnhancerDsp.BALANCED_IEQ_CURVE_SPECS.size)
+        assertEquals(9.81, EnhancerDsp.BALANCED_IEQ_CURVE_SPECS.first().targetGainDb, 0.01)
+        assertEquals(13.63, EnhancerDsp.BALANCED_IEQ_CURVE_SPECS[2].targetGainDb, 0.01)
+        assertEquals(-23.63, EnhancerDsp.BALANCED_IEQ_CURVE_SPECS.last().targetGainDb, 0.01)
+        assertEquals(0.375, EnhancerDsp.BALANCED_ADAPTATION_FACTOR_HP, 1e-6)
+        assertEquals(0.250, EnhancerDsp.BALANCED_ADAPTATION_FACTOR_SPK, 1e-6)
+
+        // Steering gain clamp +-6.0 dB
+        val hpGain = EnhancerMath.computeBalancedIeqSteeringGainDb(0, 0.0, isSpeaker = false)
+        assertEquals(0.375 * (157.0 / 16.0), hpGain, 0.01)
+        val spkGain = EnhancerMath.computeBalancedIeqSteeringGainDb(0, 0.0, isSpeaker = true)
+        assertEquals(0.250 * (157.0 / 16.0), spkGain, 0.01)
+        val clampedHigh = EnhancerMath.computeBalancedIeqSteeringGainDb(2, -20.0, isSpeaker = false)
+        assertEquals(6.0, clampedHigh, 1e-6)
+        val clampedLow = EnhancerMath.computeBalancedIeqSteeringGainDb(19, 10.0, isSpeaker = false)
+        assertEquals(-6.0, clampedLow, 1e-6)
     }
 
     @Test
@@ -153,10 +185,8 @@ class AudioEqUnitTest {
             channelBalance = 0f,
             limiterThresholdDb = -0.8f,
             enhancerConfig = EnhancerConfig(
-                profile = AudioProfile.MOVIE,
+                profile = AudioProfile.EFFECT_3D,
                 ieqPreset = IeqPreset.BALANCED,
-                stereoWideningMode = StereoWideningMode.FAR,
-                reduceReverbAmount = 4,
                 dialogueEnhancerEnabled = true,
                 dialogueGain = 4
             )
@@ -233,38 +263,17 @@ class AudioEqUnitTest {
     }
 
     @Test
-    fun verifyProfilesDecoupledFromStereoWideningAndNoVolumeSuppression() {
-        for (profile in listOf(AudioProfile.EFFECT_3D, AudioProfile.LIVE_MUSIC, AudioProfile.MOVIE, AudioProfile.DYNAMIC, AudioProfile.BALANCED)) {
+    fun verifyRemainingProfilesHavePositiveEnhancementWithoutVolumeSuppression() {
+        for (profile in listOf(AudioProfile.DYNAMIC, AudioProfile.BALANCED, AudioProfile.EFFECT_3D)) {
             assertTrue("Profile $profile must have positive bass boost strength", profile.bassBoostStrengthPermille > 0)
-            val cfg = EnhancerConfig(
-                profile = profile,
-                stereoWideningMode = StereoWideningMode.NO_EFFECT
-            )
-            assertEquals("Profile $profile must keep StereoWideningMode.NO_EFFECT untouched", StereoWideningMode.NO_EFFECT, cfg.stereoWideningMode)
-            val (deltaL, deltaR) = com.audioeq.audio.EnhancerDsp.computeStereoWideningLRDelta31(cfg, 1.0f)
-            assertTrue("Profile $profile with NO_EFFECT widening must have zero manual widening L delta", deltaL.all { abs(it) < 1e-6 })
-            assertTrue("Profile $profile with NO_EFFECT widening must have zero manual widening R delta", deltaR.all { abs(it) < 1e-6 })
-
-            val curve31 = com.audioeq.audio.EnhancerDsp.computeCombinedEnhancer31(cfg)
+            val cfg = EnhancerConfig(profile = profile)
+            val curve31 = EnhancerDsp.computeCombinedEnhancer31(cfg)
             assertTrue("Profile $profile must not cut any frequency band", curve31.all { it >= -0.01 })
             assertTrue("Profile $profile must provide strong audible positive enhancement", (curve31.maxOrNull() ?: 0.0) > 2.5)
         }
 
-        for (spatialProfile in listOf(AudioProfile.EFFECT_3D, AudioProfile.LIVE_MUSIC, AudioProfile.MOVIE)) {
-            assertTrue("Spatial profile $spatialProfile must enable hardware virtualizer", spatialProfile.virtualizerStrengthPermille >= 650)
-            val (profL, profR) = com.audioeq.audio.EnhancerDsp.computeProfileSpatialLRDelta31(spatialProfile)
-            assertTrue("Spatial profile $spatialProfile must produce dichotic L/R spatial stage", profL.indices.any { abs(profL[it] - profR[it]) > 1.0 })
-            assertTrue("Spatial profile $spatialProfile must have positive energy compensation", (profL.sum() + profR.sum()) > 0.0)
-        }
-
-        for (mode in listOf(StereoWideningMode.NEAR, StereoWideningMode.MIDDLE, StereoWideningMode.FAR)) {
-            val cfg = EnhancerConfig(
-                profile = AudioProfile.OFF,
-                stereoWideningMode = mode
-            )
-            val (deltaL, deltaR) = com.audioeq.audio.EnhancerDsp.computeStereoWideningLRDelta31(cfg, 1.0f)
-            assertTrue("Widening mode $mode must produce dichotic L/R differences", deltaL.indices.any { abs(deltaL[it] - deltaR[it]) > 1.0 })
-            assertTrue("Widening mode $mode must have positive average gain compensation", (deltaL.sum() + deltaR.sum()) > 0.0)
-        }
+        val (profL3D, profR3D) = EnhancerDsp.computeProfileSpatialLRDelta31(AudioProfile.EFFECT_3D)
+        assertTrue("3D profile must produce dichotic L/R spatial stage", profL3D.indices.any { abs(profL3D[it] - profR3D[it]) > 1.0 })
+        assertTrue("3D profile must have positive energy compensation", (profL3D.sum() + profR3D.sum()) > 0.0)
     }
 }

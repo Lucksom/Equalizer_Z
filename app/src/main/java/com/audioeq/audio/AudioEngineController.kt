@@ -65,7 +65,6 @@ class AudioEngineController(
     val midSideProcessor = MidSideProcessor(48000)
     val harmonicVirtualBass = HarmonicVirtualBassGenerator(48000)
     val binauralHrtfVirtualizer = BinauralHrtfVirtualizer(48000)
-    val lateReverbSuppressor = LateReverbSuppressor()
 
     private val masterEngine = MasterEqEngine(
         context = context,
@@ -171,7 +170,10 @@ class AudioEngineController(
                         tiltBassDb = p.tiltBassDb,
                         tiltTrebleDb = p.tiltTrebleDb
                     )
-                    val enh31 = EnhancerDsp.computeCombinedEnhancer31(p.enhancerConfig)
+                    val enh31 = EnhancerDsp.computeCombinedEnhancer31(
+                        config = p.enhancerConfig,
+                        isSpeaker = currentRoute == OutputRoute.SPEAKER
+                    )
                     val combinedCal31 = DoubleArray(31) { (cal31[it] + enh31[it]).coerceIn(-15.0, 15.0) }
                     val curve31 = Dsp.compute31BandTargets(
                         userGains10 = p.bandGains10L,
@@ -247,12 +249,14 @@ class AudioEngineController(
             masterEngine.setEngineMode(mode, isPrivilegeReadyForMode(mode))
             triggerImmediateSessionSync()
         }
+        val threeDMode = enhancerConfig.profile.threeDAudioMode
         midSideProcessor.updateParameters(
             width = midSideWidth,
             vocalBoost = vocalPresenceBoost,
             sampleRate = 48000,
-            wideningMode = enhancerConfig.stereoWideningMode
+            threeDMode = threeDMode
         )
+        binauralHrtfVirtualizer.configure(threeDMode, 48000)
 
         val l10 = DoubleArray(10) { bandGainsDb.getOrElse(it) { 0f }.toDouble() }
         val r10 = DoubleArray(10) { rightBandGainsDb.getOrElse(it) { 0f }.toDouble() }

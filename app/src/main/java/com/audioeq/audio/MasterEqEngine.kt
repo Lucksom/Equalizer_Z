@@ -648,15 +648,20 @@ class MasterEqEngine(
             }
         }
 
-        val enhancerCurve31 = EnhancerDsp.computeCombinedEnhancer31(params.enhancerConfig)
+        val isSpeakerRoute = try {
+            detectCurrentRoute(audioManager) == OutputRoute.SPEAKER
+        } catch (_: Throwable) {
+            false
+        }
+
+        val enhancerCurve31 = EnhancerDsp.computeCombinedEnhancer31(
+            config = params.enhancerConfig,
+            isSpeaker = isSpeakerRoute
+        )
         for (i in 0 until 31) {
             calCurve[i] = (calCurve[i] + enhancerCurve31[i]).coerceIn(-15.0, 15.0)
         }
 
-        val (stereoDeltaL31, stereoDeltaR31) = EnhancerDsp.computeStereoWideningLRDelta31(
-            config = params.enhancerConfig,
-            midSideWidth = params.midSideWidth
-        )
         val (profileDeltaL31, profileDeltaR31) = EnhancerDsp.computeProfileSpatialLRDelta31(
             profile = params.enhancerConfig.profile
         )
@@ -726,7 +731,7 @@ class MasterEqEngine(
                     k
                 }
                 val postReinforce = max(0.0, enhancerCurve31[idx31]) * 0.35
-                (stereoDeltaL31[idx31] + profileDeltaL31[idx31] + postReinforce).coerceIn(-6.0, 9.0).toFloat()
+                (profileDeltaL31[idx31] + postReinforce).coerceIn(-6.0, 9.0).toFloat()
             }
         }
         val postR = FloatArray(bandCount) { k ->
@@ -738,7 +743,7 @@ class MasterEqEngine(
                     k
                 }
                 val postReinforce = max(0.0, enhancerCurve31[idx31]) * 0.35
-                (stereoDeltaR31[idx31] + profileDeltaR31[idx31] + postReinforce).coerceIn(-6.0, 9.0).toFloat()
+                (profileDeltaR31[idx31] + postReinforce).coerceIn(-6.0, 9.0).toFloat()
             }
         }
 
@@ -748,9 +753,13 @@ class MasterEqEngine(
         val makeupPostGain = if (effectiveEnabled && anyEnhancerActive) 1.0f else 0.0f
 
         val cfg = params.enhancerConfig
+        val isDynamicProfile = cfg.profile == AudioProfile.DYNAMIC
         val hasBassMbc = cfg.bassEnhancerEnabled || cfg.virtualBassEnabled ||
-            cfg.profile == AudioProfile.DYNAMIC || cfg.profile == AudioProfile.MOVIE || cfg.profile == AudioProfile.EFFECT_3D
-        val hasDialogueMbc = cfg.dialogueEnhancerEnabled || cfg.profile == AudioProfile.MOVIE || cfg.profile == AudioProfile.LIVE_MUSIC
+            isDynamicProfile || cfg.profile == AudioProfile.EFFECT_3D
+        val hasDialogueMbc = cfg.dialogueEnhancerEnabled || isDynamicProfile
+        val (miSpeechAttMs, miSpeechRelMs) = EnhancerMath.computeDynamicMiLevelerTimeConstantsMs(1.0)
+        val (miMusicAttMs, miMusicRelMs) = EnhancerMath.computeDynamicMiLevelerTimeConstantsMs(0.0)
+        val miSurroundRatio = EnhancerMath.computeDynamicMiSurroundCompressorRatio(0.4).toFloat()
 
         for ((sid, dp) in dpSessions) {
             try {
@@ -800,19 +809,19 @@ class MasterEqEngine(
                         mbcBand.cutoffFrequency = Dsp.MBC_CUTOFFS[b]
                         when {
                             b <= 1 && hasBassMbc -> {
-                                mbcBand.attackTime = 4.0f
-                                mbcBand.releaseTime = 75.0f
-                                mbcBand.ratio = if (cfg.virtualBassEnabled) 1.6f else 1.2f
+                                mbcBand.attackTime = if (isDynamicProfile) miMusicAttMs.toFloat() else 4.0f
+                                mbcBand.releaseTime = if (isDynamicProfile) miMusicRelMs.toFloat() else 75.0f
+                                mbcBand.ratio = if (cfg.virtualBassEnabled) 1.6f else if (isDynamicProfile) miSurroundRatio else 1.2f
                                 mbcBand.threshold = -14.0f
                                 mbcBand.kneeWidth = 6.0f
                                 mbcBand.preGain = if (cfg.virtualBassEnabled) 1.2f else 0.6f
                                 mbcBand.postGain = makeupPostGain + (if (cfg.virtualBassEnabled) 1.6f else 1.0f)
                             }
                             b in 3..4 && hasDialogueMbc -> {
-                                mbcBand.attackTime = 2.5f
-                                mbcBand.releaseTime = 55.0f
-                                mbcBand.ratio = 1.25f
-                                mbcBand.threshold = -18.0f
+                                mbcBand.attackTime = if (isDynamicProfile) miSpeechAttMs.toFloat() else 2.5f
+                                mbcBand.releaseTime = if (isDynamicProfile) miSpeechRelMs.toFloat() else 55.0f
+                                mbcBand.ratio = if (isDynamicProfile) miSurroundRatio else 1.25f
+                                mbcBand.threshold = -16.0f
                                 mbcBand.kneeWidth = 6.0f
                                 mbcBand.preGain = 0.8f
                                 mbcBand.postGain = makeupPostGain + 1.4f
@@ -848,23 +857,11 @@ class MasterEqEngine(
             }
         }
 
-        val wideningPermille = when (params.enhancerConfig.stereoWideningMode) {
-            StereoWideningMode.NO_EFFECT -> 0
-            StereoWideningMode.NEAR -> 450
-            StereoWideningMode.MIDDLE -> 750
-            StereoWideningMode.FAR -> 1000
-        }
         val profileVirtPermille = params.enhancerConfig.profile.virtualizerStrengthPermille
         val virtStrength = max(
-            max(wideningPermille, profileVirtPermille),
+            profileVirtPermille,
             (((params.midSideWidth - 1.0f).coerceIn(0f, 1f)) * 1000f).roundToInt()
         ).coerceIn(0, 1000)
-
-        val isSpeakerRoute = try {
-            detectCurrentRoute(audioManager) == OutputRoute.SPEAKER
-        } catch (_: Throwable) {
-            false
-        }
 
         for ((_, virt) in virtualizerSessions) {
             try {

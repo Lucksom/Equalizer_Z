@@ -8,7 +8,7 @@ import com.audioeq.audio.AudioProfile
 import com.audioeq.audio.EnhancerConfig
 import com.audioeq.audio.EnhancerDsp
 import com.audioeq.audio.IeqPreset
-import com.audioeq.audio.StereoWideningMode
+import com.audioeq.audio.ThreeDAudioMode
 import com.audioeq.model.EqConstants
 import com.audioeq.model.EqPreset
 import com.audioeq.model.OutputRoute
@@ -21,7 +21,7 @@ class EqualizerDatabaseHelper(context: Context) :
 
     companion object {
         const val DATABASE_NAME = "audio_eq_studio.db"
-        const val DATABASE_VERSION = 7
+        const val DATABASE_VERSION = 8
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -32,7 +32,7 @@ class EqualizerDatabaseHelper(context: Context) :
                 name TEXT NOT NULL,
                 is_custom INTEGER NOT NULL DEFAULT 0,
                 gains_json TEXT NOT NULL,
-                recommended_preamp_db REAL NOT NULL DEFAULT -3.0,
+                recommended_preamp_db REAL NOT NULL DEFAULT 0.0,
                 recommended_hp_hz REAL NOT NULL DEFAULT 0.0,
                 created_at INTEGER NOT NULL
             )
@@ -50,9 +50,9 @@ class EqualizerDatabaseHelper(context: Context) :
                 split_lr_enabled INTEGER NOT NULL DEFAULT 0,
                 balance_db REAL NOT NULL DEFAULT 0.0,
                 preamp_db REAL NOT NULL,
-                auto_gain_enabled INTEGER NOT NULL DEFAULT 1,
+                auto_gain_enabled INTEGER NOT NULL DEFAULT 0,
                 limiter_enabled INTEGER NOT NULL DEFAULT 1,
-                limiter_ceiling_db REAL NOT NULL DEFAULT -1.0,
+                limiter_ceiling_db REAL NOT NULL DEFAULT -0.3,
                 sub_bass_hp_hz REAL NOT NULL DEFAULT 0.0,
                 iso226_enabled INTEGER NOT NULL DEFAULT 0,
                 mid_side_width REAL NOT NULL DEFAULT 1.0,
@@ -104,9 +104,7 @@ class EqualizerDatabaseHelper(context: Context) :
                 bass_enabled INTEGER NOT NULL DEFAULT 0,
                 bass_strength INTEGER NOT NULL DEFAULT 80,
                 virtual_bass_enabled INTEGER NOT NULL DEFAULT 0,
-                audio_profile_id TEXT NOT NULL DEFAULT 'profile_off',
-                stereo_widening_id TEXT NOT NULL DEFAULT 'widening_off',
-                reduce_reverb_amount INTEGER NOT NULL DEFAULT 0
+                audio_profile_id TEXT NOT NULL DEFAULT 'profile_off'
             )
             """.trimIndent()
         )
@@ -146,196 +144,112 @@ class EqualizerDatabaseHelper(context: Context) :
                     bass_enabled INTEGER NOT NULL DEFAULT 0,
                     bass_strength INTEGER NOT NULL DEFAULT 80,
                     virtual_bass_enabled INTEGER NOT NULL DEFAULT 0,
-                    audio_profile_id TEXT NOT NULL DEFAULT 'profile_off',
-                    stereo_widening_id TEXT NOT NULL DEFAULT 'widening_off',
-                    reduce_reverb_amount INTEGER NOT NULL DEFAULT 0
+                    audio_profile_id TEXT NOT NULL DEFAULT 'profile_off'
                 )
                 """.trimIndent()
             )
             seedDefaultEnhancerSettings(db)
         }
-        if (oldVersion < 6) {
-            try {
-                db.execSQL("ALTER TABLE enhancer_settings ADD COLUMN stereo_widening_id TEXT NOT NULL DEFAULT 'widening_off'")
-            } catch (_: Exception) {
-            }
-            try {
-                db.execSQL("ALTER TABLE enhancer_settings ADD COLUMN reduce_reverb_amount INTEGER NOT NULL DEFAULT 0")
-            } catch (_: Exception) {
-            }
-            db.execSQL("DELETE FROM presets WHERE preset_id IN ('bass_boost', 'cinema') AND is_custom = 0")
-            createAndSeedSpecificationTables(db)
-        }
         if (oldVersion < 7) {
+            db.execSQL("DELETE FROM presets WHERE preset_id IN ('bass_boost', 'cinema') AND is_custom = 0")
             db.execSQL("UPDATE route_profiles SET preamp_db = 0.0, auto_gain_enabled = 0, limiter_ceiling_db = -0.3, sub_bass_hp_hz = 0.0")
             db.execSQL("UPDATE presets SET recommended_preamp_db = 0.0, recommended_hp_hz = 0.0 WHERE is_custom = 0")
+        }
+        if (oldVersion < 8) {
+            db.execSQL("DROP TABLE IF EXISTS movie_profile")
+            db.execSQL("DROP TABLE IF EXISTS music_profile")
+            db.execSQL("DROP TABLE IF EXISTS stereo_widening")
+            db.execSQL("DROP TABLE IF EXISTS reduce_reverb")
+            db.execSQL("UPDATE enhancer_settings SET audio_profile_id = 'profile_off' WHERE audio_profile_id IN ('profile_live_music', 'profile_movie')")
+            createAndSeedSpecificationTables(db)
         }
     }
 
     private fun createAndSeedSpecificationTables(db: SQLiteDatabase) {
+        // 1. Table for 3D Audio (Spatializer & Virtualizer Engine)
         db.execSQL(
             """
-            CREATE TABLE IF NOT EXISTS movie_profile (
-                param_key TEXT PRIMARY KEY,
-                raw_value TEXT NOT NULL,
-                physical_unit TEXT NOT NULL,
-                dsp_stage TEXT NOT NULL,
-                mathematical_role TEXT NOT NULL
+            CREATE TABLE IF NOT EXISTS three_d_audio_spec (
+                mode_name TEXT PRIMARY KEY,
+                azimuth_deg INT,
+                g_direct_q15 INT,
+                g_direct_linear REAL,
+                g_cross_q15 INT,
+                g_cross_linear REAL,
+                g_refl_q15 INT,
+                itd_delay_samples_48k INT,
+                itd_delay_ms REAL,
+                shadow_cutoff_hz INT,
+                allpass_filter_delay INT
             )
             """.trimIndent()
         )
-        db.execSQL("DELETE FROM movie_profile")
-        val movieRows = listOf(
-            arrayOf("profile_id", "0", "Enum ID", "Profile Router", "Selects Movie processing graph"),
-            arrayOf("profile_name", "Movie", "String", "UI / HAL", "Cinematic surround & dialogue clarity profile"),
-            arrayOf("reverb-suppression-enable", "1", "Boolean (true)", "De-Reverberation", "Enables WPE + spectral reverb tail suppression"),
-            arrayOf("reverb-suppression-amount", "2", "Index [0..9] (gamma = 1.20)", "De-Reverberation", "Over-subtraction factor gamma=1.20, floor G_min=-12.0 dB"),
-            arrayOf("headphone-virtualizer-mode", "2", "Enum (Binaural HRTF)", "Spatial Virtualizer", "Activates 5.1 -> 2.0 HRTF crossfeed & early reflections"),
-            arrayOf("virtualizer-Stage-enable", "1", "Boolean (true)", "Spatial Virtualizer", "Enables soundstage width & reflection room model"),
-            arrayOf("advanced-headphone-virtualizer-rendering-config", "35,32568,11164,5090,0,3,3,3", "Tuple [Azimuth, G_dir, G_cross, G_refl, ...]", "HRTF Matrix", "theta=+-35 deg, G_direct=0.9939, G_cross=0.3407, G_refl=0.1553"),
-            arrayOf("surround-decoder-enable", "1", "Boolean (true)", "Matrix Upmixer", "Enables 2.0 -> 5.1 Mid/Side phase matrix decoding"),
-            arrayOf("dialog-enhancer-enable", "1", "Boolean (true)", "Voice Presence", "Enables 1-4 kHz speech band isolation & boost"),
-            arrayOf("dialog-enhancer-amount", "4", "Q2 Index (+2.50 dB)", "Voice Presence", "Applies +2.50 dB dynamic peaking gain to speech bands"),
-            arrayOf("dialog-enhancer-ducking", "0", "Index (0 = Off)", "Non-Voice Ducking", "0 dB attenuation on non-speech bed channels"),
-            arrayOf("volume-leveler-enable", "1", "Boolean (true)", "Dynamic Loudness", "Enables ITU-R BS.1770 K-weighted loudness leveler"),
-            arrayOf("volume-leveler-amount", "1", "Index [0..10]", "Dynamic Loudness", "Gentle compression ratio for cinematic dynamic range"),
-            arrayOf("volume-leveler-in-target", "-256", "Q4 LUFS (-16.0 LUFS)", "Dynamic Loudness", "Input reference loudness anchor (-256 / 16 = -16.0 LUFS)"),
-            arrayOf("volume-leveler-out-target", "-256", "Q4 LUFS (-16.0 LUFS)", "Dynamic Loudness", "Output target loudness anchor (-256 / 16 = -16.0 LUFS)"),
-            arrayOf("volmax-boost_headphone", "32", "Q4 dB (+2.00 dB)", "Output Limiter", "Post-leveler makeup boost (+32 / 16 = +2.00 dB)"),
-            arrayOf("volmax-boost_speaker", "64", "Q4 dB (+4.00 dB)", "Output Limiter", "Speaker makeup boost (+64 / 16 = +4.00 dB)"),
-            arrayOf("ieq-enable", "0", "Boolean (false)", "Intelligent EQ", "Bypassed by default in Movie; preset=2 (Balanced) on standby"),
-            arrayOf("ieq-amount", "10", "Q4 Index (0.625)", "Intelligent EQ", "62.5% target convergence strength when IEQ is toggled on"),
-            arrayOf("bass-enhancer-enable", "0", "Boolean (false)", "Sub-Bass Exciter", "Disabled in Movie to prevent LFE boom masking dialogue")
-        )
-        for (row in movieRows) {
+        db.execSQL("DELETE FROM three_d_audio_spec")
+        for (mode in ThreeDAudioMode.entries) {
             val cv = ContentValues().apply {
-                put("param_key", row[0])
-                put("raw_value", row[1])
-                put("physical_unit", row[2])
-                put("dsp_stage", row[3])
-                put("mathematical_role", row[4])
+                put("mode_name", mode.modeName)
+                put("azimuth_deg", mode.azimuthDeg)
+                put("g_direct_q15", mode.gDirectQ15)
+                put("g_direct_linear", mode.gDirectLinear)
+                put("g_cross_q15", mode.gCrossQ15)
+                put("g_cross_linear", mode.gCrossLinear)
+                put("g_refl_q15", mode.gReflQ15)
+                put("itd_delay_samples_48k", mode.itdDelaySamples48k)
+                put("itd_delay_ms", mode.itdDelayMs)
+                put("shadow_cutoff_hz", mode.shadowCutoffHz)
+                put("allpass_filter_delay", mode.allpassFilterDelay)
             }
-            db.insertWithOnConflict("movie_profile", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+            db.insertWithOnConflict("three_d_audio_spec", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
         }
 
+        // 2. Table for Dynamic Profile (profile id="0")
         db.execSQL(
             """
-            CREATE TABLE IF NOT EXISTS music_profile (
-                param_key TEXT PRIMARY KEY,
-                raw_value TEXT NOT NULL,
-                physical_unit TEXT NOT NULL,
-                dsp_stage TEXT NOT NULL,
-                mathematical_role TEXT NOT NULL
+            CREATE TABLE IF NOT EXISTS dynamic_profile_spec (
+                sub_system TEXT PRIMARY KEY,
+                steering_tag TEXT,
+                enabled INT,
+                classifier_input TEXT,
+                adaptation_formula TEXT
             )
             """.trimIndent()
         )
-        db.execSQL("DELETE FROM music_profile")
-        val musicRows = listOf(
-            arrayOf("profile_id", "1", "Enum ID", "Profile Router", "Selects Music processing graph"),
-            arrayOf("profile_name", "Music", "String", "UI / HAL", "High-fidelity tonal balance & customizable spatial profile"),
-            arrayOf("reverb-suppression-enable", "0", "Boolean (false)", "De-Reverberation", "Default Off (user-controllable via Reduce Reverb slider 0..9)"),
-            arrayOf("reverb-suppression-amount", "5", "Index [0..9] (gamma = 2.25)", "De-Reverberation", "Default standby amount when enabled (G_min = -30.0 dB)"),
-            arrayOf("headphone-virtualizer-mode", "0", "Enum (Off / User Select)", "Spatial Virtualizer", "Controlled by Stereo Widening selector (0, 16, 35, 103)"),
-            arrayOf("advanced-headphone-virtualizer-rendering-config", "35,32568,11164,5090,0,3,3,3", "Tuple [Azimuth, G_dir, G_cross, G_refl, ...]", "HRTF Matrix", "Default Middle widening coefficient table"),
-            arrayOf("surround-decoder-enable", "1", "Boolean (true)", "Matrix Upmixer", "Extracts Mid/Side spatial components for widening"),
-            arrayOf("dialog-enhancer-enable", "0", "Boolean (false)", "Voice Presence", "Disabled by default to preserve natural studio vocal mix"),
-            arrayOf("dialog-enhancer-amount", "8", "Q2 Index (+5.00 dB)", "Voice Presence", "Standby vocal boost if enabled by user"),
-            arrayOf("volume-leveler-enable", "0", "Boolean (false)", "Dynamic Loudness", "Disabled to preserve full musical crest factor"),
-            arrayOf("ieq-enable", "0", "Boolean (false / User)", "Intelligent EQ", "User-selectable: Off(0), Detailed(1), Balanced(2), Warm(3)"),
-            arrayOf("ieq-amount", "10", "Q4 Index (0.625)", "Intelligent EQ", "alpha = 10/16 = 0.625 spectral target convergence"),
-            arrayOf("bass-enhancer-enable", "0", "Boolean (false)", "Bass Enhancer", "Removed from UI per clean studio profile specification")
-        )
-        for (row in musicRows) {
+        db.execSQL("DELETE FROM dynamic_profile_spec")
+        for (spec in EnhancerDsp.DYNAMIC_PROFILE_SPECS) {
             val cv = ContentValues().apply {
-                put("param_key", row[0])
-                put("raw_value", row[1])
-                put("physical_unit", row[2])
-                put("dsp_stage", row[3])
-                put("mathematical_role", row[4])
+                put("sub_system", spec.subSystem)
+                put("steering_tag", spec.steeringTag)
+                put("enabled", spec.enabled)
+                put("classifier_input", spec.classifierInput)
+                put("adaptation_formula", spec.adaptationFormula)
             }
-            db.insertWithOnConflict("music_profile", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+            db.insertWithOnConflict("dynamic_profile_spec", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
         }
 
+        // 3. Table for Balanced IEQ Curve (<preset id="2" name="balanced" type="ieq">)
         db.execSQL(
             """
-            CREATE TABLE IF NOT EXISTS stereo_widening (
-                mode_index INTEGER PRIMARY KEY,
-                ui_label TEXT NOT NULL,
-                dax_amount INTEGER NOT NULL,
-                virtual_azimuth_deg INTEGER NOT NULL,
-                width_scalar_w REAL NOT NULL,
-                side_gain_db REAL NOT NULL,
-                allpass_delay_ms REAL NOT NULL,
-                delay_samples_48k INTEGER NOT NULL,
-                hrtf_direct_q15 INTEGER NOT NULL,
-                hrtf_cross_q15 INTEGER NOT NULL,
-                hrtf_refl_q15 INTEGER NOT NULL
+            CREATE TABLE IF NOT EXISTS balanced_ieq_curve (
+                band_index INT PRIMARY KEY,
+                frequency_hz INT,
+                raw_q4 INT,
+                target_gain_db REAL,
+                adaptation_factor_hp REAL,
+                adaptation_factor_spk REAL
             )
             """.trimIndent()
         )
-        db.execSQL("DELETE FROM stereo_widening")
-        val wideningRows = listOf(
-            arrayOf<Any>(0, "No effect", 0, 0, 1.000, 0.00, 0.00, 0, 32767, 0, 0),
-            arrayOf<Any>(1, "Near", 16, 16, 1.250, 1.94, 0.20, 10, 32680, 6850, 2800),
-            arrayOf<Any>(2, "Middle", 35, 35, 1.547, 3.79, 0.45, 22, 32568, 11164, 5090),
-            arrayOf<Any>(3, "Far", 103, 103, 2.609, 8.33, 0.75, 36, 31900, 16384, 8192)
-        )
-        for (row in wideningRows) {
+        db.execSQL("DELETE FROM balanced_ieq_curve")
+        for (band in EnhancerDsp.BALANCED_IEQ_CURVE_SPECS) {
             val cv = ContentValues().apply {
-                put("mode_index", row[0] as Int)
-                put("ui_label", row[1] as String)
-                put("dax_amount", row[2] as Int)
-                put("virtual_azimuth_deg", row[3] as Int)
-                put("width_scalar_w", row[4] as Double)
-                put("side_gain_db", row[5] as Double)
-                put("allpass_delay_ms", row[6] as Double)
-                put("delay_samples_48k", row[7] as Int)
-                put("hrtf_direct_q15", row[8] as Int)
-                put("hrtf_cross_q15", row[9] as Int)
-                put("hrtf_refl_q15", row[10] as Int)
+                put("band_index", band.bandIndex)
+                put("frequency_hz", band.frequencyHz)
+                put("raw_q4", band.rawQ4)
+                put("target_gain_db", band.targetGainDb)
+                put("adaptation_factor_hp", band.adaptationFactorHp)
+                put("adaptation_factor_spk", band.adaptationFactorSpk)
             }
-            db.insertWithOnConflict("stereo_widening", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
-        }
-
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS reduce_reverb (
-                slider_level INTEGER PRIMARY KEY,
-                enable_flag INTEGER NOT NULL,
-                dax_amount INTEGER NOT NULL,
-                oversubtraction_gamma REAL NOT NULL,
-                min_gain_floor_db REAL NOT NULL,
-                late_delay_frames INTEGER NOT NULL,
-                early_to_late_scale_b REAL NOT NULL,
-                subjective_effect TEXT NOT NULL
-            )
-            """.trimIndent()
-        )
-        db.execSQL("DELETE FROM reduce_reverb")
-        val reverbRows = listOf(
-            arrayOf<Any>(0, 0, 0, 0.00, 0.0, 12, 0.00, "Bypass (100% original room acoustics)"),
-            arrayOf<Any>(1, 1, 1, 0.85, -6.0, 12, 0.08, "Subtle tightening of long hall decay"),
-            arrayOf<Any>(2, 1, 2, 1.20, -12.0, 12, 0.08, "Movie Profile Default — balanced dialogue de-reverb"),
-            arrayOf<Any>(3, 1, 3, 1.55, -18.0, 12, 0.08, "Moderate room reflection damping"),
-            arrayOf<Any>(4, 1, 4, 1.90, -24.0, 12, 0.08, "Studio booth dry vocal focus"),
-            arrayOf<Any>(5, 1, 5, 2.25, -30.0, 12, 0.08, "Music Profile Standby — strong echo suppression"),
-            arrayOf<Any>(6, 1, 6, 2.60, -36.0, 12, 0.08, "Deep late-field tail removal"),
-            arrayOf<Any>(7, 1, 7, 2.95, -42.0, 12, 0.08, "Aggressive reverberation stripping"),
-            arrayOf<Any>(8, 1, 8, 3.30, -48.0, 12, 0.08, "Near-anechoic transient isolation"),
-            arrayOf<Any>(9, 1, 9, 3.65, -54.0, 12, 0.08, "Maximum suppression (-54 dB floor)")
-        )
-        for (row in reverbRows) {
-            val cv = ContentValues().apply {
-                put("slider_level", row[0] as Int)
-                put("enable_flag", row[1] as Int)
-                put("dax_amount", row[2] as Int)
-                put("oversubtraction_gamma", row[3] as Double)
-                put("min_gain_floor_db", row[4] as Double)
-                put("late_delay_frames", row[5] as Int)
-                put("early_to_late_scale_b", row[6] as Double)
-                put("subjective_effect", row[7] as String)
-            }
-            db.insertWithOnConflict("reduce_reverb", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+            db.insertWithOnConflict("balanced_ieq_curve", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
         }
 
         db.execSQL(
@@ -388,32 +302,25 @@ class EqualizerDatabaseHelper(context: Context) :
         db.execSQL("DELETE FROM dsp_mathematical_models")
         val modelRows = listOf(
             arrayOf(
-                "stereo_widening_ms",
-                "Stereo Widening (M/S + All-Pass Decorrelator)",
+                "three_d_audio_hrtf",
+                "3D Audio (Spatializer & Virtualizer Engine)",
                 "Time / Z-Domain",
-                "M=(L+R)/2; S=(L-R)/2; S_wide = (1 + amount/64) * H_ap(S); L_out=M+S_wide, R_out=M-S_wide",
-                """{"pole_radius_a":0.65,"delays_48k":[0,10,22,36],"amounts":[0,16,35,103]}"""
+                "tau=(r/c)*(theta+sin(theta)); H_c(z): beta=1-exp(-2*pi*850/fs); y_L = G_dir*L + G_cross*H_c(R[n-D]) + G_refl*S",
+                """{"r_m":0.0875,"c_mps":343,"shadow_fc_hz":850,"modes":["No effect","Near","Middle (Movie)","Far (Music/Custom)"]}"""
             ),
             arrayOf(
-                "reduce_reverb_wiener",
-                "Reduce Reverb (Late-Reverb Spectral Subtraction)",
-                "STFT Frequency Domain (N=512, R=256)",
-                "Phi_rr(k,m)=A*Phi_rr(k,m-1)+B*|X(k,m-D)|^2; G(k,m)=max(G_min, 1 - gamma*sqrt(Phi_rr/Phi_xx))",
-                """{"D_frames":12,"B_scale":0.08,"gamma_base":0.50,"gamma_step":0.35,"floor_step_db":-6.0}"""
+                "dynamic_profile_mi",
+                "Dynamic Profile (Media Intelligence Real-Time Classifier & Steering)",
+                "Time / Frequency Domain",
+                "Gain_virt=P_movie*1.0+P_music*0.35; Target=P_music*T_bal+P_speech*T_dlg; tau_att=P_speech*20+(1-P_speech)*150; Ratio=1.0+1.5*P_surr",
+                """{"ieq_preset":2,"ieq_amount_hp":6,"ieq_amount_spk":4,"dialog_amount":4,"in_target_q4":-256,"out_target_q4":-256}"""
             ),
             arrayOf(
-                "movie_binaural_hrtf",
-                "Movie Profile Binaural HRTF Virtualizer",
-                "Time / IIR Filter Domain",
-                "L_out = G_dir*L + G_cross*H_shadow(R(n-D_itd)) + G_refl*S_dec",
-                """{"azimuth_deg":35,"G_dir":0.9939,"G_cross":0.3407,"G_refl":0.1553,"itd_ms":0.3022,"shadow_fc_hz":850}"""
-            ),
-            arrayOf(
-                "ieq_spectral_balancer",
-                "20-Band Intelligent Equalizer (IEQ)",
+                "balanced_ieq_20band",
+                "Balance (20-Band Balanced IEQ Profile)",
                 "Log-Frequency Biquad Cascade",
-                "Delta_b(m) = clamp(alpha * (T_p(b) - (E_b(m) - E_bar(m))), -12.0, +9.0)",
-                """{"bands":20,"q_factor":2.15,"alpha_default":0.625,"attack_ms":15.0,"release_ms":120.0}"""
+                "E(k,t)=T_bal(k)-S_bar_in(k,t); DeltaG(k,t)=clamp(mu*E(k,t), -6.0, +6.0)",
+                """{"bands":20,"q4_scale":16.0,"mu_hp":0.375,"mu_spk":0.250,"clamp_db":6.0}"""
             )
         )
         for (row in modelRows) {
@@ -442,8 +349,6 @@ class EqualizerDatabaseHelper(context: Context) :
             put("bass_strength", 80)
             put("virtual_bass_enabled", 0)
             put("audio_profile_id", AudioProfile.OFF.id)
-            put("stereo_widening_id", StereoWideningMode.NO_EFFECT.id)
-            put("reduce_reverb_amount", 0)
         }
         db.insertWithOnConflict("enhancer_settings", null, cv, SQLiteDatabase.CONFLICT_IGNORE)
     }
@@ -499,7 +404,7 @@ class EqualizerDatabaseHelper(context: Context) :
             put("split_lr_enabled", 0)
             put("balance_db", 0.0f)
             put("preamp_db", route.defaultSafeCutDb)
-            put("auto_gain_enabled", 1)
+            put("auto_gain_enabled", 0)
             put("limiter_enabled", 1)
             put("limiter_ceiling_db", route.defaultLimiterCeilingDb)
             put("sub_bass_hp_hz", route.defaultHighPassHz)
@@ -524,8 +429,7 @@ class EqualizerDatabaseHelper(context: Context) :
             """
             SELECT ieq_preset_id, ieq_amount, ieq_custom_10_json,
                    dialogue_enabled, dialogue_amount, dialogue_ducking,
-                   bass_enabled, bass_strength, virtual_bass_enabled, audio_profile_id,
-                   stereo_widening_id, reduce_reverb_amount
+                   bass_enabled, bass_strength, virtual_bass_enabled, audio_profile_id
             FROM enhancer_settings WHERE id = 1
             """.trimIndent(),
             null
@@ -541,8 +445,6 @@ class EqualizerDatabaseHelper(context: Context) :
                 val bassStr = cursor.getInt(7).coerceIn(0, 100)
                 val vBassOn = cursor.getInt(8) == 1
                 val prof = AudioProfile.fromId(cursor.getString(9))
-                val widening = StereoWideningMode.fromId(cursor.getString(10))
-                val reduceReverb = cursor.getInt(11).coerceIn(0, 9)
                 return EnhancerConfig(
                     ieqPreset = preset,
                     ieqAmount = ieqAmt,
@@ -553,9 +455,7 @@ class EqualizerDatabaseHelper(context: Context) :
                     bassEnhancerEnabled = bassOn,
                     bassEnhancerStrength = bassStr,
                     virtualBassEnabled = vBassOn,
-                    profile = prof,
-                    stereoWideningMode = widening,
-                    reduceReverbAmount = reduceReverb
+                    profile = prof
                 )
             }
         }
@@ -578,8 +478,6 @@ class EqualizerDatabaseHelper(context: Context) :
             put("bass_strength", config.bassEnhancerStrength.coerceIn(0, 100))
             put("virtual_bass_enabled", if (config.virtualBassEnabled) 1 else 0)
             put("audio_profile_id", config.profile.id)
-            put("stereo_widening_id", config.stereoWideningMode.id)
-            put("reduce_reverb_amount", config.reduceReverbAmount.coerceIn(0, 9))
         }
         db.insertWithOnConflict("enhancer_settings", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
     }

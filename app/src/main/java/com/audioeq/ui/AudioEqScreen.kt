@@ -199,8 +199,6 @@ fun AudioEqScreen(
                         onToggleBassEnhancer = viewModel::setBassEnhancerEnabled,
                         onBassStrengthChange = viewModel::updateBassEnhancerStrength,
                         onToggleVirtualBass = viewModel::setVirtualBassEnabled,
-                        onSelectStereoWideningMode = viewModel::setStereoWideningMode,
-                        onReduceReverbAmountChange = viewModel::updateReduceReverbAmount,
                         onResetAllEnhancers = viewModel::resetEnhancers,
                         onOpenCalibrationSheet = { viewModel.setShowCalibrationSheet(true) },
                         onOpenAbxSheet = { viewModel.setShowAbxSheet(true) }

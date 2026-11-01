@@ -1,8 +1,5 @@
 package com.audioeq.audio
 
-import kotlin.math.cos
-import kotlin.math.sin
-
 class MidSideProcessor(sampleRate: Int = 48000) {
 
     constructor(sampleRate: Double) : this(sampleRate.toInt())
@@ -36,7 +33,7 @@ class MidSideProcessor(sampleRate: Int = 48000) {
     var vocalPresenceBoost: Float = 0.0f
         private set
 
-    var stereoWideningMode: StereoWideningMode = StereoWideningMode.NO_EFFECT
+    var threeDAudioMode: ThreeDAudioMode = ThreeDAudioMode.NO_EFFECT
         private set
 
     private val midVocalFilter = BiquadFilter()
@@ -74,7 +71,7 @@ class MidSideProcessor(sampleRate: Int = 48000) {
             width = width,
             vocalBoost = vocalBoost,
             sampleRate = currentSampleRate,
-            wideningMode = enhancerConfig.stereoWideningMode
+            threeDMode = enhancerConfig.profile.threeDAudioMode
         )
     }
 
@@ -82,13 +79,13 @@ class MidSideProcessor(sampleRate: Int = 48000) {
         width: Float,
         vocalBoost: Float,
         sampleRate: Int = 48000,
-        wideningMode: StereoWideningMode = StereoWideningMode.NO_EFFECT
+        threeDMode: ThreeDAudioMode = ThreeDAudioMode.NO_EFFECT
     ) {
         currentSampleRate = sampleRate
         stereoWidth = width.coerceIn(0.5f, 2.0f)
         vocalPresenceBoost = vocalBoost.coerceIn(0f, 1f)
-        stereoWideningMode = wideningMode
-        sideAllPassDecorrelator.configure(wideningMode, sampleRate)
+        threeDAudioMode = threeDMode
+        sideAllPassDecorrelator.configure(threeDMode, sampleRate)
         configureFilters(sampleRate)
     }
 
@@ -100,8 +97,8 @@ class MidSideProcessor(sampleRate: Int = 48000) {
             gainDb = vocalGainDb,
             q = 1.15
         )
-        val modeSideDb = stereoWideningMode.sideGainDb.toDouble()
-        val airDb = ((stereoWidth - 1.0f).coerceAtLeast(0f) * 2.5) + (modeSideDb * 0.25)
+        val crossGainDb = threeDAudioMode.gCrossLinear * 6.0
+        val airDb = ((stereoWidth - 1.0f).coerceAtLeast(0f) * 2.5) + crossGainDb
         sideHighShelfFilter.configurePeaking(
             frequencyHz = 6500.0,
             sampleRate = sampleRate.toDouble(),
@@ -112,8 +109,8 @@ class MidSideProcessor(sampleRate: Int = 48000) {
 
     fun processInterleavedStereo(buffer: FloatArray, frameCount: Int) {
         val baseWidth = stereoWidth
-        val modeWidth = stereoWideningMode.widthScalar
-        val effectiveWidth = (baseWidth * modeWidth).coerceIn(0.5f, 2.8f)
+        val modeWidth = (1.0 + threeDAudioMode.gCrossLinear + threeDAudioMode.gReflLinear).toFloat()
+        val effectiveWidth = (baseWidth * modeWidth).coerceIn(0.5f, 2.5f)
 
         var idx = 0
         for (frame in 0 until frameCount) {
@@ -126,7 +123,7 @@ class MidSideProcessor(sampleRate: Int = 48000) {
             if (vocalPresenceBoost > 0.01f) {
                 mid = midVocalFilter.processSample(mid)
             }
-            if (stereoWideningMode != StereoWideningMode.NO_EFFECT) {
+            if (threeDAudioMode != ThreeDAudioMode.NO_EFFECT) {
                 side = sideAllPassDecorrelator.processSideSample(side)
             }
             if (effectiveWidth > 1.01f) {
@@ -159,12 +156,12 @@ class MidSideProcessor(sampleRate: Int = 48000) {
     }
 
     fun computeVirtualizerStrengthPermille(): Int {
-        if (stereoWideningMode != StereoWideningMode.NO_EFFECT) {
-            return when (stereoWideningMode) {
-                StereoWideningMode.NO_EFFECT -> 0
-                StereoWideningMode.NEAR -> 320
-                StereoWideningMode.MIDDLE -> 620
-                StereoWideningMode.FAR -> 950
+        if (threeDAudioMode != ThreeDAudioMode.NO_EFFECT) {
+            return when (threeDAudioMode) {
+                ThreeDAudioMode.NO_EFFECT -> 0
+                ThreeDAudioMode.NEAR -> 250
+                ThreeDAudioMode.MIDDLE -> 350
+                ThreeDAudioMode.FAR -> 850
             }
         }
         val normalized = ((stereoWidth - 1.0f) / 1.0f).coerceIn(0f, 1f)

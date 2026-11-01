@@ -140,7 +140,7 @@ class DspReferenceMonitor(
             }
 
             if (applyEq && curve31Db.size == 31) {
-                val (deltaL31, deltaR31) = EnhancerDsp.computeStereoWideningLRDelta31(enhancerConfig, 1.0f)
+                val (deltaL31, deltaR31) = EnhancerDsp.computeProfileSpatialLRDelta31(enhancerConfig.profile)
                 val preLin = if (preampDb > 0f) 10.0.pow(preampDb.toDouble() / 20.0).toFloat() else 1.0f
                 val anchorIndices = intArrayOf(2, 5, 8, 11, 14, 17, 20, 23, 26, 29)
                 for (idx in anchorIndices) {
@@ -160,16 +160,17 @@ class DspReferenceMonitor(
                         }
                     }
                 }
-                if (enhancerConfig.stereoWideningMode != StereoWideningMode.NO_EFFECT) {
+                val threeDMode = enhancerConfig.profile.threeDAudioMode
+                if (threeDMode != ThreeDAudioMode.NO_EFFECT) {
                     val msProc = MidSideProcessor(sampleRate).apply {
                         updateParameters(
                             width = 1.0f,
                             vocalBoost = if (enhancerConfig.dialogueEnhancerEnabled) (enhancerConfig.dialogueAmount / 16f) else 0f,
                             sampleRate = sampleRate,
-                            wideningMode = enhancerConfig.stereoWideningMode
+                            threeDMode = threeDMode
                         )
                     }
-                    val hrtf = BinauralHrtfVirtualizer(sampleRate)
+                    val hrtf = BinauralHrtfVirtualizer(sampleRate, threeDMode)
                     val interleaved = FloatArray(totalFrames * 2)
                     for (n in 0 until totalFrames) {
                         interleaved[n * 2] = dryL[n]

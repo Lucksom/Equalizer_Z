@@ -2,7 +2,6 @@ package com.audioeq.audio
 
 import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.log10
@@ -30,7 +29,7 @@ enum class IeqPreset(
 ) {
     OFF("ieq_off", 0, "No effect", "Bypass intelligent target matching", 0),
     DETAILED("ieq_detailed", 1, "Detailed", "Open treble & upper-mid clarity (+3.7 dB peak)", 10),
-    BALANCED("ieq_balanced", 2, "Balanced", "Natural reference target (+3.4 dB warmth)", 10),
+    BALANCED("ieq_balanced", 2, "Balanced", "20-band Q4 reference target (μ_hp=0.375, μ_spk=0.250)", 6),
     WARM("ieq_warm", 3, "Warm", "Rich low-mid body & smooth highs (+2.9 dB)", 10),
     CUSTOM("ieq_custom", 4, "Customized", "User-editable 10-band target curve", 10);
 
@@ -40,13 +39,101 @@ enum class IeqPreset(
     }
 }
 
+enum class ThreeDAudioMode(
+    val id: String,
+    val index: Int,
+    val modeName: String,
+    val azimuthDeg: Int,
+    val gDirectQ15: Int,
+    val gDirectLinear: Double,
+    val gCrossQ15: Int,
+    val gCrossLinear: Double,
+    val gReflQ15: Int,
+    val gReflLinear: Double,
+    val itdDelaySamples48k: Int,
+    val itdDelayMs: Double,
+    val shadowCutoffHz: Int,
+    val allpassFilterDelay: Int
+) {
+    NO_EFFECT(
+        id = "3d_off",
+        index = 0,
+        modeName = "No effect",
+        azimuthDeg = 0,
+        gDirectQ15 = 32768,
+        gDirectLinear = 1.0000,
+        gCrossQ15 = 0,
+        gCrossLinear = 0.0000,
+        gReflQ15 = 0,
+        gReflLinear = 0.0000,
+        itdDelaySamples48k = 0,
+        itdDelayMs = 0.000,
+        shadowCutoffHz = 0,
+        allpassFilterDelay = 0
+    ),
+    NEAR(
+        id = "3d_near",
+        index = 1,
+        modeName = "Near",
+        azimuthDeg = 16,
+        gDirectQ15 = 32568,
+        gDirectLinear = 0.9939,
+        gCrossQ15 = 8192,
+        gCrossLinear = 0.2500,
+        gReflQ15 = 3276,
+        gReflLinear = 0.1000,
+        itdDelaySamples48k = 7,
+        itdDelayMs = 0.141,
+        shadowCutoffHz = 850,
+        allpassFilterDelay = 10
+    ),
+    MIDDLE(
+        id = "3d_middle",
+        index = 2,
+        modeName = "Middle (Movie)",
+        azimuthDeg = 35,
+        gDirectQ15 = 32568,
+        gDirectLinear = 0.9939,
+        gCrossQ15 = 11164,
+        gCrossLinear = 0.3407,
+        gReflQ15 = 5090,
+        gReflLinear = 0.1553,
+        itdDelaySamples48k = 14,
+        itdDelayMs = 0.302,
+        shadowCutoffHz = 850,
+        allpassFilterDelay = 22
+    ),
+    FAR(
+        id = "3d_far",
+        index = 3,
+        modeName = "Far (Music/Custom)",
+        azimuthDeg = 103,
+        gDirectQ15 = 32568,
+        gDirectLinear = 0.9939,
+        gCrossQ15 = 11164,
+        gCrossLinear = 0.3407,
+        gReflQ15 = 5090,
+        gReflLinear = 0.1553,
+        itdDelaySamples48k = 34,
+        itdDelayMs = 0.707,
+        shadowCutoffHz = 850,
+        allpassFilterDelay = 36
+    );
+
+    companion object {
+        fun fromId(id: String?): ThreeDAudioMode = entries.find { it.id == id } ?: NO_EFFECT
+        fun fromModeName(name: String?): ThreeDAudioMode = entries.find { it.modeName == name } ?: NO_EFFECT
+    }
+}
+
 enum class AudioProfile(
     val id: String,
     val title: String,
     val subtitle: String,
     val badgeLabel: String,
     val virtualizerStrengthPermille: Int,
-    val bassBoostStrengthPermille: Int
+    val bassBoostStrengthPermille: Int,
+    val threeDAudioMode: ThreeDAudioMode
 ) {
     OFF(
         id = "profile_off",
@@ -54,120 +141,39 @@ enum class AudioProfile(
         subtitle = "Pure 10-band EQ & enhancer chain without profile shaping",
         badgeLabel = "Direct",
         virtualizerStrengthPermille = 0,
-        bassBoostStrengthPermille = 0
+        bassBoostStrengthPermille = 0,
+        threeDAudioMode = ThreeDAudioMode.NO_EFFECT
     ),
     DYNAMIC(
         id = "profile_dynamic",
         title = "Dynamic",
-        subtitle = "Energetic tuning with enhanced sub-bass and airy highs",
+        subtitle = "Media Intelligence steering · Balanced IEQ (μ=0.375) · Dialogue (4/16) · Adaptive 35°",
         badgeLabel = "Dynamic",
-        virtualizerStrengthPermille = 180,
-        bassBoostStrengthPermille = 450
+        virtualizerStrengthPermille = 350,
+        bassBoostStrengthPermille = 450,
+        threeDAudioMode = ThreeDAudioMode.MIDDLE
     ),
     BALANCED(
         id = "profile_balanced",
         title = "Balanced",
-        subtitle = "Smooth, neutral studio balance for extended listening",
+        subtitle = "20-band Q4 reference curve (μ_hp=0.375, μ_spk=0.250, ±6 dB clamp)",
         badgeLabel = "Balanced",
         virtualizerStrengthPermille = 0,
-        bassBoostStrengthPermille = 200
+        bassBoostStrengthPermille = 200,
+        threeDAudioMode = ThreeDAudioMode.NO_EFFECT
     ),
     EFFECT_3D(
         id = "profile_3d",
         title = "3D",
-        subtitle = "Binaural spatial audio with wide acoustic imaging",
+        subtitle = "Binaural HRTF crossfeed (G_dir 0.9939, G_cross 0.3407) · Woodworth ITD · 850 Hz shadow",
         badgeLabel = "3D Spatial",
         virtualizerStrengthPermille = 850,
-        bassBoostStrengthPermille = 400
-    ),
-    LIVE_MUSIC(
-        id = "profile_live_music",
-        title = "Live Music",
-        subtitle = "Realistic concert-hall acoustics & natural stage presence",
-        badgeLabel = "Live Stage",
-        virtualizerStrengthPermille = 680,
-        bassBoostStrengthPermille = 380
-    ),
-    MOVIE(
-        id = "profile_movie",
-        title = "Movie",
-        subtitle = "Wide cinematic soundstage, clear dialogue focus & deep sub-bass",
-        badgeLabel = "Movie",
-        virtualizerStrengthPermille = 780,
-        bassBoostStrengthPermille = 600
+        bassBoostStrengthPermille = 400,
+        threeDAudioMode = ThreeDAudioMode.FAR
     );
 
     companion object {
         fun fromId(id: String?): AudioProfile = entries.find { it.id == id } ?: OFF
-    }
-}
-
-enum class StereoWideningMode(
-    val id: String,
-    val index: Int,
-    val title: String,
-    val subtitle: String,
-    val amount: Int,
-    val azimuthDeg: Int,
-    val widthScalar: Float,
-    val sideGainDb: Float,
-    val groupDelayMs: Float,
-    val delaySamples48k: Int
-) {
-    NO_EFFECT(
-        id = "widening_off",
-        index = 0,
-        title = "No effect",
-        subtitle = "0° · W 1.000 · 0.00 dB",
-        amount = 0,
-        azimuthDeg = 0,
-        widthScalar = 1.000f,
-        sideGainDb = 0.00f,
-        groupDelayMs = 0.00f,
-        delaySamples48k = 0
-    ),
-    NEAR(
-        id = "widening_near",
-        index = 1,
-        title = "Near",
-        subtitle = "±16° · W 1.250 · +1.94 dB · 10 smp",
-        amount = 16,
-        azimuthDeg = 16,
-        widthScalar = 1.250f,
-        sideGainDb = 1.94f,
-        groupDelayMs = 0.20f,
-        delaySamples48k = 10
-    ),
-    MIDDLE(
-        id = "widening_middle",
-        index = 2,
-        title = "Middle",
-        subtitle = "±35° · W 1.547 · +3.79 dB · 22 smp",
-        amount = 35,
-        azimuthDeg = 35,
-        widthScalar = 1.547f,
-        sideGainDb = 3.79f,
-        groupDelayMs = 0.45f,
-        delaySamples48k = 22
-    ),
-    FAR(
-        id = "widening_far",
-        index = 3,
-        title = "Far",
-        subtitle = "±103° · W 2.609 · +8.33 dB · 36 smp",
-        amount = 103,
-        azimuthDeg = 103,
-        widthScalar = 2.609f,
-        sideGainDb = 8.33f,
-        groupDelayMs = 0.75f,
-        delaySamples48k = 36
-    );
-
-    val dapAmount: Int get() = amount
-
-    companion object {
-        fun fromId(id: String?): StereoWideningMode = entries.find { it.id == id } ?: NO_EFFECT
-        fun fromIndex(idx: Int): StereoWideningMode = entries.find { it.index == idx } ?: NO_EFFECT
     }
 }
 
@@ -200,19 +206,32 @@ data class EnhancerConfig(
     val bassBoostLevel: Int = 0,
     val bassContour: BassContour = BassContour.TIGHT_PUNCH,
     val virtualBassEnabled: Boolean = false,
-    val profile: AudioProfile = AudioProfile.OFF,
-    val stereoWideningMode: StereoWideningMode = StereoWideningMode.NO_EFFECT,
-    val reduceReverbAmount: Int = 0
+    val profile: AudioProfile = AudioProfile.OFF
 ) {
     fun isAnyActive(): Boolean =
         ieqPreset != IeqPreset.OFF ||
             dialogueEnhancerEnabled ||
             bassEnhancerEnabled ||
             virtualBassEnabled ||
-            profile != AudioProfile.OFF ||
-            stereoWideningMode != StereoWideningMode.NO_EFFECT ||
-            reduceReverbAmount > 0
+            profile != AudioProfile.OFF
 }
+
+data class DynamicProfileSubSystemSpec(
+    val subSystem: String,
+    val steeringTag: String,
+    val enabled: Int,
+    val classifierInput: String,
+    val adaptationFormula: String
+)
+
+data class BalancedIeqBandSpec(
+    val bandIndex: Int,
+    val frequencyHz: Int,
+    val rawQ4: Int,
+    val targetGainDb: Double,
+    val adaptationFactorHp: Double,
+    val adaptationFactorSpk: Double
+)
 
 object EnhancerMath {
     val IEQ_FREQS_20: IntArray get() = EnhancerDsp.IEQ_FREQS_20
@@ -220,24 +239,103 @@ object EnhancerMath {
     val IEQ_BALANCED_20_RAW: IntArray get() = EnhancerDsp.IEQ_BALANCED_Q4
     val IEQ_WARM_20_RAW: IntArray get() = EnhancerDsp.IEQ_WARM_Q4
 
-    fun computeStereoWidthScalar(dapAmount: Int): Double =
-        1.0 + (dapAmount / 64.0)
+    const val HEAD_RADIUS_METERS: Double = 0.0875
+    const val SPEED_OF_SOUND_MPS: Double = 343.0
+    const val CRANIAL_SHADOW_CUTOFF_HZ: Double = 850.0
 
-    fun computeStereoSideGainDb(dapAmount: Int): Double =
-        if (dapAmount == 0) 0.0 else 20.0 * log10(computeStereoWidthScalar(dapAmount))
+    /**
+     * Woodworth Interaural Time Difference (ITD) in milliseconds:
+     * tau(theta) = (r / c) * (theta_rad + sin(theta_rad))
+     */
+    fun computeWoodworthItdMs(azimuthDeg: Int): Double {
+        if (azimuthDeg <= 0) return 0.0
+        val thetaRad = azimuthDeg.toDouble() * PI / 180.0
+        val tauSec = (HEAD_RADIUS_METERS / SPEED_OF_SOUND_MPS) * (thetaRad + sin(thetaRad))
+        return tauSec * 1000.0
+    }
 
-    fun reduceReverbGamma(amount: Int): Double =
-        if (amount == 0) 0.0 else 0.5 + 0.35 * amount
+    /**
+     * Discrete ITD delay samples D = round(tau * fs) at given sample rate (default 48000 Hz).
+     */
+    fun computeWoodworthItdSamples(azimuthDeg: Int, sampleRate: Int = 48000): Int {
+        if (azimuthDeg <= 0) return 0
+        val tauSec = computeWoodworthItdMs(azimuthDeg) / 1000.0
+        return (tauSec * sampleRate).roundToInt()
+    }
 
-    fun reduceReverbSuppressionFloorDb(amount: Int): Double =
-        if (amount == 0) 0.0 else -6.0 * amount
+    /**
+     * Recursive first-order low-pass filter coefficient beta for cranial shadowing (fc = 850 Hz):
+     * beta = 1 - exp(-2 * pi * fc / fs)
+     */
+    fun computeCranialShadowBeta(cutoffHz: Double = CRANIAL_SHADOW_CUTOFF_HZ, sampleRate: Int = 48000): Double {
+        if (cutoffHz <= 0.0 || sampleRate <= 0) return 1.0
+        return 1.0 - exp(-2.0 * PI * cutoffHz / sampleRate.toDouble())
+    }
 
-    fun computeWienerReverbGain(amount: Int, noiseRatio: Double, signalRatio: Double): Double {
-        if (amount == 0) return 1.0
-        val gamma = reduceReverbGamma(amount)
-        val snrFactor = sqrt(noiseRatio / signalRatio)
-        val gain = 1.0 - gamma * snrFactor
-        return gain.coerceAtLeast(0.0)
+    /**
+     * Q15 to linear amplitude decoding: Linear Gain = Value / 32768.0
+     */
+    fun decodeQ15Linear(q15Value: Int): Double = q15Value / 32768.0
+
+    /**
+     * Q4 to decibel decoding: Gain_dB = Raw_Integer / 16.0
+     */
+    fun decodeQ4Db(rawQ4: Int): Double = rawQ4 / 16.0
+
+    /**
+     * Dynamic Profile (id="0") Media Intelligence Adaptive Virtualizer Steering:
+     * Gain_virt = P_movie * 1.0 + P_music * 0.35 + P_speech * 0.0
+     * Cuts to dry center (0.0) when speech dominant (P_speech > 0.7),
+     * expands to full binaural depth (1.0) when movie/action dominant (P_movie > 0.6).
+     */
+    fun computeDynamicMiVirtualizerGain(
+        pMovie: Double,
+        pMusic: Double,
+        pSpeech: Double
+    ): Double {
+        if (pSpeech > 0.7) return 0.0
+        if (pMovie > 0.6) return 1.0
+        return (pMovie * 1.0 + pMusic * 0.35 + pSpeech * 0.0).coerceIn(0.0, 1.0)
+    }
+
+    /**
+     * Dynamic Profile (id="0") Media Intelligence Dynamic Leveler / DRC Steering:
+     * Speech: tau_att = 20 ms, tau_rel = 200 ms
+     * Music: tau_att = 150 ms, tau_rel = 800 ms
+     * Formula: tau_att = P_speech * 20ms + (1 - P_speech) * 150ms
+     */
+    fun computeDynamicMiLevelerTimeConstantsMs(pSpeech: Double): Pair<Double, Double> {
+        val ps = pSpeech.coerceIn(0.0, 1.0)
+        val tauAttMs = ps * 20.0 + (1.0 - ps) * 150.0
+        val tauRelMs = ps * 200.0 + (1.0 - ps) * 800.0
+        return tauAttMs to tauRelMs
+    }
+
+    /**
+     * Dynamic Profile (id="0") Media Intelligence Surround Compressor Steering:
+     * Ratio = 1.0 + 1.5 * P_surround_energy
+     */
+    fun computeDynamicMiSurroundCompressorRatio(pSurroundEnergy: Double): Double {
+        return 1.0 + 1.5 * pSurroundEnergy.coerceIn(0.0, 1.0)
+    }
+
+    /**
+     * Balanced IEQ (<preset id="2" name="balanced" type="ieq">) error-feedback steering:
+     * E(k, t) = T_bal(k) - S_bar_in(k, t)
+     * DeltaG(k, t) = clamp(mu * E(k, t), -6.0 dB, +6.0 dB)
+     * Headphone (ieq-amount = 6): mu = 6/16 = 0.375
+     * Speaker (ieq-amount = 4): mu = 4/16 = 0.250
+     */
+    fun computeBalancedIeqSteeringGainDb(
+        bandIndex: Int,
+        inputSpectralDb: Double,
+        isSpeaker: Boolean = false
+    ): Double {
+        val idx = bandIndex.coerceIn(0, 19)
+        val targetDb = EnhancerDsp.IEQ_BALANCED_Q4[idx] / 16.0
+        val errorDb = targetDb - inputSpectralDb
+        val mu = if (isSpeaker) EnhancerDsp.BALANCED_ADAPTATION_FACTOR_SPK else EnhancerDsp.BALANCED_ADAPTATION_FACTOR_HP
+        return (mu * errorDb).coerceIn(-6.0, 6.0)
     }
 
     fun computeTotalEnhancerOffsetDb(frequencyHz: Double, config: EnhancerConfig): Float {
@@ -291,6 +389,67 @@ object EnhancerDsp {
 
     val IEQ_OFF_Q4: IntArray = IntArray(20) { 0 }
 
+    const val BALANCED_ADAPTATION_FACTOR_HP: Double = 0.375
+    const val BALANCED_ADAPTATION_FACTOR_SPK: Double = 0.250
+    const val BALANCED_DYNAMIC_CLAMP_DB: Double = 6.0
+
+    const val DYNAMIC_PROFILE_ID: Int = 0
+    const val DYNAMIC_IEQ_PRESET: Int = 2
+    const val DYNAMIC_IEQ_AMOUNT_HP: Int = 6
+    const val DYNAMIC_IEQ_AMOUNT_SPK: Int = 4
+    const val DYNAMIC_DIALOGUE_AMOUNT: Int = 4
+    const val DYNAMIC_DIALOGUE_DUCKING: Int = 0
+    const val DYNAMIC_VOLUME_LEVELER_AMOUNT: Int = 0
+    const val DYNAMIC_VOLUME_LEVELER_IN_TARGET_Q4: Int = -256
+    const val DYNAMIC_VOLUME_LEVELER_OUT_TARGET_Q4: Int = -256
+    val DYNAMIC_VIRTUALIZER_RENDERING_CONFIG: IntArray = intArrayOf(35, 32568, 11164, 5090, 0, 3, 3, 3)
+
+    val THREE_D_MOVIE_RENDERING_CONFIG: IntArray = intArrayOf(35, 32568, 11164, 5090, 0, 3, 3, 3)
+    val THREE_D_MUSIC_RENDERING_CONFIG: IntArray = intArrayOf(103, 32568, 11164, 5090, 0, 3, 3, 3)
+
+    val DYNAMIC_PROFILE_SPECS: List<DynamicProfileSubSystemSpec> = listOf(
+        DynamicProfileSubSystemSpec(
+            subSystem = "Adaptive Virtualizer",
+            steeringTag = "mi-adaptive-virtualizer-steering-enable",
+            enabled = 1,
+            classifierInput = "P_movie, P_music, P_speech",
+            adaptationFormula = "Gain_virt = P_movie*1.0 + P_music*0.35 + P_speech*0.0"
+        ),
+        DynamicProfileSubSystemSpec(
+            subSystem = "Intelligent Equalizer",
+            steeringTag = "mi-ieq-steering-enable",
+            enabled = 1,
+            classifierInput = "P_speech, P_music",
+            adaptationFormula = "Target = P_music*T_balanced + P_speech*T_dialogue"
+        ),
+        DynamicProfileSubSystemSpec(
+            subSystem = "Dynamic Leveler / DRC",
+            steeringTag = "mi-dv-leveler-steering-enable",
+            enabled = 1,
+            classifierInput = "P_speech, P_transient",
+            adaptationFormula = "tau_att = P_speech*20ms + (1-P_speech)*150ms"
+        ),
+        DynamicProfileSubSystemSpec(
+            subSystem = "Surround Compressor",
+            steeringTag = "mi-surround-compressor-steering-enable",
+            enabled = 1,
+            classifierInput = "P_surround_energy",
+            adaptationFormula = "Ratio = 1.0 + 1.5 * P_surround_energy"
+        )
+    )
+
+    val BALANCED_IEQ_CURVE_SPECS: List<BalancedIeqBandSpec> = List(20) { idx ->
+        val raw = IEQ_BALANCED_Q4[idx]
+        BalancedIeqBandSpec(
+            bandIndex = idx,
+            frequencyHz = IEQ_FREQS_20[idx],
+            rawQ4 = raw,
+            targetGainDb = ((raw / 16.0) * 100.0).roundToInt() / 100.0,
+            adaptationFactorHp = BALANCED_ADAPTATION_FACTOR_HP,
+            adaptationFactorSpk = BALANCED_ADAPTATION_FACTOR_SPK
+        )
+    }
+
     const val VIRTUAL_BASS_SRC_LOW_HZ: Double = 30.0
     const val VIRTUAL_BASS_SRC_HIGH_HZ: Double = 90.0
     const val VIRTUAL_BASS_DST_LOW_HZ: Double = 75.0
@@ -299,21 +458,6 @@ object EnhancerDsp {
     const val VIRTUAL_BASS_SLOPE_GAIN_DB_PER_OCT: Double = -1.5
     val VIRTUAL_BASS_MIX_FREQS_HZ: Pair<Double, Double> = 90.0 to 469.0
     val VIRTUAL_BASS_HARMONIC_GAINS_DB: Triple<Double, Double, Double> = Triple(-6.0, -3.5, -5.0)
-
-    const val MOVIE_REVERB_SUPPRESSION_AMOUNT: Int = 2
-    const val MOVIE_VIRTUALIZER_AZIMUTH_DEG: Int = 35
-    const val MOVIE_VIRTUALIZER_DIRECT_Q15: Int = 32568
-    const val MOVIE_VIRTUALIZER_CROSS_Q15: Int = 11164
-    const val MOVIE_VIRTUALIZER_REFL_Q15: Int = 5090
-    const val MOVIE_VIRTUALIZER_ITD_MS: Double = 0.3022
-    const val MOVIE_VIRTUALIZER_ITD_SAMPLES_48K: Int = 14
-    const val MOVIE_VIRTUALIZER_SHADOW_LPF_HZ: Double = 850.0
-    const val MOVIE_DIALOGUE_AMOUNT: Int = 4
-    const val MOVIE_DIALOGUE_BOOST_DB: Double = 3.80
-    const val MOVIE_VOLUME_LEVELER_IN_LUFS: Double = -16.0
-    const val MOVIE_VOLUME_LEVELER_OUT_LUFS: Double = -16.0
-    const val MOVIE_VOLMAX_BOOST_HEADPHONE_DB: Double = 2.0
-    const val MOVIE_VOLMAX_BOOST_SPEAKER_DB: Double = 4.0
 
     fun ieqTarget20Db(
         preset: IeqPreset,
@@ -382,7 +526,7 @@ object EnhancerDsp {
         if (config.ieqPreset == IeqPreset.CUSTOM) {
             return DoubleArray(Dsp.F_DP.size) { k ->
                 val f = Dsp.F_DP[k]
-                (alpha * logLinearInterp(freqs20, target20, f)).coerceIn(-8.0, 8.0)
+                (alpha * logLinearInterp(freqs20, target20, f)).coerceIn(-6.0, 6.0)
             }
         }
         val meanTarget = target20.TakeMidrangeMean()
@@ -390,7 +534,7 @@ object EnhancerDsp {
         return DoubleArray(Dsp.F_DP.size) { k ->
             val f = Dsp.F_DP[k]
             val raw = logLinearInterp(freqs20, target20, f) - meanTarget * 0.65
-            (alpha * raw).coerceIn(-0.8, 7.2)
+            (alpha * raw).coerceIn(-0.8, 6.0)
         }
     }
 
@@ -489,94 +633,37 @@ object EnhancerDsp {
         return out
     }
 
-    fun stereoWideningWidthScalar(amount: Int): Double {
-        if (amount <= 0) return 1.0
-        return 1.0 + (amount.coerceIn(0, 103) / 64.0)
-    }
-
-    fun stereoWideningSideGainDb(amount: Int): Double {
-        val w = stereoWideningWidthScalar(amount)
-        return 20.0 * kotlin.math.log10(w)
-    }
-
     fun interpolate31AtFrequency(curve31: DoubleArray, fHz: Double): Double {
         return logLinearInterp(Dsp.F_DP, curve31, fHz)
     }
 
-    fun computeStereoWidening31(mode: StereoWideningMode): DoubleArray {
-        val out = DoubleArray(Dsp.F_DP.size)
-        if (mode == StereoWideningMode.NO_EFFECT) return out
-        val stageScale = when (mode) {
-            StereoWideningMode.NO_EFFECT -> 0.0
-            StereoWideningMode.NEAR -> 0.55
-            StereoWideningMode.MIDDLE -> 0.85
-            StereoWideningMode.FAR -> 1.15
-        }
-        for (k in out.indices) {
-            val f = Dsp.F_DP[k]
-            val warmthStage = AutoEq.biquadDb("PK", 160.0, 1.80 * stageScale, 1.05, f)
-            val pinnaWidth = AutoEq.biquadDb("PK", 3200.0, 3.20 * stageScale, 1.00, f)
-            val spatialAir = AutoEq.biquadDb("HSC", 7800.0, 3.40 * stageScale, 0.72, f)
-            out[k] = warmthStage + pinnaWidth + spatialAir
-        }
-        return out
-    }
-
-    fun computeStereoWideningLRDelta31(
-        config: EnhancerConfig,
-        midSideWidth: Float = 1.0f
-    ): Pair<DoubleArray, DoubleArray> {
-        val deltaL = DoubleArray(Dsp.F_DP.size)
-        val deltaR = DoubleArray(Dsp.F_DP.size)
-        val modeStrength = when (config.stereoWideningMode) {
-            StereoWideningMode.NO_EFFECT -> 0.0
-            StereoWideningMode.NEAR -> 0.52
-            StereoWideningMode.MIDDLE -> 0.82
-            StereoWideningMode.FAR -> 1.10
-        }
-        val manualWidthStrength = ((midSideWidth - 1.0f).coerceIn(0f, 1f)).toDouble() * 0.70
-        val totalStrength = max(modeStrength, manualWidthStrength).coerceIn(0.0, 1.10)
-        if (totalStrength <= 1e-4) return deltaL to deltaR
-
-        val maxDichoticDb = 4.6 * totalStrength
-        for (k in Dsp.F_DP.indices) {
-            val f = Dsp.F_DP[k]
-            if (f < 200.0) {
-                deltaL[k] = 0.0
-                deltaR[k] = 0.0
-            } else {
-                val xoverWeight = ((ln(f / 200.0) / ln(420.0 / 200.0)).coerceIn(0.0, 1.0))
-                val combWave = sin((k - 10) * 1.08 + 0.42)
-                val pinnaAsym = AutoEq.biquadDb("PK", 1950.0, 2.0 * totalStrength, 1.4, f) -
-                    AutoEq.biquadDb("PK", 3550.0, 2.0 * totalStrength, 1.4, f)
-                val diff = (combWave * maxDichoticDb + pinnaAsym) * xoverWeight * AutoEq.taper(f)
-                val energyComp = 0.62 * abs(diff)
-                deltaL[k] = (diff + energyComp).coerceIn(-3.0, 7.0)
-                deltaR[k] = (-diff + energyComp).coerceIn(-3.0, 7.0)
-            }
-        }
-        return deltaL to deltaR
-    }
-
+    /**
+     * Computes dichotic Left/Right spatial stage deltas for 3D Audio and Dynamic profiles
+     * using the ThreeDAudioMode specification (Woodworth ITD comb + 850 Hz cranial shadow + pinna cues).
+     */
     fun computeProfileSpatialLRDelta31(profile: AudioProfile): Pair<DoubleArray, DoubleArray> {
         val deltaL = DoubleArray(Dsp.F_DP.size)
         val deltaR = DoubleArray(Dsp.F_DP.size)
+        val mode = profile.threeDAudioMode
+        if (mode == ThreeDAudioMode.NO_EFFECT) return deltaL to deltaR
+
         val (strength, phaseOffset, compScale) = when (profile) {
-            AudioProfile.OFF -> return deltaL to deltaR
+            AudioProfile.OFF,
             AudioProfile.BALANCED -> return deltaL to deltaR
-            AudioProfile.DYNAMIC -> Triple(0.32, 0.25, 0.60)
+            AudioProfile.DYNAMIC -> Triple(0.35, 0.25, 0.62)
             AudioProfile.EFFECT_3D -> Triple(0.95, 0.55, 0.68)
-            AudioProfile.LIVE_MUSIC -> Triple(0.72, 0.90, 0.65)
-            AudioProfile.MOVIE -> Triple(0.80, 0.40, 0.65)
         }
-        val maxDichoticDb = 4.2 * strength
+        val crossRatio = mode.gCrossLinear / mode.gDirectLinear.coerceAtLeast(0.1)
+        val maxDichoticDb = (4.2 * strength * (0.75 + 0.75 * crossRatio)).coerceIn(0.0, 4.8)
+
         for (k in Dsp.F_DP.indices) {
             val f = Dsp.F_DP[k]
             if (f < 200.0) {
                 deltaL[k] = 0.3 * strength
                 deltaR[k] = 0.3 * strength
             } else {
-                val xoverWeight = ((ln(f / 200.0) / ln(420.0 / 200.0)).coerceIn(0.0, 1.0))
+                val shadowCutoff = mode.shadowCutoffHz.toDouble().coerceAtLeast(850.0)
+                val xoverWeight = ((ln(f / 200.0) / ln(shadowCutoff / 200.0)).coerceIn(0.0, 1.0))
                 val combWave = sin((k - 9) * 1.02 + phaseOffset)
                 val pinnaAsym = AutoEq.biquadDb("PK", 1800.0, 1.8 * strength, 1.35, f) -
                     AutoEq.biquadDb("PK", 3800.0, 1.8 * strength, 1.35, f)
@@ -589,114 +676,68 @@ object EnhancerDsp {
         return deltaL to deltaR
     }
 
-    fun reverbOverSubtractionGamma(amount: Int): Double {
-        val clamped = amount.coerceIn(0, 9)
-        if (clamped == 0) return 0.0
-        return 0.50 + 0.35 * clamped
-    }
-
-    fun reverbMinGainFloorDb(amount: Int): Double {
-        val clamped = amount.coerceIn(0, 9)
-        return -6.0 * clamped
-    }
-
-    fun reverbWienerGainLinear(
-        amount: Int,
-        lateReverbPsd: Double,
-        noisyInputPsd: Double
-    ): Double {
-        val clamped = amount.coerceIn(0, 9)
-        if (clamped == 0 || noisyInputPsd <= 1e-12) return 1.0
-        val gamma = reverbOverSubtractionGamma(clamped)
-        val gMinDb = reverbMinGainFloorDb(clamped)
-        val gMinLin = 10.0.pow(gMinDb / 20.0)
-        val ratio = (lateReverbPsd / max(1e-12, noisyInputPsd)).coerceIn(0.0, 1.0)
-        val rawGain = 1.0 - gamma * sqrt(ratio)
-        return max(gMinLin, rawGain).coerceIn(gMinLin, 1.0)
-    }
-
-    fun computeReduceReverb31(amount: Int): DoubleArray {
+    /**
+     * Computes 31-band profile target curve based on the DAX3 specifications:
+     * - DYNAMIC (id=0): Media Intelligence steering combining Balanced IEQ (ieq-amount=6, mu=0.375),
+     *   Dialogue Enhancer (amount=4, 1-4 kHz presence), and adaptive virtualizer warmth.
+     * - BALANCED (preset id=2): 20-band Balanced IEQ Q4 target matrix (mu_hp=0.375, clamped +-6 dB).
+     * - EFFECT_3D: 3D Audio binaural HRTF crossfeed + early reflection + cranial shadow compensation.
+     */
+    fun computeProfile31(profile: AudioProfile, isSpeaker: Boolean = false): DoubleArray {
         val out = DoubleArray(Dsp.F_DP.size)
-        val clamped = amount.coerceIn(0, 9)
-        if (clamped == 0) return out
-        val norm = (clamped / 9.0).coerceIn(0.0, 1.0)
-        for (k in out.indices) {
-            val f = Dsp.F_DP[k]
-            val muddyRoomCut = AutoEq.biquadDb("PK", 280.0, -1.8 * norm, 1.25, f)
-            val boxyDecayCut = AutoEq.biquadDb("PK", 520.0, -1.2 * norm, 1.35, f)
-            val directPresence = AutoEq.biquadDb("PK", 1850.0, 2.4 * norm, 1.15, f)
-            val transientClarity = AutoEq.biquadDb("PK", 3400.0, 2.0 * norm, 1.25, f)
-            out[k] = (muddyRoomCut + boxyDecayCut + directPresence + transientClarity).coerceIn(-3.0, 4.0)
-        }
-        return out
-    }
+        val freqs20 = DoubleArray(20) { IEQ_FREQS_20[it].toDouble() }
+        val balanced20Db = DoubleArray(20) { IEQ_BALANCED_Q4[it] / 16.0 }
 
-    fun computeProfile31(profile: AudioProfile): DoubleArray {
-        val out = DoubleArray(Dsp.F_DP.size)
         when (profile) {
             AudioProfile.OFF -> return out
             AudioProfile.DYNAMIC -> {
+                val mu = if (isSpeaker) BALANCED_ADAPTATION_FACTOR_SPK else BALANCED_ADAPTATION_FACTOR_HP
+                val dlgAmt = DYNAMIC_DIALOGUE_AMOUNT / 16.0 // 4/16 = 0.25
                 for (k in out.indices) {
                     val f = Dsp.F_DP[k]
-                    out[k] = AutoEq.biquadDb("LSC", 85.0, 5.2, 0.72, f) +
-                        AutoEq.biquadDb("PK", 115.0, 2.8, 1.05, f) +
-                        AutoEq.biquadDb("PK", 2650.0, 3.4, 1.05, f) +
-                        AutoEq.biquadDb("HSC", 8200.0, 4.8, 0.72, f)
+                    val balRef = (mu * logLinearInterp(freqs20, balanced20Db, f).coerceAtLeast(0.0))
+                        .coerceIn(0.0, BALANCED_DYNAMIC_CLAMP_DB)
+                    val miDialogue = AutoEq.biquadDb("PK", 2250.0, 4.8 * dlgAmt, 1.05, f)
+                    val miSubFoundation = AutoEq.biquadDb("LSC", 85.0, 2.8, 0.72, f)
+                    val miAir = AutoEq.biquadDb("HSC", 8500.0, 3.2, 0.72, f)
+                    out[k] = (balRef * 0.55 + miDialogue + miSubFoundation + miAir).coerceIn(0.0, 6.0)
                 }
             }
             AudioProfile.BALANCED -> {
+                val mu = if (isSpeaker) BALANCED_ADAPTATION_FACTOR_SPK else BALANCED_ADAPTATION_FACTOR_HP
                 for (k in out.indices) {
                     val f = Dsp.F_DP[k]
-                    out[k] = AutoEq.biquadDb("LSC", 95.0, 3.2, 0.70, f) +
-                        AutoEq.biquadDb("PK", 420.0, 1.6, 1.10, f) +
-                        AutoEq.biquadDb("PK", 1800.0, 2.8, 0.95, f) +
-                        AutoEq.biquadDb("HSC", 9000.0, 2.6, 0.70, f)
+                    val targetDb = logLinearInterp(freqs20, balanced20Db, f)
+                    // Reference envelope offset steered by mu and clamped to +-6 dB without cutting below 0 dB
+                    val steered = (mu * targetDb.coerceAtLeast(2.0)).coerceIn(0.0, BALANCED_DYNAMIC_CLAMP_DB)
+                    val gentleAir = AutoEq.biquadDb("HSC", 9000.0, 1.8, 0.70, f)
+                    out[k] = (steered + gentleAir).coerceIn(0.0, BALANCED_DYNAMIC_CLAMP_DB)
                 }
             }
             AudioProfile.EFFECT_3D -> {
+                val mode = ThreeDAudioMode.FAR
+                val crossBoostDb = 20.0 * log10(mode.gDirectLinear + mode.gCrossLinear + mode.gReflLinear)
                 for (k in out.indices) {
                     val f = Dsp.F_DP[k]
-                    out[k] = AutoEq.biquadDb("LSC", 80.0, 4.6, 0.72, f) +
-                        AutoEq.biquadDb("PK", 160.0, 2.2, 1.10, f) +
-                        AutoEq.biquadDb("PK", 1650.0, 3.2, 1.10, f) +
-                        AutoEq.biquadDb("PK", 4200.0, 5.2, 1.05, f) +
-                        AutoEq.biquadDb("HSC", 9000.0, 5.4, 0.70, f)
-                }
-            }
-            AudioProfile.LIVE_MUSIC -> {
-                for (k in out.indices) {
-                    val f = Dsp.F_DP[k]
-                    out[k] = AutoEq.biquadDb("LSC", 82.0, 4.4, 0.74, f) +
-                        AutoEq.biquadDb("PK", 210.0, 2.8, 1.05, f) +
-                        AutoEq.biquadDb("PK", 1250.0, 3.6, 1.00, f) +
-                        AutoEq.biquadDb("PK", 3400.0, 4.0, 1.10, f) +
-                        AutoEq.biquadDb("HSC", 8800.0, 3.8, 0.72, f)
-                }
-            }
-            AudioProfile.MOVIE -> {
-                for (k in out.indices) {
-                    val f = Dsp.F_DP[k]
-                    val subCinema = AutoEq.biquadDb("LSC", 72.0, 5.4, 0.72, f)
-                    val lowPunch = AutoEq.biquadDb("PK", 115.0, 3.0, 1.00, f)
-                    val speechBand = AutoEq.biquadDb("PK", 1850.0, MOVIE_DIALOGUE_BOOST_DB, 0.90, f)
-                    val articulationBand = AutoEq.biquadDb("PK", 3150.0, 4.0, 1.10, f)
-                    val surroundAir = AutoEq.biquadDb("HSC", 7800.0, 3.6, 0.72, f)
-                    out[k] = subCinema + lowPunch + speechBand + articulationBand + surroundAir
+                    val shadowComp = AutoEq.biquadDb("LSC", mode.shadowCutoffHz.toDouble(), crossBoostDb, 0.72, f)
+                    val stageWarmth = AutoEq.biquadDb("PK", 160.0, 2.2, 1.10, f)
+                    val pinnaExternalization = AutoEq.biquadDb("PK", 1650.0, 3.2, 1.10, f) +
+                        AutoEq.biquadDb("PK", 4200.0, 5.0, 1.05, f)
+                    val binauralAir = AutoEq.biquadDb("HSC", 9000.0, 5.2, 0.70, f)
+                    out[k] = (shadowComp + stageWarmth + pinnaExternalization + binauralAir).coerceIn(0.0, 8.5)
                 }
             }
         }
         return out
     }
 
-    fun computeCombinedEnhancer31(config: EnhancerConfig): DoubleArray {
+    fun computeCombinedEnhancer31(config: EnhancerConfig, isSpeaker: Boolean = false): DoubleArray {
         val ieq = computeIeq31(config)
         val dlg = computeDialogueEnhancer31(config)
         val bass = computeBassEnhancer31(config)
-        val prof = computeProfile31(config.profile)
-        val wide = computeStereoWidening31(config.stereoWideningMode)
-        val deRev = computeReduceReverb31(config.reduceReverbAmount)
+        val prof = computeProfile31(config.profile, isSpeaker)
         return DoubleArray(Dsp.F_DP.size) { k ->
-            (ieq[k] + dlg[k] + bass[k] + prof[k] + wide[k] + deRev[k]).coerceIn(-12.0, 12.0)
+            (ieq[k] + dlg[k] + bass[k] + prof[k]).coerceIn(-12.0, 12.0)
         }
     }
 
@@ -730,9 +771,9 @@ class NestedAllPassDecorrelator(sampleRate: Int = 48000) {
     private val delayLine = FloatArray(maxDelaySamples)
     private var writeIdx: Int = 0
 
-    fun configure(mode: StereoWideningMode, sampleRate: Int = 48000) {
+    fun configure(mode: ThreeDAudioMode, sampleRate: Int = 48000) {
         poleRadius = 0.65f
-        val scaledDelay = ((mode.delaySamples48k.toDouble() * sampleRate) / 48000.0).roundToInt()
+        val scaledDelay = ((mode.allpassFilterDelay.toDouble() * sampleRate) / 48000.0).roundToInt()
         delaySamples = scaledDelay.coerceIn(0, maxDelaySamples - 1)
     }
 
@@ -754,18 +795,35 @@ class NestedAllPassDecorrelator(sampleRate: Int = 48000) {
     }
 }
 
-class BinauralHrtfVirtualizer(sampleRate: Int = 48000) {
-    private val gDirect: Float = 32568f / 32768f
-    private val gCross: Float = 11164f / 32768f
-    private val gRefl: Float = 5090f / 32768f
-    private var itdSamples: Int = ((0.3022 * sampleRate) / 1000.0).roundToInt().coerceIn(1, 32)
-    private var shadowBeta: Float = (1.0 - exp(-2.0 * PI * 850.0 / sampleRate.toDouble())).toFloat()
+class BinauralHrtfVirtualizer(
+    sampleRate: Int = 48000,
+    mode: ThreeDAudioMode = ThreeDAudioMode.MIDDLE
+) {
+    private var gDirect: Float = (mode.gDirectQ15 / 32768.0).toFloat()
+    private var gCross: Float = (mode.gCrossQ15 / 32768.0).toFloat()
+    private var gRefl: Float = (mode.gReflQ15 / 32768.0).toFloat()
+    private var itdSamples: Int = EnhancerMath.computeWoodworthItdSamples(mode.azimuthDeg, sampleRate).coerceIn(0, 63)
+    private var shadowBeta: Float = EnhancerMath.computeCranialShadowBeta(
+        cutoffHz = if (mode.shadowCutoffHz > 0) mode.shadowCutoffHz.toDouble() else 850.0,
+        sampleRate = sampleRate
+    ).toFloat()
 
     private val delayBufL = FloatArray(64)
     private val delayBufR = FloatArray(64)
     private var writeIdx = 0
     private var lpfStateL = 0f
     private var lpfStateR = 0f
+
+    fun configure(mode: ThreeDAudioMode, sampleRate: Int = 48000) {
+        gDirect = (mode.gDirectQ15 / 32768.0).toFloat()
+        gCross = (mode.gCrossQ15 / 32768.0).toFloat()
+        gRefl = (mode.gReflQ15 / 32768.0).toFloat()
+        itdSamples = EnhancerMath.computeWoodworthItdSamples(mode.azimuthDeg, sampleRate).coerceIn(0, 63)
+        shadowBeta = EnhancerMath.computeCranialShadowBeta(
+            cutoffHz = if (mode.shadowCutoffHz > 0) mode.shadowCutoffHz.toDouble() else 850.0,
+            sampleRate = sampleRate
+        ).toFloat()
+    }
 
     fun reset() {
         delayBufL.fill(0f)
@@ -776,6 +834,9 @@ class BinauralHrtfVirtualizer(sampleRate: Int = 48000) {
     }
 
     fun processPair(leftIn: Float, rightIn: Float): Pair<Float, Float> {
+        if (itdSamples <= 0 && gCross <= 0f) {
+            return leftIn to rightIn
+        }
         delayBufL[writeIdx] = leftIn
         delayBufR[writeIdx] = rightIn
         val readIdx = (writeIdx - itdSamples + 64) % 64
@@ -783,50 +844,14 @@ class BinauralHrtfVirtualizer(sampleRate: Int = 48000) {
         val delayedR = delayBufR[readIdx]
         writeIdx = (writeIdx + 1) % 64
 
-        lpfStateL += shadowBeta * (delayedL - lpfStateL)
-        lpfStateR += shadowBeta * (delayedR - lpfStateR)
+        // Cranial Shadowing Filter H_c(z): y_shadow[n] = beta * x[n - D] + (1 - beta) * y_shadow[n - 1]
+        lpfStateL = shadowBeta * delayedL + (1f - shadowBeta) * lpfStateL
+        lpfStateR = shadowBeta * delayedR + (1f - shadowBeta) * lpfStateR
 
         val surroundS = (leftIn - rightIn) * 0.70710677f
         val outL = gDirect * leftIn + gCross * lpfStateR + gRefl * surroundS
         val outR = gDirect * rightIn + gCross * lpfStateL - gRefl * surroundS
         return outL to outR
-    }
-}
-
-class LateReverbSuppressor(
-    private val delayFrames: Int = 12,
-    private val earlyToLateScaleB: Float = 0.08f,
-    private val rt60Sec: Float = 0.45f,
-    private val hopTimeSec: Float = 0.00533f
-) {
-    private val reverbDecayA: Float = exp(-3.0 * ln(10.0) * hopTimeSec / max(0.05f, rt60Sec)).toFloat()
-    private val frameHistory = FloatArray(delayFrames.coerceAtLeast(2))
-    private var historyIdx = 0
-    private var lateReverbPsd = 0f
-    private var smoothedInputPsd = 1e-6f
-
-    fun reset() {
-        frameHistory.fill(0f)
-        historyIdx = 0
-        lateReverbPsd = 0f
-        smoothedInputPsd = 1e-6f
-    }
-
-    fun computeFrameGain(framePower: Float, amount: Int): Float {
-        val clamped = amount.coerceIn(0, 9)
-        if (clamped == 0) return 1.0f
-        val delayedPower = frameHistory[historyIdx]
-        frameHistory[historyIdx] = framePower
-        historyIdx = (historyIdx + 1) % frameHistory.size
-
-        lateReverbPsd = reverbDecayA * lateReverbPsd + earlyToLateScaleB * delayedPower
-        smoothedInputPsd = 0.85f * smoothedInputPsd + 0.15f * max(1e-9f, framePower)
-
-        return EnhancerDsp.reverbWienerGainLinear(
-            amount = clamped,
-            lateReverbPsd = lateReverbPsd.toDouble(),
-            noisyInputPsd = smoothedInputPsd.toDouble()
-        ).toFloat()
     }
 }
 

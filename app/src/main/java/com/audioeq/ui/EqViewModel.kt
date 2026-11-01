@@ -15,7 +15,6 @@ import com.audioeq.audio.EnhancerDsp
 import com.audioeq.audio.EnhancerMath
 import com.audioeq.audio.IeqPreset
 import com.audioeq.audio.IndexEntry
-import com.audioeq.audio.StereoWideningMode
 import com.audioeq.data.EqRepository
 import com.audioeq.model.EngineMode
 import com.audioeq.model.EqBand
@@ -369,15 +368,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             0.0f
         } else {
             val maxPositiveGain = (effectiveGains.maxOrNull() ?: 0f).coerceAtLeast(0f)
-            val wideningLoad = when (p1.enhancerConfig.stereoWideningMode) {
-                StereoWideningMode.NO_EFFECT -> 0f
-                StereoWideningMode.NEAR -> 0.5f
-                StereoWideningMode.MIDDLE -> 0.9f
-                StereoWideningMode.FAR -> 1.4f
-            }
-            val reverbLoad = p1.enhancerConfig.reduceReverbAmount * 0.12f
             val virtualBassLoad = if (p1.enhancerConfig.virtualBassEnabled) 0.7f else 0f
-            (maxPositiveGain * 0.52f + wideningLoad + reverbLoad + virtualBassLoad + trimmed * 0.35f)
+            (maxPositiveGain * 0.52f + virtualBassLoad + trimmed * 0.35f)
                 .coerceIn(0f, 9.0f)
         }
 
@@ -750,14 +742,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         repository.updateEnhancerConfig { current ->
             current.copy(profile = profile)
         }
-    }
-
-    fun setStereoWideningMode(mode: StereoWideningMode) {
-        repository.updateEnhancerConfig { it.copy(stereoWideningMode = mode) }
-    }
-
-    fun updateReduceReverbAmount(amount: Int) {
-        repository.updateEnhancerConfig { it.copy(reduceReverbAmount = amount.coerceIn(0, 9)) }
     }
 
     fun resetEnhancers() {
