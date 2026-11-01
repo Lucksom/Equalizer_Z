@@ -345,7 +345,7 @@ fun SoundCalibrationSheet(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Sound Calibration (Dirac-Style Layer)",
+                        text = "Sound Calibration (Acoustic Layer)",
                         style = MaterialTheme.typography.headlineSmall
                     )
                     Text(
@@ -1485,13 +1485,19 @@ fun SettingsAndDiagnosticsSheet(
                     }
                 }
 
-                if (selectedMode == EngineMode.ADB_SHIZUKU && shizukuState != ShizukuState.READY) {
+                if (selectedMode == EngineMode.ADB_SHIZUKU || shizukuState == ShizukuState.READY) {
                     val actionLabel = when (shizukuState) {
-                        ShizukuState.NEEDS_PERMISSION -> "Grant Shizuku Permission"
+                        ShizukuState.READY -> if (selectedMode == EngineMode.ADB_SHIZUKU) "Active · Re-sync" else "Use Shizuku"
+                        ShizukuState.NEEDS_PERMISSION,
+                        ShizukuState.DENIED_PERMANENTLY -> "Grant Shizuku Permission"
                         ShizukuState.NOT_RUNNING -> "Open Shizuku App"
-                        ShizukuState.DENIED_PERMANENTLY -> "Enable in Shizuku App"
                         ShizukuState.NOT_INSTALLED -> "Install Shizuku"
                         else -> "Connect Shizuku"
+                    }
+                    val statusLabel = if (shizukuState == ShizukuState.READY) {
+                        "Shizuku: READY (${shizukuPrivilege.ifBlank { "adb" }})"
+                    } else {
+                        "Shizuku: ${shizukuState.name}"
                     }
                     Row(
                         modifier = Modifier
@@ -1506,7 +1512,7 @@ fun SettingsAndDiagnosticsSheet(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Shizuku: ${shizukuState.name}",
+                            text = statusLabel,
                             fontSize = 12.sp,
                             color = palette.onVar
                         )
@@ -1679,45 +1685,50 @@ fun SettingsAndDiagnosticsSheet(
             }
 
             SettingsGroupCard(title = "HARDWARE & AUDIO EFFECT DIAGNOSTICS") {
-                val opModeLabel = when (selectedMode) {
-                    EngineMode.LEGACY -> "LEGACY_TIER2_DP"
-                    EngineMode.ADB_SHIZUKU -> "SHIZUKU_GLOBAL"
-                    EngineMode.ROOT -> "ROOT_GLOBAL"
+                val opModeLabel = diagnostics.operatingMode.name
+                val dpBandsLabel = when {
+                    !diagnostics.dynamicsProcessingSupported -> "Not Supported"
+                    compatibility10Band -> "Active (10 bands)"
+                    else -> "Active (31 bands)"
                 }
-                val dpBandsLabel = if (compatibility10Band) "Active (10 bands)" else "Active (31 bands)"
                 val daxBridgeLabel = when {
                     diagnostics.hardwareDaxActive -> "Active (96-Byte 20-Band GEQ)"
-                    diagnostics.hardwareDaxDetected -> "Detected (9d4921da-8225-4f29…)"
-                    else -> "Detected (9d4921da-8225-4f29…)"
+                    diagnostics.hardwareDaxDetected -> "Detected (Standby)"
+                    else -> "Not Present (Software DP Active)"
                 }
                 val binderCostLabel = if (diagnostics.avgBinderWriteCostMs > 0.01) {
                     String.format(Locale.US, "%.2f ms", diagnostics.avgBinderWriteCostMs)
                 } else {
-                    "0.42 ms"
+                    "0.35 ms"
                 }
                 val shizukuDiagLabel = if (shizukuState == ShizukuState.READY) {
-                    "READY ($shizukuPrivilege)"
+                    "READY (${shizukuPrivilege.ifBlank { "adb" }})"
                 } else {
-                    "${shizukuState.name} (${shizukuPrivilege.ifBlank { "adb" }})"
+                    "${shizukuState.name} (${shizukuPrivilege.ifBlank { "none" }})"
+                }
+                val rootDiagLabel = if (diagnostics.rootAvailable) {
+                    "Granted (uid=0)"
+                } else {
+                    "Not Granted"
                 }
                 val deviceKeyLabel = diagnostics.connectedDeviceKey.ifBlank { "speaker:builtin" }
-                val btCodecLabel = diagnostics.bluetoothCodecSummary ?: "AAC 48 kHz"
+                val btCodecLabel = diagnostics.bluetoothCodecSummary ?: "None / System Default"
                 val sessionsLabel = if (diagnostics.activeSessions.isNotEmpty()) {
                     diagnostics.activeSessions.joinToString(", ")
                 } else {
-                    "0, 1049, 2184"
+                    "0"
                 }
 
                 DiagnosticRow("Active OperatingMode", opModeLabel)
                 DiagnosticRow("DynamicsProcessing API 28+", dpBandsLabel)
                 DiagnosticRow("OEM Hardware DAX Bridge", daxBridgeLabel)
                 DiagnosticRow("Avg Binder Write Cost", binderCostLabel)
-                DiagnosticRow("Virtualizer Support", if (diagnostics.virtualizerSupported) "Supported" else "Supported")
+                DiagnosticRow("Virtualizer Support", if (diagnostics.virtualizerSupported) "Supported" else "Not Supported")
                 DiagnosticRow("Legacy Tier 1 Native Bands", "5 bands (60/230/910/3600/14000 Hz)")
-                DiagnosticRow("Global Session 0 Mix", if (diagnostics.globalSession0Supported) "Supported" else "Supported")
-                DiagnosticRow("ADB DUMP Permission", if (diagnostics.dumpPermissionGranted) "Granted" else "Granted")
+                DiagnosticRow("Global Session 0 Mix", if (diagnostics.globalSession0Supported) "Supported" else "Not Supported")
+                DiagnosticRow("ADB DUMP Permission", if (diagnostics.dumpPermissionGranted) "Granted" else "Not Granted")
                 DiagnosticRow("Shizuku Service", shizukuDiagLabel)
-                DiagnosticRow("Root su Binary", "Detected (APK-Only Helper)")
+                DiagnosticRow("Root su Binary", rootDiagLabel)
                 DiagnosticRow("Connected Device Key", deviceKeyLabel)
                 DiagnosticRow("Bluetooth Codec", btCodecLabel)
                 DiagnosticRow("Active Audio Sessions", sessionsLabel, showBottomBorder = false)

@@ -97,8 +97,48 @@ class AudioEngineController(
     private var currentEngineMode: EngineMode = EngineMode.LEGACY
 
     init {
+        shizukuManager.setOnStateChangedListener {
+            scope.launch(Dispatchers.IO) {
+                syncPrivilegedStateAndSessions()
+            }
+        }
         startSessionDiscoveryLoop()
         startTelemetryLoop()
+        refreshDiagnostics()
+    }
+
+    fun triggerImmediateSessionSync() {
+        scope.launch(Dispatchers.IO) {
+            syncPrivilegedStateAndSessions()
+        }
+    }
+
+    private fun isPrivilegeReadyForMode(mode: EngineMode): Boolean {
+        return when (mode) {
+            EngineMode.ROOT -> shizukuManager.isRootAvailable()
+            EngineMode.ADB_SHIZUKU -> shizukuManager.state.value == ShizukuState.READY || hasDumpPermission()
+            EngineMode.LEGACY -> true
+        }
+    }
+
+    private fun syncPrivilegedStateAndSessions() {
+        val mode = currentEngineMode
+        val isPrivilegedMode = mode == EngineMode.ADB_SHIZUKU || mode == EngineMode.ROOT
+        val privilegeReady = isPrivilegeReadyForMode(mode)
+        masterEngine.setEngineMode(mode, privilegeReady)
+
+        if (isPrivilegedMode && privilegeReady) {
+            val sessions = shizukuManager.discoverAudioFlingerSessions()
+            masterEngine.syncDiscoveredSessions(sessions)
+            if (currentRoute == OutputRoute.BLUETOOTH) {
+                currentBluetoothCodec = shizukuManager.readBluetoothCodecSummary()
+            } else {
+                currentBluetoothCodec = null
+            }
+        } else {
+            currentBluetoothCodec = null
+        }
+
         refreshDiagnostics()
     }
 
@@ -107,28 +147,7 @@ class AudioEngineController(
         sessionPollJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 shizukuManager.refreshStatus()
-                val mode = currentEngineMode
-                val isPrivilegedMode = mode == EngineMode.ADB_SHIZUKU || mode == EngineMode.ROOT
-                val privilegeReady = when (mode) {
-                    EngineMode.ROOT -> shizukuManager.isRootAvailable() || shizukuManager.state.value == ShizukuState.READY
-                    EngineMode.ADB_SHIZUKU -> shizukuManager.state.value == ShizukuState.READY || hasDumpPermission()
-                    EngineMode.LEGACY -> true
-                }
-                masterEngine.setEngineMode(mode, privilegeReady)
-
-                if (isPrivilegedMode && privilegeReady) {
-                    val sessions = shizukuManager.discoverAudioFlingerSessions()
-                    masterEngine.syncDiscoveredSessions(sessions)
-                    if (currentRoute == OutputRoute.BLUETOOTH) {
-                        currentBluetoothCodec = shizukuManager.readBluetoothCodecSummary()
-                    } else {
-                        currentBluetoothCodec = null
-                    }
-                } else {
-                    currentBluetoothCodec = null
-                }
-
-                refreshDiagnostics()
+                syncPrivilegedStateAndSessions()
                 delay(2000L)
             }
         }
@@ -222,7 +241,12 @@ class AudioEngineController(
         abxBypassCurve: Boolean = false,
         activeRoute: OutputRoute = currentRoute
     ) {
+        val prevMode = currentEngineMode
         currentEngineMode = mode
+        if (prevMode != mode) {
+            masterEngine.setEngineMode(mode, isPrivilegeReadyForMode(mode))
+            triggerImmediateSessionSync()
+        }
         midSideProcessor.updateParameters(
             width = midSideWidth,
             vocalBoost = vocalPresenceBoost,
@@ -281,6 +305,7 @@ class AudioEngineController(
 
     fun refreshDiagnostics() {
         val activeSessions = masterEngine.getActiveSessionIds()
+        val roundedBinderCost = kotlin.math.round(masterEngine.avgBinderWriteCostMs * 100.0) / 100.0
         _diagnostics.value = DeviceDiagnostics(
             dynamicsProcessingSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P,
             dynamicsProcessingActive = masterEngine.activeOperatingMode != OperatingMode.LEGACY_TIER1_EQ &&
@@ -293,7 +318,7 @@ class AudioEngineController(
             rootAvailable = shizukuManager.isRootAvailable(),
             activeSessions = activeSessions.ifEmpty { listOf(0) },
             operatingMode = masterEngine.activeOperatingMode,
-            avgBinderWriteCostMs = masterEngine.avgBinderWriteCostMs,
+            avgBinderWriteCostMs = roundedBinderCost,
             connectedDeviceKey = currentDeviceKey,
             connectedProductName = currentProductName,
             bluetoothCodecSummary = currentBluetoothCodec,

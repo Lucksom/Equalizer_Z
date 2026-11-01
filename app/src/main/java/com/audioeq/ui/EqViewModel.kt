@@ -459,6 +459,38 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         loadStoredSpeakerCalibration(repository.activeRoute.value)
         refreshAutoEqCatalog(forceRefresh = false)
 
+        viewModelScope.launch(Dispatchers.IO) {
+            shizukuManager.refreshStatus()
+            if (repository.engineMode.value == EngineMode.ROOT) {
+                val rootOk = shizukuManager.verifyRootAccess()
+                if (!rootOk) {
+                    val fallback = if (shizukuManager.state.value == ShizukuState.READY) {
+                        EngineMode.ADB_SHIZUKU
+                    } else {
+                        EngineMode.LEGACY
+                    }
+                    repository.setEngineMode(fallback)
+                }
+            } else if (shizukuManager.state.value == ShizukuState.READY &&
+                repository.engineMode.value != EngineMode.ADB_SHIZUKU
+            ) {
+                repository.setEngineMode(EngineMode.ADB_SHIZUKU)
+            }
+            engineController.triggerImmediateSessionSync()
+        }
+
+        viewModelScope.launch {
+            var previousShizukuState = shizukuManager.state.value
+            shizukuManager.state.collect { newState ->
+                if (newState == ShizukuState.READY && previousShizukuState != ShizukuState.READY) {
+                    repository.setEngineMode(EngineMode.ADB_SHIZUKU)
+                    engineController.triggerImmediateSessionSync()
+                    _statusBanner.value = "Shizuku permission granted — ADB / Shizuku engine active"
+                }
+                previousShizukuState = newState
+            }
+        }
+
         viewModelScope.launch {
             uiState.collect { state ->
                 val allHp = repository.getAllHeadphoneProfiles()
@@ -907,30 +939,84 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectMode(mode: EngineMode) {
-        if (mode == EngineMode.ROOT && !repository.rootWarningAccepted.value) {
-            _showRootWarningDialog.value = true
-            return
+        when (mode) {
+            EngineMode.ROOT -> {
+                if (!repository.rootWarningAccepted.value) {
+                    _showRootWarningDialog.value = true
+                } else {
+                    verifyAndActivateRootMode()
+                }
+            }
+            EngineMode.ADB_SHIZUKU -> {
+                shizukuManager.clearRootVerification()
+                repository.setEngineMode(EngineMode.ADB_SHIZUKU)
+                shizukuManager.refreshStatus()
+                if (shizukuManager.state.value == ShizukuState.NEEDS_PERMISSION ||
+                    shizukuManager.state.value == ShizukuState.DENIED_PERMANENTLY
+                ) {
+                    shizukuManager.requestPermission()
+                }
+                engineController.triggerImmediateSessionSync()
+            }
+            EngineMode.LEGACY -> {
+                shizukuManager.clearRootVerification()
+                repository.setEngineMode(EngineMode.LEGACY)
+                engineController.triggerImmediateSessionSync()
+            }
         }
-        repository.setEngineMode(mode)
     }
 
     fun confirmRootWarning() {
         repository.setRootWarningAccepted(true)
-        repository.setEngineMode(EngineMode.ROOT)
         _showRootWarningDialog.value = false
+        verifyAndActivateRootMode()
+    }
+
+    private fun verifyAndActivateRootMode() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val rootGranted = shizukuManager.verifyRootAccess()
+            if (rootGranted) {
+                repository.setEngineMode(EngineMode.ROOT)
+                engineController.triggerImmediateSessionSync()
+                _statusBanner.value = "Root su access verified — Root engine active"
+            } else {
+                val fallback = if (shizukuManager.state.value == ShizukuState.READY) {
+                    EngineMode.ADB_SHIZUKU
+                } else {
+                    EngineMode.LEGACY
+                }
+                repository.setEngineMode(fallback)
+                engineController.triggerImmediateSessionSync()
+                _statusBanner.value = "Root permission not granted on this device. Using ${fallback.shortTitle} mode."
+            }
+        }
     }
 
     fun dismissRootWarningAndFallback() {
         _showRootWarningDialog.value = false
-        repository.setEngineMode(EngineMode.LEGACY)
+        shizukuManager.clearRootVerification()
+        val fallback = if (shizukuManager.state.value == ShizukuState.READY) {
+            EngineMode.ADB_SHIZUKU
+        } else {
+            EngineMode.LEGACY
+        }
+        repository.setEngineMode(fallback)
+        engineController.triggerImmediateSessionSync()
     }
 
     fun handleShizukuAction() {
+        shizukuManager.refreshStatus()
         when (shizukuManager.state.value) {
-            ShizukuState.NEEDS_PERMISSION -> shizukuManager.requestPermission()
+            ShizukuState.NEEDS_PERMISSION,
+            ShizukuState.DENIED_PERMANENTLY -> shizukuManager.requestPermission()
             ShizukuState.NOT_RUNNING -> shizukuManager.launchShizukuApp()
-            ShizukuState.DENIED_PERMANENTLY -> shizukuManager.launchShizukuApp()
             ShizukuState.NOT_INSTALLED -> shizukuManager.openPlayStoreForShizuku()
+            ShizukuState.READY -> {
+                repository.setEngineMode(EngineMode.ADB_SHIZUKU)
+                shizukuManager.requestPermission()
+                engineController.triggerImmediateSessionSync()
+                _statusBanner.value = "Shizuku connected & active"
+            }
             else -> shizukuManager.refreshStatus()
         }
     }

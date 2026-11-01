@@ -235,18 +235,26 @@ class AudioEqUnitTest {
     @Test
     fun verifyProfilesDecoupledFromStereoWideningAndNoVolumeSuppression() {
         for (profile in listOf(AudioProfile.EFFECT_3D, AudioProfile.LIVE_MUSIC, AudioProfile.MOVIE, AudioProfile.DYNAMIC, AudioProfile.BALANCED)) {
-            assertEquals("Profile $profile must not force hardware virtualizer", 0, profile.virtualizerStrengthPermille)
+            assertTrue("Profile $profile must have positive bass boost strength", profile.bassBoostStrengthPermille > 0)
             val cfg = EnhancerConfig(
                 profile = profile,
                 stereoWideningMode = StereoWideningMode.NO_EFFECT
             )
+            assertEquals("Profile $profile must keep StereoWideningMode.NO_EFFECT untouched", StereoWideningMode.NO_EFFECT, cfg.stereoWideningMode)
             val (deltaL, deltaR) = com.audioeq.audio.EnhancerDsp.computeStereoWideningLRDelta31(cfg, 1.0f)
-            assertTrue("Profile $profile with NO_EFFECT widening must have zero L delta", deltaL.all { abs(it) < 1e-6 })
-            assertTrue("Profile $profile with NO_EFFECT widening must have zero R delta", deltaR.all { abs(it) < 1e-6 })
+            assertTrue("Profile $profile with NO_EFFECT widening must have zero manual widening L delta", deltaL.all { abs(it) < 1e-6 })
+            assertTrue("Profile $profile with NO_EFFECT widening must have zero manual widening R delta", deltaR.all { abs(it) < 1e-6 })
 
             val curve31 = com.audioeq.audio.EnhancerDsp.computeCombinedEnhancer31(cfg)
             assertTrue("Profile $profile must not cut any frequency band", curve31.all { it >= -0.01 })
-            assertTrue("Profile $profile must provide audible positive enhancement", curve31.any { it > 1.0 })
+            assertTrue("Profile $profile must provide strong audible positive enhancement", (curve31.maxOrNull() ?: 0.0) > 2.5)
+        }
+
+        for (spatialProfile in listOf(AudioProfile.EFFECT_3D, AudioProfile.LIVE_MUSIC, AudioProfile.MOVIE)) {
+            assertTrue("Spatial profile $spatialProfile must enable hardware virtualizer", spatialProfile.virtualizerStrengthPermille >= 650)
+            val (profL, profR) = com.audioeq.audio.EnhancerDsp.computeProfileSpatialLRDelta31(spatialProfile)
+            assertTrue("Spatial profile $spatialProfile must produce dichotic L/R spatial stage", profL.indices.any { abs(profL[it] - profR[it]) > 1.0 })
+            assertTrue("Spatial profile $spatialProfile must have positive energy compensation", (profL.sum() + profR.sum()) > 0.0)
         }
 
         for (mode in listOf(StereoWideningMode.NEAR, StereoWideningMode.MIDDLE, StereoWideningMode.FAR)) {
