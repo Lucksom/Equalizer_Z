@@ -32,7 +32,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.audioeq.model.EngineMode
-import com.audioeq.ui.components.AbxBlindTestSheet
 import com.audioeq.ui.components.EnhancerCard
 import com.audioeq.ui.components.EqualizerCard
 import com.audioeq.ui.components.PresetsCard
@@ -198,9 +197,9 @@ fun AudioEqScreen(
                         onToggleBassEnhancer = viewModel::setBassEnhancerEnabled,
                         onBassStrengthChange = viewModel::updateBassEnhancerStrength,
                         onToggleVirtualBass = viewModel::setVirtualBassEnabled,
+                        onVirtualBassStrengthChange = viewModel::updateVirtualBassStrength,
                         onResetAllEnhancers = viewModel::resetEnhancers,
-                        onOpenCalibrationSheet = { viewModel.setShowCalibrationSheet(true) },
-                        onOpenAbxSheet = { viewModel.setShowAbxSheet(true) }
+                        onOpenCalibrationSheet = { viewModel.setShowCalibrationSheet(true) }
                     )
                 }
 
@@ -271,48 +270,31 @@ fun AudioEqScreen(
         )
     }
 
-    if (uiState.showAbxSheet) {
-        val lastResultText = uiState.abxLastResult?.let {
-            if (it) "Correct! That was B." else "Incorrect. That was A."
-        }
-        AbxBlindTestSheet(
-            listeningChoice = uiState.abxAuditionMode,
-            correctCount = uiState.abxScoreCorrect,
-            trialCount = uiState.abxScoreTotal,
-            lastResultText = lastResultText,
-            onSelectSource = viewModel::auditionAbx,
-            onGuessXIsB = { isB -> viewModel.submitAbxGuess(guessIsA = !isB) },
-            onResetScore = viewModel::resetAbxScore,
-            onDismiss = { viewModel.setShowAbxSheet(false) }
-        )
-    }
-
     if (uiState.showSettingsSheet) {
         SettingsAndDiagnosticsSheet(
             selectedMode = uiState.engineMode,
             shizukuState = uiState.shizukuState,
             shizukuPrivilege = uiState.shizukuPrivilege,
             diagnostics = uiState.diagnostics,
-            highPassHz = uiState.highPassHz,
             splitLREnabled = uiState.splitLREnabled,
             balanceDb = uiState.balanceDb,
             usbBitPerfectEnabled = uiState.usbBitPerfectEnabled,
-            startOnBoot = uiState.startOnBoot,
             compatibility10Band = uiState.compatibility10Band,
             transientMode = uiState.transientMode,
             themeMode = uiState.themeMode,
             seedHex = uiState.seedHex,
             musicOnlyTrackingEnabled = uiState.musicOnlyTrackingEnabled,
+            selectedMusicPackages = uiState.selectedMusicPackages,
             onSelectMode = viewModel::selectMode,
             onShizukuAction = viewModel::handleShizukuAction,
-            onHighPassChange = viewModel::updateHighPassHz,
             onToggleSplitLR = viewModel::setSplitLREnabled,
             onBalanceChange = viewModel::updateBalanceDb,
             onToggleUsbBitPerfect = viewModel::setUsbBitPerfectEnabled,
-            onToggleStartOnBoot = viewModel::setStartOnBoot,
             onToggleCompatibility10Band = viewModel::setCompatibility10Band,
             onToggleTransientMode = viewModel::setTransientMode,
             onToggleMusicOnlyTracking = viewModel::setMusicOnlyTrackingEnabled,
+            onToggleMusicPackage = viewModel::toggleMusicPackage,
+            onAddCustomMusicPackage = viewModel::addCustomMusicPackage,
             onOpenNotificationAccess = viewModel::openNotificationAccessSettings,
             onSelectThemeMode = viewModel::setThemeMode,
             onSelectSeedHex = viewModel::setSeedHex,

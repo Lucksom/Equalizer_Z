@@ -9,9 +9,6 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Boot permission for Root / Service Start-on-Boot (v5 Section 17.2 F12 & 18.2) -->
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-
     <!-- Optional runtime permission for Speaker Self-Calibration wizard (v5 Section 8.2) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
@@ -92,16 +89,6 @@
             android:name=".audio.EqualizerActionReceiver"
             android:enabled="true"
             android:exported="false" />
-
-        <!-- Boot receiver for Start-on-Boot (v5 Section 17.2 F12 & 18.2) -->
-        <receiver
-            android:name=".audio.BootCompletedReceiver"
-            android:enabled="true"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
 
         <provider
             android:name="rikka.shizuku.ShizukuProvider"

@@ -660,6 +660,7 @@ fun SoundCalibrationSheet(
                         filteredBuiltIn.forEach { prof ->
                             val isSelected = prof.id == selectedHeadphoneProfileId
                             Surface(
+                                onClick = { onSelectHeadphoneProfile(prof.id) },
                                 shape = RoundedCornerShape(12.dp),
                                 color = if (isSelected) {
                                     MaterialTheme.colorScheme.primaryContainer
@@ -668,8 +669,6 @@ fun SoundCalibrationSheet(
                                 },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .clickable { onSelectHeadphoneProfile(prof.id) }
                                     .testTag("headphone_profile_${prof.id}")
                             ) {
                                 Row(
@@ -722,12 +721,12 @@ fun SoundCalibrationSheet(
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             matchingCatalog.forEach { entry ->
                                 Surface(
+                                    onClick = { onSelectAutoEqEntry(entry) },
                                     shape = RoundedCornerShape(12.dp),
                                     color = MaterialTheme.colorScheme.surface,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .clickable { onSelectAutoEqEntry(entry) }
+                                        .testTag("autoeq_catalog_${entry.name.hashCode()}")
                                 ) {
                                     Row(
                                         modifier = Modifier
@@ -1116,146 +1115,7 @@ fun SoundCalibrationSheet(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun AbxBlindTestSheet(
-    listeningChoice: String,
-    correctCount: Int,
-    trialCount: Int,
-    lastResultText: String?,
-    onSelectSource: (String) -> Unit,
-    onGuessXIsB: (Boolean) -> Unit,
-    onResetScore: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Text(
-                text = "Blind ABX Listening Test",
-                style = MaterialTheme.typography.headlineSmall
-            )
-            Text(
-                text = "Compares A (Bypass at matched makeup loudness) vs B (Active EQ) vs X (Randomly A or B) to verify audible improvements without volume bias.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                listOf(
-                    "A" to "Listen A (Bypass)",
-                    "B" to "Listen B (EQ On)",
-                    "X" to "Listen X (Hidden)"
-                ).forEach { (code, label) ->
-                    val selected = listeningChoice == code
-                    Surface(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(14.dp))
-                            .clickable { onSelectSource(code) }
-                            .testTag("abx_listen_$code"),
-                        shape = RoundedCornerShape(14.dp),
-                        color = if (selected) {
-                            MaterialTheme.colorScheme.primaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.surfaceContainerHigh
-                        }
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 12.dp, horizontal = 6.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = code,
-                                style = MaterialTheme.typography.titleMedium,
-                                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
-                            )
-                        }
-                    }
-                }
-            }
-
-            Text(
-                text = "Identify Hidden Source X:",
-                style = MaterialTheme.typography.titleSmall
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                FilledTonalButton(
-                    onClick = { onGuessXIsB(false) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                        .testTag("abx_guess_a_button")
-                ) {
-                    Text("X is A (Bypass)", maxLines = 1)
-                }
-                Button(
-                    onClick = { onGuessXIsB(true) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                        .testTag("abx_guess_b_button")
-                ) {
-                    Text("X is B (EQ On)", maxLines = 1)
-                }
-            }
-
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val pct = if (trialCount > 0) (correctCount * 100) / trialCount else 0
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Score: $correctCount / $trialCount ($pct%)",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            text = lastResultText ?: "Switch between A, B, and X while audio plays, then submit your guess.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    TextButton(onClick = onResetScore) {
-                        Text("Reset")
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-    }
-}
 
 @Composable
 private fun CalibrationCurvePreview(
@@ -1322,26 +1182,25 @@ fun SettingsAndDiagnosticsSheet(
     shizukuState: ShizukuState,
     shizukuPrivilege: String,
     diagnostics: DeviceDiagnostics,
-    highPassHz: Float,
     splitLREnabled: Boolean,
     balanceDb: Float,
     usbBitPerfectEnabled: Boolean,
-    startOnBoot: Boolean,
     compatibility10Band: Boolean,
     transientMode: Boolean,
     themeMode: String,
     seedHex: String,
     musicOnlyTrackingEnabled: Boolean = true,
+    selectedMusicPackages: Set<String> = emptySet(),
     onSelectMode: (EngineMode) -> Unit,
     onShizukuAction: () -> Unit,
-    onHighPassChange: (Float) -> Unit,
     onToggleSplitLR: (Boolean) -> Unit,
     onBalanceChange: (Float) -> Unit,
     onToggleUsbBitPerfect: (Boolean) -> Unit,
-    onToggleStartOnBoot: (Boolean) -> Unit,
     onToggleCompatibility10Band: (Boolean) -> Unit,
     onToggleTransientMode: (Boolean) -> Unit,
     onToggleMusicOnlyTracking: (Boolean) -> Unit = {},
+    onToggleMusicPackage: (String) -> Unit = {},
+    onAddCustomMusicPackage: (String) -> Unit = {},
     onOpenNotificationAccess: () -> Unit = {},
     onSelectThemeMode: (String) -> Unit,
     onSelectSeedHex: (String, Boolean) -> Unit,
@@ -1686,18 +1545,7 @@ fun SettingsAndDiagnosticsSheet(
                 }
             }
 
-            SettingsGroupCard(title = "RENDERER, USB DAC & BOOT") {
-                V7SwitchRow(
-                    title = "Start equalizer on boot",
-                    subtitle = "Restores active profile after device reboot",
-                    checked = startOnBoot,
-                    enabled = true,
-                    onCheckedChange = onToggleStartOnBoot,
-                    testTag = "settings_start_on_boot_switch"
-                )
-
-                HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
-
+            SettingsGroupCard(title = "RENDERER & USB DAC") {
                 V7SwitchRow(
                     title = "Compatibility mode (10 bands)",
                     subtitle = "Use 10 pre-EQ bands instead of 31-band PCHIP",
@@ -1731,50 +1579,118 @@ fun SettingsAndDiagnosticsSheet(
                 }
             }
 
-            SettingsGroupCard(title = "SUB-BASS BUTTERWORTH HIGH-PASS") {
-                val hpInt = ((highPassHz / 5f).roundToInt() * 5).coerceIn(0, 200)
-                val hpLabel = if (hpInt == 0) "Off" else "$hpInt Hz"
+            SettingsGroupCard(title = "MUSIC APPS SELECTION (EQ EFFECT WHITELIST)") {
+                Text(
+                    text = "Equalizer and audio enhancers will strictly only affect audio from selected music apps. With any other apps (video players, games, browsers, social media, calls), no effect of the equalizer will affect their audio.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.onVar
+                )
+
+                V7SwitchRow(
+                    title = "Process selected music apps only",
+                    subtitle = "Bypasses all audio effects for non-music applications",
+                    checked = musicOnlyTrackingEnabled,
+                    enabled = true,
+                    onCheckedChange = onToggleMusicOnlyTracking,
+                    testTag = "music_only_tracking_switch"
+                )
+
+                HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
+
+                Text(
+                    text = "Allowed Music Packages (${selectedMusicPackages.size} active):",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = palette.primary
+                )
+
+                var customPackageInput by remember { mutableStateOf("") }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = customPackageInput,
+                        onValueChange = { customPackageInput = it },
+                        label = { Text("Add Package Name") },
+                        placeholder = { Text("e.g., com.example.player") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("custom_package_input")
+                    )
+                    Button(
+                        onClick = {
+                            val trimmed = customPackageInput.trim().lowercase()
+                            if (trimmed.isNotEmpty()) {
+                                onAddCustomMusicPackage(trimmed)
+                                customPackageInput = ""
+                            }
+                        },
+                        enabled = customPackageInput.isNotBlank(),
+                        modifier = Modifier.testTag("add_custom_package_button")
+                    ) {
+                        Text("Add")
+                    }
+                }
+
+                val allDisplayPackages = remember(selectedMusicPackages) {
+                    val map = LinkedHashMap<String, String>()
+                    com.audioeq.audio.MusicAppTracker.POPULAR_MUSIC_PACKAGES.forEach { (pkg, name) ->
+                        map[pkg] = name
+                    }
+                    selectedMusicPackages.forEach { pkg ->
+                        if (!map.containsKey(pkg)) {
+                            map[pkg] = pkg.substringAfterLast('.').replaceFirstChar { it.uppercase() }
+                        }
+                    }
+                    map.entries.toList()
+                }
 
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Cutoff",
-                            fontSize = 12.sp,
-                            color = palette.onVar
-                        )
-                        Text(
-                            text = hpLabel,
-                            fontFamily = JetBrainsMonoFontFamily,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 12.sp,
-                            color = palette.primary
-                        )
+                    allDisplayPackages.forEach { (pkg, label) ->
+                        val isChecked = selectedMusicPackages.contains(pkg)
+                        Surface(
+                            onClick = { onToggleMusicPackage(pkg) },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isChecked) palette.primaryC.copy(alpha = 0.45f) else palette.sHigh,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("music_package_row_${pkg.hashCode()}")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = palette.onSurface
+                                    )
+                                    Text(
+                                        text = pkg,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = palette.onVar,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Switch(
+                                    checked = isChecked,
+                                    onCheckedChange = { onToggleMusicPackage(pkg) },
+                                    modifier = Modifier.testTag("package_switch_${pkg.hashCode()}")
+                                )
+                            }
+                        }
                     }
-                    Slider(
-                        value = hpInt.toFloat(),
-                        onValueChange = { raw ->
-                            val stepped = ((raw / 5f).roundToInt() * 5).toFloat()
-                            onHighPassChange(stepped)
-                        },
-                        valueRange = 0f..200f,
-                        steps = 39,
-                        colors = SliderDefaults.colors(
-                            thumbColor = palette.primary,
-                            activeTrackColor = palette.primary,
-                            inactiveTrackColor = palette.sTop
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(28.dp)
-                            .testTag("high_pass_slider")
-                    )
                 }
             }
 

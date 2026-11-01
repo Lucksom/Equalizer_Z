@@ -58,10 +58,8 @@ class EqRepository(context: Context) {
     )
     val rootWarningAccepted: StateFlow<Boolean> = _rootWarningAccepted.asStateFlow()
 
-    private val _startOnBoot = MutableStateFlow(
-        prefs.getBoolean(KEY_START_ON_BOOT, true)
-    )
-    val startOnBoot: StateFlow<Boolean> = _startOnBoot.asStateFlow()
+    private val _selectedMusicPackages = MutableStateFlow<Set<String>>(loadSelectedMusicPackages())
+    val selectedMusicPackages: StateFlow<Set<String>> = _selectedMusicPackages.asStateFlow()
 
     private val _compatibility10Band = MutableStateFlow(
         prefs.getBoolean(KEY_COMPAT_10_BAND, false)
@@ -107,6 +105,7 @@ class EqRepository(context: Context) {
 
     init {
         prefs.registerOnSharedPreferenceChangeListener(prefChangeListener)
+        com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(_selectedMusicPackages.value)
     }
 
     companion object {
@@ -115,7 +114,7 @@ class EqRepository(context: Context) {
         private const val KEY_ACTIVE_ROUTE = "active_route"
         private const val KEY_ACTIVE_DEVICE_KEY = "active_device_key"
         private const val KEY_ROOT_WARNING_ACCEPTED = "root_warning_accepted"
-        private const val KEY_START_ON_BOOT = "start_on_boot"
+        private const val KEY_SELECTED_MUSIC_PACKAGES = "selected_music_packages"
         private const val KEY_COMPAT_10_BAND = "compat_10_band"
         private const val KEY_TRANSIENT_MODE = "transient_mode"
         private const val KEY_USB_BIT_PERFECT = "usb_bit_perfect"
@@ -158,10 +157,26 @@ class EqRepository(context: Context) {
         _rootWarningAccepted.value = accepted
     }
 
-    fun setStartOnBoot(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_START_ON_BOOT, enabled).apply()
-        dbHelper.setSetting(KEY_START_ON_BOOT, enabled.toString())
-        _startOnBoot.value = enabled
+    fun setSelectedMusicPackages(pkgs: Set<String>) {
+        _selectedMusicPackages.value = pkgs
+        prefs.edit().putStringSet(KEY_SELECTED_MUSIC_PACKAGES, pkgs).apply()
+        com.audioeq.audio.MusicAppTracker.setSelectedMusicPackages(pkgs)
+    }
+
+    fun toggleMusicPackage(pkg: String) {
+        val current = _selectedMusicPackages.value.toMutableSet()
+        if (current.contains(pkg)) {
+            current.remove(pkg)
+        } else {
+            current.add(pkg)
+        }
+        setSelectedMusicPackages(current)
+    }
+
+    private fun loadSelectedMusicPackages(): Set<String> {
+        val stored = prefs.getStringSet(KEY_SELECTED_MUSIC_PACKAGES, null)
+        if (stored != null) return stored
+        return com.audioeq.audio.MusicAppTracker.POPULAR_MUSIC_PACKAGES.map { it.first }.toSet()
     }
 
     fun setCompatibility10Band(enabled: Boolean) {

@@ -91,24 +91,18 @@ data class EqUiState(
     val diagnostics: DeviceDiagnostics = DeviceDiagnostics(),
     val shizukuState: ShizukuState = ShizukuState.NOT_RUNNING,
     val shizukuPrivilege: String = "",
-    val startOnBoot: Boolean = true,
     val compatibility10Band: Boolean = false,
     val transientMode: Boolean = false,
     val usbBitPerfectEnabled: Boolean = false,
     val musicOnlyTrackingEnabled: Boolean = true,
+    val selectedMusicPackages: Set<String> = emptySet(),
     val themeMode: String = "light",
     val seedHex: String = "#5B8CFF",
     val isSeedFromWallpaper: Boolean = false,
     val showSavePresetDialog: Boolean = false,
     val showRootWarningDialog: Boolean = false,
     val showCalibrationSheet: Boolean = false,
-    val showAbxSheet: Boolean = false,
     val showSettingsSheet: Boolean = false,
-    val abxScoreCorrect: Int = 0,
-    val abxScoreTotal: Int = 0,
-    val abxLastResult: Boolean? = null,
-    val abxAuditionMode: String = "X",
-    val abxSourceId: String = "pink_noise",
     val statusBannerMessage: String? = null
 )
 
@@ -142,16 +136,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     private val _showSavePresetDialog = MutableStateFlow(false)
     private val _showRootWarningDialog = MutableStateFlow(false)
     private val _showCalibrationSheet = MutableStateFlow(false)
-    private val _showAbxSheet = MutableStateFlow(false)
     private val _showSettingsSheet = MutableStateFlow(false)
-
-    private val _abxScoreCorrect = MutableStateFlow(0)
-    private val _abxScoreTotal = MutableStateFlow(0)
-    private val _abxLastResult = MutableStateFlow<Boolean?>(null)
-    private val _abxAuditionMode = MutableStateFlow("X")
-    private val _abxSourceId = MutableStateFlow("pink_noise")
-    private val _abxHiddenIsA = MutableStateFlow(true)
-    private val _abxBypassCurve = MutableStateFlow(false)
 
     private val _statusBanner = MutableStateFlow<String?>(null)
     private val _isEqEnabled = MutableStateFlow(true)
@@ -240,12 +225,12 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private val flow3A = combine(
-        repository.startOnBoot,
+        repository.selectedMusicPackages,
         repository.compatibility10Band,
         repository.transientMode,
         repository.usbBitPerfectEnabled
-    ) { boot, compat10, trans, usb ->
-        Intermediate3A(boot, compat10, trans, usb)
+    ) { pkgs, compat10, trans, usb ->
+        Intermediate3A(pkgs, compat10, trans, usb)
     }
 
     private val flow3B = combine(
@@ -259,7 +244,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     private val flowP3 = combine(flow3A, flow3B) { a, b ->
         PartialUiState3(
-            startOnBoot = a.startOnBoot,
+            selectedMusicPackages = a.selectedMusicPackages,
             compatibility10Band = a.compatibility10Band,
             transientMode = a.transientMode,
             usbBitPerfectEnabled = a.usbBitPerfectEnabled,
@@ -311,11 +296,10 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     private val flow5B = combine(
         _showCalibrationSheet,
-        _showAbxSheet,
         _showSettingsSheet,
         _statusBanner
-    ) { calS, abxS, setS, banner ->
-        Intermediate5B(calS, abxS, setS, banner)
+    ) { calS, setS, banner ->
+        Intermediate5B(calS, setS, banner)
     }
 
     private val flowP5 = combine(flow5A, flow5B) { a, b ->
@@ -324,7 +308,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             showSavePresetDialog = a.showSavePresetDialog,
             showRootWarningDialog = a.showRootWarningDialog,
             showCalibrationSheet = b.showCalibrationSheet,
-            showAbxSheet = b.showAbxSheet,
             showSettingsSheet = b.showSettingsSheet,
             statusBannerMessage = b.statusBannerMessage
         )
@@ -433,24 +416,18 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             diagnostics = p2.diagnostics,
             shizukuState = p2.shizukuState,
             shizukuPrivilege = p2.shizukuPrivilege,
-            startOnBoot = p3.startOnBoot,
             compatibility10Band = p3.compatibility10Band,
             transientMode = p3.transientMode,
             usbBitPerfectEnabled = p3.usbBitPerfectEnabled,
             musicOnlyTrackingEnabled = p3.musicOnlyTrackingEnabled,
+            selectedMusicPackages = p3.selectedMusicPackages,
             themeMode = p3.themeMode,
             seedHex = p3.seedHex,
             isSeedFromWallpaper = p3.isSeedFromWallpaper,
             showSavePresetDialog = p5.showSavePresetDialog,
             showRootWarningDialog = p5.showRootWarningDialog,
             showCalibrationSheet = p5.showCalibrationSheet,
-            showAbxSheet = p5.showAbxSheet,
             showSettingsSheet = p5.showSettingsSheet,
-            abxScoreCorrect = _abxScoreCorrect.value,
-            abxScoreTotal = _abxScoreTotal.value,
-            abxLastResult = _abxLastResult.value,
-            abxAuditionMode = _abxAuditionMode.value,
-            abxSourceId = _abxSourceId.value,
             statusBannerMessage = p5.statusBannerMessage
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, EqUiState())
@@ -525,7 +502,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                     compatibility10Band = state.compatibility10Band,
                     transientMode = state.transientMode,
                     usbBitPerfectEnabled = state.usbBitPerfectEnabled,
-                    abxBypassCurve = _abxBypassCurve.value,
                     activeRoute = state.activeRoute,
                     musicOnlyTracking = state.musicOnlyTrackingEnabled
                 )
@@ -757,8 +733,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             }
             cur.copy(
                 bassEnhancerEnabled = enabled,
-                bassEnhancerStrength = nextStrength,
-                virtualBassEnabled = if (enabled) cur.virtualBassEnabled else false
+                bassEnhancerStrength = nextStrength
             )
         }
     }
@@ -768,18 +743,31 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         repository.updateEnhancerConfig { cur ->
             cur.copy(
                 bassEnhancerEnabled = clamped > 0,
-                bassEnhancerStrength = clamped,
-                virtualBassEnabled = if (clamped > 0) cur.virtualBassEnabled else false
+                bassEnhancerStrength = clamped
             )
         }
     }
 
     fun setVirtualBassEnabled(enabled: Boolean) {
         repository.updateEnhancerConfig { cur ->
+            val nextStrength = if (enabled && cur.virtualBassStrength == 0) {
+                75
+            } else {
+                cur.virtualBassStrength
+            }
             cur.copy(
-                bassEnhancerEnabled = if (enabled) true else cur.bassEnhancerStrength > 0,
-                bassEnhancerStrength = if (enabled && cur.bassEnhancerStrength == 0) 80 else cur.bassEnhancerStrength,
-                virtualBassEnabled = enabled
+                virtualBassEnabled = enabled,
+                virtualBassStrength = nextStrength
+            )
+        }
+    }
+
+    fun updateVirtualBassStrength(strength: Int) {
+        val clamped = strength.coerceIn(0, 100)
+        repository.updateEnhancerConfig { cur ->
+            cur.copy(
+                virtualBassEnabled = clamped > 0,
+                virtualBassStrength = clamped
             )
         }
     }
@@ -892,79 +880,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun selectAbxListeningSource(sourceId: String) {
-        _abxSourceId.value = sourceId
-    }
-
-    fun auditionAbx(channel: String) {
-        _abxAuditionMode.value = channel
-        val s = uiState.value
-        val enh31 = EnhancerDsp.computeCombinedEnhancer31(s.enhancerConfig)
-        val cal31 = DoubleArray(31) {
-            (s.speakerCorrection31Db.getOrElse(it) { 0f }.toDouble() + enh31[it]).coerceIn(-15.0, 15.0)
-        }
-        val target31 = Dsp.compute31BandTargets(
-            userGains10 = DoubleArray(10) { if (s.isEqEnabled) (s.bands[it].gainDb * s.intensity).toDouble() else 0.0 },
-            cal31 = cal31,
-            hpFc = s.highPassHz.toDouble(),
-            iso226On = s.iso226Enabled,
-            volIdx = 10,
-            volMax = 15
-        ).map { it.toFloat() }
-
-        when (channel) {
-            "A" -> {
-                _abxBypassCurve.value = false
-                dspMonitor.playAbxAuditionStimulus(
-                    sourceId = _abxSourceId.value,
-                    applyEq = true,
-                    curve31Db = target31,
-                    preampDb = s.preampDb,
-                    enhancerConfig = s.enhancerConfig
-                )
-            }
-            "B" -> {
-                _abxBypassCurve.value = true
-                dspMonitor.playAbxAuditionStimulus(
-                    sourceId = _abxSourceId.value,
-                    applyEq = false,
-                    curve31Db = emptyList(),
-                    preampDb = 0f,
-                    enhancerConfig = EnhancerConfig()
-                )
-            }
-            "X" -> {
-                val isEq = _abxHiddenIsA.value
-                _abxBypassCurve.value = !isEq
-                dspMonitor.playAbxAuditionStimulus(
-                    sourceId = _abxSourceId.value,
-                    applyEq = isEq,
-                    curve31Db = if (isEq) target31 else emptyList(),
-                    preampDb = if (isEq) s.preampDb else 0f,
-                    enhancerConfig = if (isEq) s.enhancerConfig else EnhancerConfig()
-                )
-            }
-        }
-    }
-
-    fun submitAbxGuess(guessIsA: Boolean) {
-        val actualIsA = _abxHiddenIsA.value
-        val correct = (guessIsA == actualIsA)
-        _abxLastResult.value = correct
-        _abxScoreTotal.value += 1
-        if (correct) {
-            _abxScoreCorrect.value += 1
-        }
-        _abxHiddenIsA.value = (Math.random() >= 0.5)
-    }
-
-    fun resetAbxScore() {
-        _abxScoreCorrect.value = 0
-        _abxScoreTotal.value = 0
-        _abxLastResult.value = null
-        _abxHiddenIsA.value = (Math.random() >= 0.5)
-    }
-
     fun selectMode(mode: EngineMode) {
         when (mode) {
             EngineMode.ROOT -> {
@@ -1048,8 +963,20 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setStartOnBoot(enabled: Boolean) {
-        repository.setStartOnBoot(enabled)
+    fun toggleMusicPackage(pkg: String) {
+        repository.toggleMusicPackage(pkg)
+        engineController.triggerImmediateSessionSync()
+    }
+
+    fun addCustomMusicPackage(pkg: String) {
+        val trimmed = pkg.trim().lowercase()
+        if (trimmed.isNotEmpty()) {
+            val current = repository.selectedMusicPackages.value.toMutableSet()
+            current.add(trimmed)
+            repository.setSelectedMusicPackages(current)
+            engineController.triggerImmediateSessionSync()
+            _statusBanner.value = "Added $trimmed to music packages whitelist"
+        }
     }
 
     fun setCompatibility10Band(enabled: Boolean) {
@@ -1127,16 +1054,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         _showCalibrationSheet.value = false
     }
 
-    fun openAbxSheet() {
-        resetAbxScore()
-        _showAbxSheet.value = true
-    }
-
-    fun dismissAbxSheet() {
-        _abxBypassCurve.value = false
-        _showAbxSheet.value = false
-    }
-
     fun openSettingsSheet() {
         _showSettingsSheet.value = true
     }
@@ -1191,7 +1108,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setAbCompare(enabled: Boolean) {
         _isAbCompare.value = enabled
-        _abxBypassCurve.value = enabled
     }
 
     fun setShowSettingsSheet(show: Boolean) {
@@ -1204,10 +1120,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setShowCalibrationSheet(show: Boolean) {
         _showCalibrationSheet.value = show
-    }
-
-    fun setShowAbxSheet(show: Boolean) {
-        _showAbxSheet.value = show
     }
 
     fun dismissStatusBanner() {
@@ -1243,7 +1155,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     private data class Intermediate3A(
-        val startOnBoot: Boolean,
+        val selectedMusicPackages: Set<String>,
         val compatibility10Band: Boolean,
         val transientMode: Boolean,
         val usbBitPerfectEnabled: Boolean
@@ -1278,7 +1190,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     private data class Intermediate5B(
         val showCalibrationSheet: Boolean,
-        val showAbxSheet: Boolean,
         val showSettingsSheet: Boolean,
         val statusBannerMessage: String?
     )
@@ -1310,7 +1221,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     private data class PartialUiState3(
-        val startOnBoot: Boolean,
+        val selectedMusicPackages: Set<String>,
         val compatibility10Band: Boolean,
         val transientMode: Boolean,
         val usbBitPerfectEnabled: Boolean,
@@ -1336,7 +1247,6 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         val showSavePresetDialog: Boolean,
         val showRootWarningDialog: Boolean,
         val showCalibrationSheet: Boolean,
-        val showAbxSheet: Boolean,
         val showSettingsSheet: Boolean,
         val statusBannerMessage: String?
     )

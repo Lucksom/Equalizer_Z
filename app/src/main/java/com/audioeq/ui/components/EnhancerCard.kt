@@ -74,9 +74,9 @@ fun EnhancerCard(
     onToggleBassEnhancer: (Boolean) -> Unit = {},
     onBassStrengthChange: (Int) -> Unit = {},
     onToggleVirtualBass: (Boolean) -> Unit = {},
+    onVirtualBassStrengthChange: (Int) -> Unit = {},
     onResetAllEnhancers: () -> Unit,
     onOpenCalibrationSheet: () -> Unit,
-    onOpenAbxSheet: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val palette = LocalMonetPalette.current
@@ -229,10 +229,7 @@ fun EnhancerCard(
                     )
                 }
             ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
+                AnimatedVisibility(visible = config.bassEnhancerEnabled) {
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -278,17 +275,86 @@ fun EnhancerCard(
                                 .testTag("bass_enhancer_strength_slider")
                         )
                     }
+                }
+            }
 
-                    HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
-
-                    V7SwitchRow(
-                        title = "Virtual bass harmonic synthesis",
-                        subtitle = "H2 (−2 dB), H3 (−9 dB), H4 (−12 dB)",
+            EnhancerModuleCard(
+                title = "Virtual Bass",
+                subtitle = if (config.virtualBassEnabled) {
+                    "${config.virtualBassStrength}% harmonic synthesis (H2, H3, H4 missing fundamental)"
+                } else {
+                    "Off"
+                },
+                badgeText = if (config.virtualBassEnabled) "Harmonic" else null,
+                isActive = config.virtualBassEnabled,
+                headerTrailing = {
+                    V7PillSwitch(
                         checked = config.virtualBassEnabled,
                         enabled = enabled,
-                        onCheckedChange = onToggleVirtualBass,
-                        testTag = "virtual_bass_switch"
+                        onCheckedChange = { onToggleVirtualBass(it) },
+                        modifier = Modifier.testTag("virtual_bass_switch")
                     )
+                },
+                iconContent = { tint ->
+                    Canvas(modifier = Modifier.size(18.dp)) {
+                        val w = size.width
+                        val h = size.height
+                        val sw = 1.8.dp.toPx()
+                        val path = Path().apply {
+                            moveTo(w * 0.10f, h * 0.50f)
+                            cubicTo(w * 0.25f, h * 0.15f, w * 0.35f, h * 0.15f, w * 0.50f, h * 0.50f)
+                            cubicTo(w * 0.65f, h * 0.85f, w * 0.75f, h * 0.85f, w * 0.90f, h * 0.50f)
+                        }
+                        drawPath(path, color = tint, style = Stroke(width = sw, cap = StrokeCap.Round))
+                    }
+                }
+            ) {
+                AnimatedVisibility(visible = config.virtualBassEnabled) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Harmonic intensity",
+                                fontSize = 12.sp,
+                                color = palette.onVar
+                            )
+                            Text(
+                                text = "${config.virtualBassStrength}%",
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 12.sp,
+                                color = palette.primary,
+                                modifier = Modifier.testTag("virtual_bass_strength_text")
+                            )
+                        }
+                        Slider(
+                            value = config.virtualBassStrength.toFloat(),
+                            onValueChange = { onVirtualBassStrengthChange(it.roundToInt()) },
+                            valueRange = 0f..100f,
+                            steps = 19,
+                            enabled = enabled,
+                            colors = SliderDefaults.colors(
+                                thumbColor = palette.primary,
+                                activeTrackColor = palette.primary,
+                                inactiveTrackColor = palette.sTop
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(28.dp)
+                                .testTag("virtual_bass_strength_slider")
+                        )
+                        Text(
+                            text = "Synthesizes psychoacoustic missing-fundamental harmonics (80 Hz, 125 Hz, 200 Hz) so deep bass is clearly heard without distorting small speakers or earbuds.",
+                            fontSize = 11.sp,
+                            color = palette.onVar
+                        )
+                    }
                 }
             }
 
@@ -601,70 +667,34 @@ fun EnhancerCard(
                 }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(palette.sLow)
+                    .border(1.dp, palette.outlineV.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+                    .clickable(enabled = enabled) { onOpenCalibrationSheet() }
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                    .testTag("open_sound_calibration_button"),
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(palette.sLow)
-                        .border(1.dp, palette.outlineV.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
-                        .clickable(enabled = enabled) { onOpenCalibrationSheet() }
-                        .padding(horizontal = 14.dp, vertical = 12.dp)
-                        .testTag("open_sound_calibration_button"),
-                    contentAlignment = Alignment.Center
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Hearing,
-                            contentDescription = "Sound Calibration",
-                            tint = palette.primary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = "AutoEq & Calibrate",
-                            fontFamily = SpaceGroteskFontFamily,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 12.sp,
-                            color = palette.onSurface
-                        )
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(palette.sLow)
-                        .border(1.dp, palette.outlineV.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
-                        .clickable(enabled = enabled) { onOpenAbxSheet() }
-                        .padding(horizontal = 14.dp, vertical = 12.dp)
-                        .testTag("open_abx_test_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Tune,
-                            contentDescription = "ABX Double Blind",
-                            tint = palette.primary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = "ABX Blind Test",
-                            fontFamily = SpaceGroteskFontFamily,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 12.sp,
-                            color = palette.onSurface
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Default.Hearing,
+                        contentDescription = "Sound Calibration",
+                        tint = palette.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "AutoEq & Calibrate",
+                        fontFamily = SpaceGroteskFontFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        color = palette.onSurface
+                    )
                 }
             }
         }

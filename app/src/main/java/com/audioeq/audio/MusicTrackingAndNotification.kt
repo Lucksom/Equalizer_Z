@@ -113,6 +113,34 @@ object MusicAppTracker {
         "com.ss.android.ugc.trill"
     )
 
+    val POPULAR_MUSIC_PACKAGES = listOf(
+        "com.spotify.music" to "Spotify",
+        "com.google.android.apps.youtube.music" to "YouTube Music",
+        "com.apple.android.music" to "Apple Music",
+        "com.aspiro.tidal" to "TIDAL",
+        "com.maxmpz.audioplayer" to "Poweramp",
+        "in.krosbits.musicolet" to "Musicolet",
+        "org.videolan.vlc" to "VLC",
+        "deezer.android.app" to "Deezer",
+        "com.soundcloud.android" to "SoundCloud",
+        "com.amazon.mp3" to "Amazon Music",
+        "com.aimp.player" to "AIMP",
+        "code.name.monkey.retromusic" to "Retro Music",
+        "it.vfsfitvnm.vimusic" to "ViMusic",
+        "it.fast4x.rimusic" to "RiMusic",
+        "tv.plex.labs.plexamp" to "Plexamp",
+        "app.symfonium.music.player" to "Symfonium",
+        "com.foobar2000.foobar2000" to "foobar2000",
+        "com.neutroncode.mp" to "Neutron Music Player"
+    )
+
+    private val _selectedMusicPackages = MutableStateFlow<Set<String>>(emptySet())
+    val selectedMusicPackages: StateFlow<Set<String>> = _selectedMusicPackages.asStateFlow()
+
+    fun setSelectedMusicPackages(pkgs: Set<String>) {
+        _selectedMusicPackages.value = pkgs
+    }
+
     private val broadcastMusicSessions = ConcurrentHashMap<Int, TrackedMusicSession>()
     private val privilegedMusicSessions = ConcurrentHashMap<Int, TrackedMusicSession>()
 
@@ -178,9 +206,15 @@ object MusicAppTracker {
         packageName: String?,
         contentType: Int = AudioEffect.CONTENT_TYPE_MUSIC
     ): Boolean {
-        val pkg = packageName?.trim()?.takeIf { it.isNotEmpty() } ?: return contentType == AudioEffect.CONTENT_TYPE_MUSIC
+        val pkg = packageName?.trim()?.takeIf { it.isNotEmpty() } ?: return false
         if (pkg == context.packageName || pkg.startsWith("com.audioeq")) return false
         if (pkg in EXCLUDED_NON_MUSIC_PACKAGES) return false
+
+        val selected = _selectedMusicPackages.value
+        if (selected.isNotEmpty()) {
+            return pkg in selected
+        }
+
         val lower = pkg.lowercase(Locale.US)
         if (lower.contains("telecom") || lower.contains("dialer") || lower.contains("inputmethod") ||
             lower.contains("keyboard") || lower.contains("ringtone") || lower.contains("alarm") ||
@@ -578,7 +612,7 @@ object EqualizerNotificationHelper {
         val subtitle = "$routeLabel · $engineShortTitle · $musicSummary"
 
         return NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_eq_notification)
             .setContentTitle(title)
             .setContentText(subtitle)
             .setStyle(NotificationCompat.BigTextStyle().bigText(subtitle))

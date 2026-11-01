@@ -63,11 +63,9 @@ fun ModeSelectorCard(
     selectedMode: EngineMode,
     activeStatus: ModeStatusInfo,
     diagnostics: DeviceDiagnostics,
-    startOnBoot: Boolean,
     shizukuState: ShizukuState = ShizukuState.NOT_INSTALLED,
     shizukuPrivilege: String = "none",
     onSelectMode: (EngineMode) -> Unit,
-    onToggleStartOnBoot: (Boolean) -> Unit,
     onToggleRootBtAbsVol: (Boolean) -> Unit,
     onShizukuAction: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -279,30 +277,6 @@ fun ModeSelectorCard(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = "Start on Boot (Root Helper)",
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                        Text(
-                                            text = "Launches APK-only su helper automatically at device boot",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    Switch(
-                                        checked = startOnBoot,
-                                        onCheckedChange = onToggleStartOnBoot,
-                                        modifier = Modifier.testTag("root_start_on_boot_switch")
-                                    )
-                                }
-
                                 FilledTonalButton(
                                     onClick = { onToggleRootBtAbsVol(!diagnostics.btDisableAbsVolActive) },
                                     modifier = Modifier

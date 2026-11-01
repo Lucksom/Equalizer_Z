@@ -80,6 +80,7 @@ data class EnhancerConfig(
     val bassBoostLevel: Int = 0,
     val bassContour: BassContour = BassContour.TIGHT_PUNCH,
     val virtualBassEnabled: Boolean = false,
+    val virtualBassStrength: Int = 75,
     val profile: AudioProfile = AudioProfile.OFF
 ) {
     val bassBoostStrengthPermille: Short
@@ -322,12 +323,24 @@ object EnhancerDsp {
             EnhancerMath.bassEnhancerBandBoostDb(
                 bandIndex = i,
                 strengthPct = config.bassEnhancerStrength,
-                virtualBassEnabled = config.virtualBassEnabled
+                virtualBassEnabled = false
             ).toDouble()
         }
         val curve31 = Dsp.renderCurve(bass10)
         return DoubleArray(Dsp.F_DP.size) { k ->
             curve31[k].coerceIn(0.0, 6.0)
+        }
+    }
+
+    fun computeVirtualBass31(config: EnhancerConfig): DoubleArray {
+        if (!config.virtualBassEnabled) return DoubleArray(Dsp.F_DP.size)
+        val strength = config.virtualBassStrength.coerceIn(0, 100) / 100.0
+        return DoubleArray(Dsp.F_DP.size) { k ->
+            val f = Dsp.F_DP[k]
+            val h2 = AutoEq.biquadDb(type = "PK", fc = 80.0, gain = 4.5 * strength, q = 1.35, f = f)
+            val h3 = AutoEq.biquadDb(type = "PK", fc = 125.0, gain = 3.6 * strength, q = 1.25, f = f)
+            val h4 = AutoEq.biquadDb(type = "PK", fc = 200.0, gain = 2.0 * strength, q = 1.45, f = f)
+            (h2 + h3 + h4).coerceIn(0.0, 5.5)
         }
     }
 
@@ -339,8 +352,9 @@ object EnhancerDsp {
         val ieq = computeIeq31(config)
         val dlg = computeDialogueEnhancer31(config)
         val bass = computeBassEnhancer31(config)
+        val vBass = computeVirtualBass31(config)
         return DoubleArray(Dsp.F_DP.size) { k ->
-            val sum = ieq[k] + dlg[k] + bass[k]
+            val sum = ieq[k] + dlg[k] + bass[k] + vBass[k]
             if (sum > 6.0) {
                 (6.0 + (sum - 6.0) * 0.35).coerceAtMost(8.0)
             } else {
