@@ -303,6 +303,7 @@ fun AudioEqScreen(
             transientMode = uiState.transientMode,
             themeMode = uiState.themeMode,
             seedHex = uiState.seedHex,
+            musicOnlyTrackingEnabled = uiState.musicOnlyTrackingEnabled,
             onSelectMode = viewModel::selectMode,
             onShizukuAction = viewModel::handleShizukuAction,
             onHighPassChange = viewModel::updateHighPassHz,
@@ -312,6 +313,8 @@ fun AudioEqScreen(
             onToggleStartOnBoot = viewModel::setStartOnBoot,
             onToggleCompatibility10Band = viewModel::setCompatibility10Band,
             onToggleTransientMode = viewModel::setTransientMode,
+            onToggleMusicOnlyTracking = viewModel::setMusicOnlyTrackingEnabled,
+            onOpenNotificationAccess = viewModel::openNotificationAccessSettings,
             onSelectThemeMode = viewModel::setThemeMode,
             onSelectSeedHex = viewModel::setSeedHex,
             onDismiss = { viewModel.setShowSettingsSheet(false) }

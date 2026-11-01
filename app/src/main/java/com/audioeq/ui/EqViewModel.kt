@@ -13,8 +13,10 @@ import com.audioeq.audio.DspReferenceMonitor
 import com.audioeq.audio.EnhancerConfig
 import com.audioeq.audio.EnhancerDsp
 import com.audioeq.audio.EnhancerMath
+import com.audioeq.audio.EqualizerNotificationHelper
 import com.audioeq.audio.IeqPreset
 import com.audioeq.audio.IndexEntry
+import com.audioeq.audio.MusicAppTracker
 import com.audioeq.data.EqRepository
 import com.audioeq.model.EngineMode
 import com.audioeq.model.EqBand
@@ -93,6 +95,7 @@ data class EqUiState(
     val compatibility10Band: Boolean = false,
     val transientMode: Boolean = false,
     val usbBitPerfectEnabled: Boolean = false,
+    val musicOnlyTrackingEnabled: Boolean = true,
     val themeMode: String = "light",
     val seedHex: String = "#5B8CFF",
     val isSeedFromWallpaper: Boolean = false,
@@ -246,9 +249,10 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     private val flow3B = combine(
         repository.themeMode,
         repository.seedHex,
-        repository.wallpaperExtractActive
-    ) { theme, seed, wall ->
-        Intermediate3B(theme, seed, wall)
+        repository.wallpaperExtractActive,
+        repository.musicOnlyTracking
+    ) { theme, seed, wall, musicOnly ->
+        Intermediate3B(theme, seed, wall, musicOnly)
     }
 
     private val flowP3 = combine(flow3A, flow3B) { a, b ->
@@ -257,6 +261,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             compatibility10Band = a.compatibility10Band,
             transientMode = a.transientMode,
             usbBitPerfectEnabled = a.usbBitPerfectEnabled,
+            musicOnlyTrackingEnabled = b.musicOnlyTrackingEnabled,
             themeMode = b.themeMode,
             seedHex = b.seedHex,
             isSeedFromWallpaper = b.isSeedFromWallpaper
@@ -430,6 +435,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             compatibility10Band = p3.compatibility10Band,
             transientMode = p3.transientMode,
             usbBitPerfectEnabled = p3.usbBitPerfectEnabled,
+            musicOnlyTrackingEnabled = p3.musicOnlyTrackingEnabled,
             themeMode = p3.themeMode,
             seedHex = p3.seedHex,
             isSeedFromWallpaper = p3.isSeedFromWallpaper,
@@ -518,7 +524,21 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                     transientMode = state.transientMode,
                     usbBitPerfectEnabled = state.usbBitPerfectEnabled,
                     abxBypassCurve = _abxBypassCurve.value,
-                    activeRoute = state.activeRoute
+                    activeRoute = state.activeRoute,
+                    musicOnlyTracking = state.musicOnlyTrackingEnabled
+                )
+                EqualizerNotificationHelper.updateOrCancelPersistentNotification(
+                    context = getApplication(),
+                    masterEnabled = state.masterEnabled,
+                    presetName = state.activePresetName,
+                    profileTitle = state.enhancerConfig.profile.title,
+                    routeLabel = state.activeRoute.label,
+                    engineShortTitle = state.engineMode.shortTitle,
+                    musicSummary = if (state.musicOnlyTrackingEnabled) {
+                        state.diagnostics.trackedMusicSummary
+                    } else {
+                        "All Audio Sessions"
+                    }
                 )
             }
         }
@@ -1045,6 +1065,34 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         repository.setUsbBitPerfectEnabled(enabled)
     }
 
+    fun setMusicOnlyTrackingEnabled(enabled: Boolean) {
+        repository.setMusicOnlyTracking(enabled)
+        engineController.triggerImmediateSessionSync()
+    }
+
+    fun openNotificationAccessSettings() {
+        MusicAppTracker.openNotificationAccessSettings(getApplication())
+    }
+
+    fun refreshNotificationAndSessions() {
+        MusicAppTracker.isNotificationListenerEnabled(getApplication())
+        engineController.triggerImmediateSessionSync()
+        val s = uiState.value
+        EqualizerNotificationHelper.updateOrCancelPersistentNotification(
+            context = getApplication(),
+            masterEnabled = s.masterEnabled,
+            presetName = s.activePresetName,
+            profileTitle = s.enhancerConfig.profile.title,
+            routeLabel = s.activeRoute.label,
+            engineShortTitle = s.engineMode.shortTitle,
+            musicSummary = if (s.musicOnlyTrackingEnabled) {
+                s.diagnostics.trackedMusicSummary
+            } else {
+                "All Audio Sessions"
+            }
+        )
+    }
+
     fun setThemeMode(mode: String) {
         repository.setThemeMode(mode)
     }
@@ -1204,7 +1252,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     private data class Intermediate3B(
         val themeMode: String,
         val seedHex: String,
-        val isSeedFromWallpaper: Boolean
+        val isSeedFromWallpaper: Boolean,
+        val musicOnlyTrackingEnabled: Boolean
     )
 
     private data class Intermediate4A(
@@ -1264,6 +1313,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         val compatibility10Band: Boolean,
         val transientMode: Boolean,
         val usbBitPerfectEnabled: Boolean,
+        val musicOnlyTrackingEnabled: Boolean,
         val themeMode: String,
         val seedHex: String,
         val isSeedFromWallpaper: Boolean

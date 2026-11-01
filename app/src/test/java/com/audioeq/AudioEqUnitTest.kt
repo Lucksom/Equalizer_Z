@@ -292,5 +292,14 @@ class AudioEqUnitTest {
         assertEquals(31, bass31.size)
         assertEquals(6.0, bass31.maxOrNull() ?: 0.0, 0.01)
         assertTrue("Bass Enhancer 31-band curve must never exceed 6.0 dB", bass31.all { it in 0.0..6.0 })
+
+        // Verify profiles stay below distortion threshold (<= 4.2 dB peak, neutral 500 Hz anchor)
+        for (profile in listOf(AudioProfile.DYNAMIC, AudioProfile.BALANCED, AudioProfile.EFFECT_3D)) {
+            val pCurve = EnhancerDsp.computeProfile31(profile, isSpeaker = false)
+            assertEquals(31, pCurve.size)
+            val maxGain = pCurve.maxOrNull() ?: 0.0
+            assertTrue("Profile $profile peak gain ($maxGain dB) must stay <= 4.2 dB to prevent distortion", maxGain <= 4.2)
+            assertTrue("Profile $profile 500 Hz anchor must stay near 0 dB for clean midrange", pCurve[14] <= 0.6)
+        }
     }
 }

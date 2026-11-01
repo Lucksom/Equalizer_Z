@@ -84,10 +84,10 @@ object ShizukuManager {
         rootAccessVerified = false
     }
 
-    fun discoverAudioFlingerSessions(): List<Int> {
-        val output = execIfBound("dumpsys media.audio_flinger") ?: runCatching {
+    private fun execPrivilegedCommand(command: String): String? {
+        return execIfBound(command) ?: runCatching {
             if (rootAccessVerified) {
-                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "dumpsys media.audio_flinger"))
+                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
                 val finished = process.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
                 if (finished && process.exitValue() == 0) {
                     process.inputStream.bufferedReader().use { it.readText() }
@@ -96,10 +96,28 @@ object ShizukuManager {
                     null
                 }
             } else null
-        }.getOrNull() ?: return emptyList()
+        }.getOrNull()
+    }
 
+    fun discoverAudioFlingerSessions(musicOnly: Boolean = true): List<Int> {
+        val ctx = appContext
+        val audioOutput = execPrivilegedCommand("dumpsys audio")
+        val flingerOutput = execPrivilegedCommand("dumpsys media.audio_flinger")
+
+        if (ctx != null && musicOnly) {
+            val musicSessions = com.audioeq.audio.MusicAppTracker.parseMusicSessionsFromDumpsys(
+                context = ctx,
+                audioDumpsys = audioOutput,
+                flingerDumpsys = flingerOutput
+            )
+            com.audioeq.audio.MusicAppTracker.updatePrivilegedMusicSessions(ctx, musicSessions)
+            return musicSessions.map { it.sessionId }.distinct()
+        }
+
+        val combined = (audioOutput.orEmpty() + "\n" + flingerOutput.orEmpty())
+        if (combined.isBlank()) return emptyList()
         val sessionRegex = Regex("""(?:session(?:Id)?|Session)\s*[:=]?\s*(\d+)""", RegexOption.IGNORE_CASE)
-        return sessionRegex.findAll(output)
+        return sessionRegex.findAll(combined)
             .mapNotNull { it.groupValues[1].toIntOrNull() }
             .filter { it > 0 }
             .distinct()

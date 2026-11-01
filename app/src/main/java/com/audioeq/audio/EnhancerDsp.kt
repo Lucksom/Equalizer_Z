@@ -698,51 +698,56 @@ object EnhancerDsp {
      * - EFFECT_3D: 3D Audio binaural HRTF crossfeed + early reflection + cranial shadow compensation.
      */
     fun computeProfile31(profile: AudioProfile, isSpeaker: Boolean = false): DoubleArray {
-        val out = DoubleArray(Dsp.F_DP.size)
-        val freqs20 = DoubleArray(20) { IEQ_FREQS_20[it].toDouble() }
-        val balanced20Db = DoubleArray(20) { IEQ_BALANCED_Q4[it] / 16.0 }
+        if (profile == AudioProfile.OFF) return DoubleArray(Dsp.F_DP.size)
+        val spkScale = if (isSpeaker) 0.82 else 1.0
 
-        when (profile) {
-            AudioProfile.OFF -> return out
-            AudioProfile.DYNAMIC -> {
-                val mu = if (isSpeaker) BALANCED_ADAPTATION_FACTOR_SPK else BALANCED_ADAPTATION_FACTOR_HP
-                val dlgAmt = DYNAMIC_DIALOGUE_AMOUNT / 16.0 // 4/16 = 0.25
-                for (k in out.indices) {
-                    val f = Dsp.F_DP[k]
-                    val balRef = (mu * logLinearInterp(freqs20, balanced20Db, f).coerceAtLeast(0.0))
-                        .coerceIn(0.0, BALANCED_DYNAMIC_CLAMP_DB)
-                    val miDialogue = AutoEq.biquadDb("PK", 2250.0, 4.8 * dlgAmt, 1.05, f)
-                    val miSubFoundation = AutoEq.biquadDb("LSC", 85.0, 2.8, 0.72, f)
-                    val miAir = AutoEq.biquadDb("HSC", 8500.0, 3.2, 0.72, f)
-                    out[k] = (balRef * 0.55 + miDialogue + miSubFoundation + miAir).coerceIn(0.0, 6.0)
-                }
-            }
-            AudioProfile.BALANCED -> {
-                val mu = if (isSpeaker) BALANCED_ADAPTATION_FACTOR_SPK else BALANCED_ADAPTATION_FACTOR_HP
-                for (k in out.indices) {
-                    val f = Dsp.F_DP[k]
-                    val targetDb = logLinearInterp(freqs20, balanced20Db, f)
-                    // Reference envelope offset steered by mu and clamped to +-6 dB without cutting below 0 dB
-                    val steered = (mu * targetDb.coerceAtLeast(2.0)).coerceIn(0.0, BALANCED_DYNAMIC_CLAMP_DB)
-                    val gentleAir = AutoEq.biquadDb("HSC", 9000.0, 1.8, 0.70, f)
-                    out[k] = (steered + gentleAir).coerceIn(0.0, BALANCED_DYNAMIC_CLAMP_DB)
-                }
-            }
-            AudioProfile.EFFECT_3D -> {
-                val mode = ThreeDAudioMode.FAR
-                val crossBoostDb = 20.0 * log10(mode.gDirectLinear + mode.gCrossLinear + mode.gReflLinear)
-                for (k in out.indices) {
-                    val f = Dsp.F_DP[k]
-                    val shadowComp = AutoEq.biquadDb("LSC", mode.shadowCutoffHz.toDouble(), crossBoostDb, 0.72, f)
-                    val stageWarmth = AutoEq.biquadDb("PK", 160.0, 2.2, 1.10, f)
-                    val pinnaExternalization = AutoEq.biquadDb("PK", 1650.0, 3.2, 1.10, f) +
-                        AutoEq.biquadDb("PK", 4200.0, 5.0, 1.05, f)
-                    val binauralAir = AutoEq.biquadDb("HSC", 9000.0, 5.2, 0.70, f)
-                    out[k] = (shadowComp + stageWarmth + pinnaExternalization + binauralAir).coerceIn(0.0, 8.5)
-                }
-            }
+        // Smooth 10-band reference targets rendered via PCHIP (Dsp.renderCurve) —
+        // identical phase-coherent architecture to Equalizer & Bass Enhancer with neutral 500 Hz midrange
+        // so broadband RMS never overloads or distorts DynamicsProcessing.
+        val profile10 = when (profile) {
+            AudioProfile.OFF -> DoubleArray(10) { 0.0 }
+            AudioProfile.BALANCED -> doubleArrayOf(
+                2.0 * spkScale,  // 31 Hz
+                2.9 * spkScale,  // 62 Hz
+                2.2 * spkScale,  // 125 Hz
+                0.7 * spkScale,  // 250 Hz
+                0.1 * spkScale,  // 500 Hz (un-muddy neutral center)
+                0.5 * spkScale,  // 1 kHz
+                1.8 * spkScale,  // 2 kHz
+                2.7 * spkScale,  // 4 kHz
+                2.2 * spkScale,  // 8 kHz
+                1.5 * spkScale   // 16 kHz
+            )
+            AudioProfile.DYNAMIC -> doubleArrayOf(
+                2.8 * spkScale,  // 31 Hz
+                3.5 * spkScale,  // 62 Hz
+                2.4 * spkScale,  // 125 Hz
+                0.5 * spkScale,  // 250 Hz
+                0.0,             // 500 Hz (clean separation)
+                1.2 * spkScale,  // 1 kHz
+                2.6 * spkScale,  // 2 kHz (dialogue clarity 4/16)
+                3.2 * spkScale,  // 4 kHz (presence)
+                3.0 * spkScale,  // 8 kHz (crisp air)
+                2.2 * spkScale   // 16 kHz
+            )
+            AudioProfile.EFFECT_3D -> doubleArrayOf(
+                2.2 * spkScale,  // 31 Hz
+                2.8 * spkScale,  // 62 Hz
+                2.0 * spkScale,  // 125 Hz (stage warmth)
+                0.5 * spkScale,  // 250 Hz
+                0.0,             // 500 Hz
+                0.9 * spkScale,  // 1 kHz
+                2.8 * spkScale,  // 2 kHz (pinna externalization)
+                3.7 * spkScale,  // 4 kHz (Blauert spatial presence)
+                3.4 * spkScale,  // 8 kHz (binaural air)
+                2.6 * spkScale   // 16 kHz
+            )
         }
-        return out
+
+        val rendered31 = Dsp.renderCurve(profile10)
+        return DoubleArray(Dsp.F_DP.size) { k ->
+            rendered31[k].coerceIn(0.0, 4.2)
+        }
     }
 
     fun computeCombinedEnhancer31(config: EnhancerConfig, isSpeaker: Boolean = false): DoubleArray {
@@ -751,7 +756,13 @@ object EnhancerDsp {
         val bass = computeBassEnhancer31(config)
         val prof = computeProfile31(config.profile, isSpeaker)
         return DoubleArray(Dsp.F_DP.size) { k ->
-            (ieq[k] + dlg[k] + bass[k] + prof[k]).coerceIn(-12.0, 12.0)
+            // When stacking multiple enhancers with a profile, apply soft-knee ceiling at +8.0 dB
+            val sum = ieq[k] + dlg[k] + bass[k] + prof[k]
+            if (sum > 6.0) {
+                (6.0 + (sum - 6.0) * 0.35).coerceAtMost(8.0)
+            } else {
+                sum.coerceIn(-12.0, 6.0)
+            }
         }
     }
 

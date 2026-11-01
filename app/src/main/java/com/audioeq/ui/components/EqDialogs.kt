@@ -1331,6 +1331,7 @@ fun SettingsAndDiagnosticsSheet(
     transientMode: Boolean,
     themeMode: String,
     seedHex: String,
+    musicOnlyTrackingEnabled: Boolean = true,
     onSelectMode: (EngineMode) -> Unit,
     onShizukuAction: () -> Unit,
     onHighPassChange: (Float) -> Unit,
@@ -1340,6 +1341,8 @@ fun SettingsAndDiagnosticsSheet(
     onToggleStartOnBoot: (Boolean) -> Unit,
     onToggleCompatibility10Band: (Boolean) -> Unit,
     onToggleTransientMode: (Boolean) -> Unit,
+    onToggleMusicOnlyTracking: (Boolean) -> Unit = {},
+    onOpenNotificationAccess: () -> Unit = {},
     onSelectThemeMode: (String) -> Unit,
     onSelectSeedHex: (String, Boolean) -> Unit,
     onDismiss: () -> Unit
@@ -1531,6 +1534,97 @@ fun SettingsAndDiagnosticsSheet(
                     fontSize = 11.sp,
                     color = palette.onVar
                 )
+            }
+
+            SettingsGroupCard(title = "ADVANCED AUDIO TRACKING (MUSIC APPS ONLY)") {
+                V7SwitchRow(
+                    title = "Music apps only (Advanced tracking)",
+                    subtitle = "Detects music players via Root / ADB / Shizuku & notifications; ignores system, calls & non-music apps",
+                    checked = musicOnlyTrackingEnabled,
+                    enabled = true,
+                    onCheckedChange = onToggleMusicOnlyTracking,
+                    testTag = "music_only_tracking_switch"
+                )
+
+                HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 12.dp)
+                    ) {
+                        Text(
+                            text = "Notification access (Media player detection)",
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp,
+                            color = palette.onSurface
+                        )
+                        Text(
+                            text = if (diagnostics.notificationAccessGranted) {
+                                "Granted · Tracking active media player notifications"
+                            } else {
+                                "Grant notification access to detect running audio players"
+                            },
+                            fontSize = 12.sp,
+                            color = if (diagnostics.notificationAccessGranted) palette.primary else palette.onVar
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(if (diagnostics.notificationAccessGranted) palette.primaryC else palette.sHigh)
+                            .border(
+                                1.dp,
+                                if (diagnostics.notificationAccessGranted) palette.primary else palette.outlineV,
+                                RoundedCornerShape(14.dp)
+                            )
+                            .clickable { onOpenNotificationAccess() }
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                            .testTag("notification_access_button")
+                    ) {
+                        Text(
+                            text = if (diagnostics.notificationAccessGranted) "Active" else "Grant",
+                            fontFamily = SpaceGroteskFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            color = if (diagnostics.notificationAccessGranted) palette.onPrimaryC else palette.onSurface
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(palette.sHigh)
+                        .border(1.dp, palette.outlineV.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Detected Music Player",
+                        fontSize = 11.sp,
+                        color = palette.onVar
+                    )
+                    Text(
+                        text = diagnostics.trackedMusicSummary,
+                        fontFamily = JetBrainsMonoFontFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 11.sp,
+                        color = palette.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .testTag("tracked_music_summary_text")
+                    )
+                }
             }
 
             SettingsGroupCard(title = "CHANNEL BALANCE & DUAL-CHANNEL EQ") {
@@ -1729,6 +1823,9 @@ fun SettingsAndDiagnosticsSheet(
                 DiagnosticRow("ADB DUMP Permission", if (diagnostics.dumpPermissionGranted) "Granted" else "Not Granted")
                 DiagnosticRow("Shizuku Service", shizukuDiagLabel)
                 DiagnosticRow("Root su Binary", rootDiagLabel)
+                DiagnosticRow("Music-Only Tracking", if (musicOnlyTrackingEnabled) "Active (Music Players Only)" else "Disabled (All Apps)")
+                DiagnosticRow("Notification Media Access", if (diagnostics.notificationAccessGranted) "Granted" else "Not Granted")
+                DiagnosticRow("Tracked Music Players", diagnostics.trackedMusicSummary)
                 DiagnosticRow("Connected Device Key", deviceKeyLabel)
                 DiagnosticRow("Bluetooth Codec", btCodecLabel)
                 DiagnosticRow("Active Audio Sessions", sessionsLabel, showBottomBorder = false)

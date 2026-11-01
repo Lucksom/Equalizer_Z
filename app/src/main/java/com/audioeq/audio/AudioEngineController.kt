@@ -43,7 +43,10 @@ data class DeviceDiagnostics(
     val usbBitPerfectActive: Boolean = false,
     val virtualizerSupported: Boolean = true,
     val hardwareDaxDetected: Boolean = false,
-    val hardwareDaxActive: Boolean = false
+    val hardwareDaxActive: Boolean = false,
+    val musicOnlyTracking: Boolean = true,
+    val notificationAccessGranted: Boolean = false,
+    val trackedMusicSummary: String = "Monitoring music players"
 ) {
     val activeRenderBandCount: Int get() = dynamicsProcessingBandCount
     val nativeEqBandCount: Int get() = legacyEqualizerBandCount
@@ -96,7 +99,13 @@ class AudioEngineController(
     private var currentEngineMode: EngineMode = EngineMode.LEGACY
 
     init {
+        MusicAppTracker.isNotificationListenerEnabled(context)
         shizukuManager.setOnStateChangedListener {
+            scope.launch(Dispatchers.IO) {
+                syncPrivilegedStateAndSessions()
+            }
+        }
+        MusicAppTracker.setOnMusicStateChangedListener {
             scope.launch(Dispatchers.IO) {
                 syncPrivilegedStateAndSessions()
             }
@@ -127,7 +136,9 @@ class AudioEngineController(
         masterEngine.setEngineMode(mode, privilegeReady)
 
         if (isPrivilegedMode && privilegeReady) {
-            val sessions = shizukuManager.discoverAudioFlingerSessions()
+            val sessions = shizukuManager.discoverAudioFlingerSessions(
+                musicOnly = latestRenderParams.musicOnlyTracking
+            )
             masterEngine.syncDiscoveredSessions(sessions)
             if (currentRoute == OutputRoute.BLUETOOTH) {
                 currentBluetoothCodec = shizukuManager.readBluetoothCodecSummary()
@@ -135,6 +146,7 @@ class AudioEngineController(
                 currentBluetoothCodec = null
             }
         } else {
+            masterEngine.syncDiscoveredSessions(MusicAppTracker.getVerifiedMusicSessionIds())
             currentBluetoothCodec = null
         }
 
@@ -241,11 +253,13 @@ class AudioEngineController(
         transientMode: Boolean = false,
         usbBitPerfectEnabled: Boolean = false,
         abxBypassCurve: Boolean = false,
-        activeRoute: OutputRoute = currentRoute
+        activeRoute: OutputRoute = currentRoute,
+        musicOnlyTracking: Boolean = true
     ) {
         val prevMode = currentEngineMode
+        val prevMusicOnly = latestRenderParams.musicOnlyTracking
         currentEngineMode = mode
-        if (prevMode != mode) {
+        if (prevMode != mode || prevMusicOnly != musicOnlyTracking) {
             masterEngine.setEngineMode(mode, isPrivilegeReadyForMode(mode))
             triggerImmediateSessionSync()
         }
@@ -293,7 +307,8 @@ class AudioEngineController(
             compatibility10Band = compatibility10Band,
             transientMode = transientMode,
             usbBitPerfectEnabled = usbBitPerfectEnabled,
-            abxBypassCurve = abxBypassCurve
+            abxBypassCurve = abxBypassCurve,
+            musicOnlyTracking = musicOnlyTracking
         )
         latestRenderParams = params
         masterEngine.updateParams(params)
@@ -310,6 +325,8 @@ class AudioEngineController(
     fun refreshDiagnostics() {
         val activeSessions = masterEngine.getActiveSessionIds()
         val roundedBinderCost = kotlin.math.round(masterEngine.avgBinderWriteCostMs * 100.0) / 100.0
+        val notifGranted = MusicAppTracker.isNotificationListenerEnabled(context)
+        val trackedSummary = MusicAppTracker.trackedSessionsSummary.value
         _diagnostics.value = DeviceDiagnostics(
             dynamicsProcessingSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P,
             dynamicsProcessingActive = masterEngine.activeOperatingMode != OperatingMode.LEGACY_TIER1_EQ &&
@@ -330,7 +347,10 @@ class AudioEngineController(
             usbBitPerfectActive = masterEngine.usbBitPerfectActive,
             virtualizerSupported = masterEngine.getActiveVirtualizerCount() > 0 || Build.VERSION.SDK_INT >= Build.VERSION_CODES.P,
             hardwareDaxDetected = masterEngine.hardwareDaxSupported,
-            hardwareDaxActive = masterEngine.getActiveHardwareDaxCount() > 0
+            hardwareDaxActive = masterEngine.getActiveHardwareDaxCount() > 0,
+            musicOnlyTracking = latestRenderParams.musicOnlyTracking,
+            notificationAccessGranted = notifGranted,
+            trackedMusicSummary = trackedSummary
         )
     }
 

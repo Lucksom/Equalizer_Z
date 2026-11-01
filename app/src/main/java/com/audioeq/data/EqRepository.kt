@@ -92,6 +92,22 @@ class EqRepository(context: Context) {
     )
     val wallpaperExtractActive: StateFlow<Boolean> = _wallpaperExtractActive.asStateFlow()
 
+    private val _musicOnlyTracking = MutableStateFlow(
+        prefs.getBoolean(KEY_MUSIC_ONLY_TRACKING, true)
+    )
+    val musicOnlyTracking: StateFlow<Boolean> = _musicOnlyTracking.asStateFlow()
+
+    private val prefChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { sp, key ->
+        when (key) {
+            KEY_MASTER_ENABLED -> _masterEnabled.value = sp.getBoolean(KEY_MASTER_ENABLED, true)
+            KEY_MUSIC_ONLY_TRACKING -> _musicOnlyTracking.value = sp.getBoolean(KEY_MUSIC_ONLY_TRACKING, true)
+        }
+    }
+
+    init {
+        prefs.registerOnSharedPreferenceChangeListener(prefChangeListener)
+    }
+
     companion object {
         private const val KEY_ENGINE_MODE = "engine_mode"
         private const val KEY_MASTER_ENABLED = "master_enabled"
@@ -105,6 +121,7 @@ class EqRepository(context: Context) {
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_SEED_HEX = "seed_hex"
         private const val KEY_WALLPAPER_EXTRACT = "wallpaper_extract"
+        private const val KEY_MUSIC_ONLY_TRACKING = "music_only_tracking"
     }
 
     private fun loadEngineMode(): EngineMode {
@@ -127,6 +144,12 @@ class EqRepository(context: Context) {
         prefs.edit().putBoolean(KEY_MASTER_ENABLED, enabled).apply()
         dbHelper.setSetting(KEY_MASTER_ENABLED, enabled.toString())
         _masterEnabled.value = enabled
+    }
+
+    fun setMusicOnlyTracking(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_MUSIC_ONLY_TRACKING, enabled).apply()
+        dbHelper.setSetting(KEY_MUSIC_ONLY_TRACKING, enabled.toString())
+        _musicOnlyTracking.value = enabled
     }
 
     fun setRootWarningAccepted(accepted: Boolean) {

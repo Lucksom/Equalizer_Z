@@ -15,6 +15,11 @@
     <!-- Optional runtime permission for Speaker Self-Calibration wizard (v5 Section 8.2) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- Permissions for persistent Equalizer Running notification -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <!-- Optional ADB/Shizuku permissions for audio session discovery (granted via adb shell pm grant) -->
     <uses-permission
         android:name="android.permission.DUMP"
@@ -23,9 +28,16 @@
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
 
-    <!-- Queries for Shizuku package detection on Android 11+ -->
+    <!-- Queries for Shizuku package & music player detection on Android 11+ -->
     <queries>
         <package android:name="moe.shizuku.privileged.api" />
+        <intent>
+            <action android:name="android.media.browse.MediaBrowserService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_MUSIC" />
+        </intent>
     </queries>
 
     <application
@@ -54,6 +66,32 @@
                 <category android:name="android.intent.category.CATEGORY_CONTENT_MUSIC" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".audio.EqualizerNotificationService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="audio_equalizer_dsp" />
+        </service>
+
+        <service
+            android:name=".audio.EqMediaNotificationListenerService"
+            android:enabled="true"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name=".audio.EqualizerActionReceiver"
+            android:enabled="true"
+            android:exported="false" />
 
         <!-- Boot receiver for Start-on-Boot (v5 Section 17.2 F12 & 18.2) -->
         <receiver
