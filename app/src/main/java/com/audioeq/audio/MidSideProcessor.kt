@@ -33,12 +33,8 @@ class MidSideProcessor(sampleRate: Int = 48000) {
     var vocalPresenceBoost: Float = 0.0f
         private set
 
-    var threeDAudioMode: ThreeDAudioMode = ThreeDAudioMode.NO_EFFECT
-        private set
-
     private val midVocalFilter = BiquadFilter()
     private val sideHighShelfFilter = BiquadFilter()
-    private val sideAllPassDecorrelator = NestedAllPassDecorrelator(sampleRate)
 
     init {
         configureFilters(sampleRate)
@@ -70,22 +66,18 @@ class MidSideProcessor(sampleRate: Int = 48000) {
         updateParameters(
             width = width,
             vocalBoost = vocalBoost,
-            sampleRate = currentSampleRate,
-            threeDMode = enhancerConfig.profile.threeDAudioMode
+            sampleRate = currentSampleRate
         )
     }
 
     fun updateParameters(
         width: Float,
         vocalBoost: Float,
-        sampleRate: Int = 48000,
-        threeDMode: ThreeDAudioMode = ThreeDAudioMode.NO_EFFECT
+        sampleRate: Int = 48000
     ) {
         currentSampleRate = sampleRate
         stereoWidth = width.coerceIn(0.5f, 2.0f)
         vocalPresenceBoost = vocalBoost.coerceIn(0f, 1f)
-        threeDAudioMode = threeDMode
-        sideAllPassDecorrelator.configure(threeDMode, sampleRate)
         configureFilters(sampleRate)
     }
 
@@ -97,8 +89,7 @@ class MidSideProcessor(sampleRate: Int = 48000) {
             gainDb = vocalGainDb,
             q = 1.15
         )
-        val crossGainDb = threeDAudioMode.gCrossLinear * 6.0
-        val airDb = ((stereoWidth - 1.0f).coerceAtLeast(0f) * 2.5) + crossGainDb
+        val airDb = (stereoWidth - 1.0f).coerceAtLeast(0f) * 2.5
         sideHighShelfFilter.configurePeaking(
             frequencyHz = 6500.0,
             sampleRate = sampleRate.toDouble(),
@@ -108,10 +99,7 @@ class MidSideProcessor(sampleRate: Int = 48000) {
     }
 
     fun processInterleavedStereo(buffer: FloatArray, frameCount: Int) {
-        val baseWidth = stereoWidth
-        val modeWidth = (1.0 + threeDAudioMode.gCrossLinear + threeDAudioMode.gReflLinear).toFloat()
-        val effectiveWidth = (baseWidth * modeWidth).coerceIn(0.5f, 2.5f)
-
+        val width = stereoWidth.coerceIn(0.5f, 2.0f)
         var idx = 0
         for (frame in 0 until frameCount) {
             val left = buffer[idx]
@@ -123,14 +111,11 @@ class MidSideProcessor(sampleRate: Int = 48000) {
             if (vocalPresenceBoost > 0.01f) {
                 mid = midVocalFilter.processSample(mid)
             }
-            if (threeDAudioMode != ThreeDAudioMode.NO_EFFECT) {
-                side = sideAllPassDecorrelator.processSideSample(side)
-            }
-            if (effectiveWidth > 1.01f) {
+            if (width > 1.01f) {
                 side = sideHighShelfFilter.processSample(side)
             }
 
-            side *= effectiveWidth
+            side *= width
 
             val outLeft = (mid + side).coerceIn(-0.98f, 0.98f)
             val outRight = (mid - side).coerceIn(-0.98f, 0.98f)
@@ -156,14 +141,6 @@ class MidSideProcessor(sampleRate: Int = 48000) {
     }
 
     fun computeVirtualizerStrengthPermille(): Int {
-        if (threeDAudioMode != ThreeDAudioMode.NO_EFFECT) {
-            return when (threeDAudioMode) {
-                ThreeDAudioMode.NO_EFFECT -> 0
-                ThreeDAudioMode.NEAR -> 250
-                ThreeDAudioMode.MIDDLE -> 350
-                ThreeDAudioMode.FAR -> 850
-            }
-        }
         val normalized = ((stereoWidth - 1.0f) / 1.0f).coerceIn(0f, 1f)
         return (normalized * 1000f).toInt()
     }

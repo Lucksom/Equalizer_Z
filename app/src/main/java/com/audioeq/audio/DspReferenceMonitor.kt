@@ -140,13 +140,12 @@ class DspReferenceMonitor(
             }
 
             if (applyEq && curve31Db.size == 31) {
-                val (deltaL31, deltaR31) = EnhancerDsp.computeProfileSpatialLRDelta31(enhancerConfig.profile)
                 val preLin = if (preampDb > 0f) 10.0.pow(preampDb.toDouble() / 20.0).toFloat() else 1.0f
                 val anchorIndices = intArrayOf(2, 5, 8, 11, 14, 17, 20, 23, 26, 29)
                 for (idx in anchorIndices) {
                     val fc = Dsp.F_DP[idx]
-                    val gainL = curve31Db[idx].toDouble() + deltaL31[idx]
-                    val gainR = curve31Db[idx].toDouble() + deltaR31[idx]
+                    val gainL = curve31Db[idx].toDouble()
+                    val gainR = curve31Db[idx].toDouble()
                     if (kotlin.math.abs(gainL) > 0.12 || kotlin.math.abs(gainR) > 0.12) {
                         val biquadL = BiquadFilter().apply {
                             configurePeaking(fc, sampleRate.toDouble(), gainL, 1.414)
@@ -158,29 +157,6 @@ class DspReferenceMonitor(
                             dryL[n] = biquadL.processSample(dryL[n])
                             dryR[n] = biquadR.processSample(dryR[n])
                         }
-                    }
-                }
-                val threeDMode = enhancerConfig.profile.threeDAudioMode
-                if (threeDMode != ThreeDAudioMode.NO_EFFECT) {
-                    val msProc = MidSideProcessor(sampleRate).apply {
-                        updateParameters(
-                            width = 1.0f,
-                            vocalBoost = if (enhancerConfig.dialogueEnhancerEnabled) (enhancerConfig.dialogueAmount / 16f) else 0f,
-                            sampleRate = sampleRate,
-                            threeDMode = threeDMode
-                        )
-                    }
-                    val hrtf = BinauralHrtfVirtualizer(sampleRate, threeDMode)
-                    val interleaved = FloatArray(totalFrames * 2)
-                    for (n in 0 until totalFrames) {
-                        interleaved[n * 2] = dryL[n]
-                        interleaved[n * 2 + 1] = dryR[n]
-                    }
-                    msProc.processInterleavedStereo(interleaved, totalFrames)
-                    for (n in 0 until totalFrames) {
-                        val (lOut, rOut) = hrtf.processPair(interleaved[n * 2], interleaved[n * 2 + 1])
-                        dryL[n] = lOut
-                        dryR[n] = rOut
                     }
                 }
                 for (n in 0 until totalFrames) {

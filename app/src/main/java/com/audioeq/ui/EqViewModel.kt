@@ -172,9 +172,10 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         repository.presets,
         repository.currentRouteProfile,
         repository.hearingCurve,
-        repository.enhancerConfig
-    ) { presets, profile, hearing, enhancer ->
-        Intermediate1B(presets, profile, hearing, enhancer)
+        repository.enhancerConfig,
+        repository.customHeadphoneProfiles
+    ) { presets, profile, hearing, enhancer, customHp ->
+        Intermediate1B(presets, profile, hearing, enhancer, customHp)
     }
 
     private val flow1C = combine(
@@ -217,7 +218,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             isEqEnabled = c.isEqEnabled,
             isAbCompare = c.isAbCompare,
             editingRightChannel = c.editingRightChannel,
-            intensity = c.intensity
+            intensity = c.intensity,
+            customHeadphoneProfiles = b.customHeadphoneProfiles
         )
     }
 
@@ -335,7 +337,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         flowP4,
         flowP5
     ) { p1, p2, p3, p4, p5 ->
-        val allHp = repository.getAllHeadphoneProfiles()
+        val allHp = EqConstants.BUILT_IN_HEADPHONE_PROFILES + p1.customHeadphoneProfiles
         val selHp = allHp.find { it.id == p1.profile.headphoneProfileId }
         val trimmed = if (selHp != null && selHp.peqFilters.isNotEmpty()) {
             AutoEq.computeTrimmedDb(selHp.peqFilters, p1.profile.headphoneFullRange).toFloat()
@@ -531,7 +533,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                     context = getApplication(),
                     masterEnabled = state.masterEnabled,
                     presetName = state.activePresetName,
-                    profileTitle = state.enhancerConfig.profile.title,
+                    profileTitle = "",
                     routeLabel = state.activeRoute.label,
                     engineShortTitle = state.engineMode.shortTitle,
                     musicSummary = if (state.musicOnlyTrackingEnabled) {
@@ -782,10 +784,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setAudioProfile(profile: AudioProfile) {
-        repository.updateEnhancerConfig { current ->
-            current.copy(profile = profile)
-        }
+    fun setAudioProfile(profile: AudioProfile = AudioProfile.OFF) {
     }
 
     fun resetEnhancers() {
@@ -1082,7 +1081,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             context = getApplication(),
             masterEnabled = s.masterEnabled,
             presetName = s.activePresetName,
-            profileTitle = s.enhancerConfig.profile.title,
+            profileTitle = "",
             routeLabel = s.activeRoute.label,
             engineShortTitle = s.engineMode.shortTitle,
             musicSummary = if (s.musicOnlyTrackingEnabled) {
@@ -1232,7 +1231,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         val presets: List<EqPreset>,
         val profile: RouteMemoryProfile,
         val hearingCurve: PersonalHearingCurve,
-        val enhancerConfig: EnhancerConfig
+        val enhancerConfig: EnhancerConfig,
+        val customHeadphoneProfiles: List<HeadphoneProfile> = emptyList()
     )
 
     private data class Intermediate1C(
@@ -1297,7 +1297,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         val isEqEnabled: Boolean,
         val isAbCompare: Boolean,
         val editingRightChannel: Boolean,
-        val intensity: Float
+        val intensity: Float,
+        val customHeadphoneProfiles: List<HeadphoneProfile> = emptyList()
     )
 
     private data class PartialUiState2(

@@ -67,7 +67,6 @@ class AudioEngineController(
 
     val midSideProcessor = MidSideProcessor(48000)
     val harmonicVirtualBass = HarmonicVirtualBassGenerator(48000)
-    val binauralHrtfVirtualizer = BinauralHrtfVirtualizer(48000)
 
     private val masterEngine = MasterEqEngine(
         context = context,
@@ -263,14 +262,11 @@ class AudioEngineController(
             masterEngine.setEngineMode(mode, isPrivilegeReadyForMode(mode))
             triggerImmediateSessionSync()
         }
-        val threeDMode = enhancerConfig.profile.threeDAudioMode
         midSideProcessor.updateParameters(
             width = midSideWidth,
             vocalBoost = vocalPresenceBoost,
-            sampleRate = 48000,
-            threeDMode = threeDMode
+            sampleRate = 48000
         )
-        binauralHrtfVirtualizer.configure(threeDMode, 48000)
 
         val l10 = DoubleArray(10) { bandGainsDb.getOrElse(it) { 0f }.toDouble() }
         val r10 = DoubleArray(10) { rightBandGainsDb.getOrElse(it) { 0f }.toDouble() }

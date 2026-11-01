@@ -3,6 +3,7 @@ package com.audioeq.data
 import android.content.Context
 import android.content.SharedPreferences
 import com.audioeq.audio.AudioProfile
+import com.audioeq.audio.AutoEq
 import com.audioeq.audio.EnhancerConfig
 import com.audioeq.model.EngineMode
 import com.audioeq.model.EqConstants
@@ -49,7 +50,7 @@ class EqRepository(context: Context) {
     private val _enhancerConfig = MutableStateFlow(dbHelper.loadEnhancerConfig())
     val enhancerConfig: StateFlow<EnhancerConfig> = _enhancerConfig.asStateFlow()
 
-    private val _customHeadphoneProfiles = MutableStateFlow<List<HeadphoneProfile>>(emptyList())
+    private val _customHeadphoneProfiles = MutableStateFlow<List<HeadphoneProfile>>(loadCustomHeadphoneProfiles())
     val customHeadphoneProfiles: StateFlow<List<HeadphoneProfile>> = _customHeadphoneProfiles.asStateFlow()
 
     private val _rootWarningAccepted = MutableStateFlow(
@@ -287,7 +288,66 @@ class EqRepository(context: Context) {
 
     fun registerCustomHeadphoneProfile(profile: HeadphoneProfile) {
         val existing = _customHeadphoneProfiles.value.filterNot { it.id == profile.id }
-        _customHeadphoneProfiles.value = existing + profile
+        val updated = existing + profile
+        _customHeadphoneProfiles.value = updated
+        persistCustomHeadphoneProfiles(updated)
+    }
+
+    private fun loadCustomHeadphoneProfiles(): List<HeadphoneProfile> {
+        val json = prefs.getString("custom_headphone_profiles_json", null) ?: return emptyList()
+        return try {
+            val arr = org.json.JSONArray(json)
+            val list = mutableListOf<HeadphoneProfile>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val id = obj.getString("id")
+                val name = obj.getString("name")
+                val source = obj.optString("source", "Custom")
+                val rig = obj.optString("rig", "HMS II.3")
+                val corrArr = obj.optJSONArray("correction31Db")
+                val corrList = if (corrArr != null) {
+                    List(corrArr.length()) { corrArr.getDouble(it).toFloat() }
+                } else List(31) { 0f }
+                val raw = obj.optString("rawText", null)
+                val peq = if (!raw.isNullOrBlank()) AutoEq.parsePeq(raw) else emptyList()
+                val geq = if (!raw.isNullOrBlank() && peq.isEmpty()) AutoEq.parseGraphicEq(raw) else emptyList()
+                list.add(
+                    HeadphoneProfile(
+                        id = id,
+                        name = name,
+                        source = source,
+                        rig = rig,
+                        peqFilters = peq,
+                        graphicPoints = geq,
+                        correction31Db = corrList,
+                        rawText = raw
+                    )
+                )
+            }
+            list
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun persistCustomHeadphoneProfiles(profiles: List<HeadphoneProfile>) {
+        try {
+            val arr = org.json.JSONArray()
+            for (p in profiles) {
+                val obj = org.json.JSONObject()
+                obj.put("id", p.id)
+                obj.put("name", p.name)
+                obj.put("source", p.source)
+                obj.put("rig", p.rig)
+                val corrArr = org.json.JSONArray()
+                p.correction31Db.forEach { corrArr.put(it.toDouble()) }
+                obj.put("correction31Db", corrArr)
+                if (p.rawText != null) obj.put("rawText", p.rawText)
+                arr.put(obj)
+            }
+            prefs.edit().putString("custom_headphone_profiles_json", arr.toString()).apply()
+        } catch (_: Exception) {
+        }
     }
 
     fun getAllHeadphoneProfiles(): List<HeadphoneProfile> {

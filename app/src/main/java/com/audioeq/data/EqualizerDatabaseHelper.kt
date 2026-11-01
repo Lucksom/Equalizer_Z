@@ -8,7 +8,6 @@ import com.audioeq.audio.AudioProfile
 import com.audioeq.audio.EnhancerConfig
 import com.audioeq.audio.EnhancerDsp
 import com.audioeq.audio.IeqPreset
-import com.audioeq.audio.ThreeDAudioMode
 import com.audioeq.model.EqConstants
 import com.audioeq.model.EqPreset
 import com.audioeq.model.OutputRoute
@@ -166,91 +165,6 @@ class EqualizerDatabaseHelper(context: Context) :
     }
 
     private fun createAndSeedSpecificationTables(db: SQLiteDatabase) {
-        // 1. Table for 3D Audio (Spatializer & Virtualizer Engine)
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS three_d_audio_spec (
-                mode_name TEXT PRIMARY KEY,
-                azimuth_deg INT,
-                g_direct_q15 INT,
-                g_direct_linear REAL,
-                g_cross_q15 INT,
-                g_cross_linear REAL,
-                g_refl_q15 INT,
-                itd_delay_samples_48k INT,
-                itd_delay_ms REAL,
-                shadow_cutoff_hz INT,
-                allpass_filter_delay INT
-            )
-            """.trimIndent()
-        )
-        db.execSQL("DELETE FROM three_d_audio_spec")
-        for (mode in ThreeDAudioMode.entries) {
-            val cv = ContentValues().apply {
-                put("mode_name", mode.modeName)
-                put("azimuth_deg", mode.azimuthDeg)
-                put("g_direct_q15", mode.gDirectQ15)
-                put("g_direct_linear", mode.gDirectLinear)
-                put("g_cross_q15", mode.gCrossQ15)
-                put("g_cross_linear", mode.gCrossLinear)
-                put("g_refl_q15", mode.gReflQ15)
-                put("itd_delay_samples_48k", mode.itdDelaySamples48k)
-                put("itd_delay_ms", mode.itdDelayMs)
-                put("shadow_cutoff_hz", mode.shadowCutoffHz)
-                put("allpass_filter_delay", mode.allpassFilterDelay)
-            }
-            db.insertWithOnConflict("three_d_audio_spec", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
-        }
-
-        // 2. Table for Dynamic Profile (profile id="0")
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS dynamic_profile_spec (
-                sub_system TEXT PRIMARY KEY,
-                steering_tag TEXT,
-                enabled INT,
-                classifier_input TEXT,
-                adaptation_formula TEXT
-            )
-            """.trimIndent()
-        )
-        db.execSQL("DELETE FROM dynamic_profile_spec")
-        for (spec in EnhancerDsp.DYNAMIC_PROFILE_SPECS) {
-            val cv = ContentValues().apply {
-                put("sub_system", spec.subSystem)
-                put("steering_tag", spec.steeringTag)
-                put("enabled", spec.enabled)
-                put("classifier_input", spec.classifierInput)
-                put("adaptation_formula", spec.adaptationFormula)
-            }
-            db.insertWithOnConflict("dynamic_profile_spec", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
-        }
-
-        // 3. Table for Balanced IEQ Curve (<preset id="2" name="balanced" type="ieq">)
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS balanced_ieq_curve (
-                band_index INT PRIMARY KEY,
-                frequency_hz INT,
-                raw_q4 INT,
-                target_gain_db REAL,
-                adaptation_factor_hp REAL,
-                adaptation_factor_spk REAL
-            )
-            """.trimIndent()
-        )
-        db.execSQL("DELETE FROM balanced_ieq_curve")
-        for (band in EnhancerDsp.BALANCED_IEQ_CURVE_SPECS) {
-            val cv = ContentValues().apply {
-                put("band_index", band.bandIndex)
-                put("frequency_hz", band.frequencyHz)
-                put("raw_q4", band.rawQ4)
-                put("target_gain_db", band.targetGainDb)
-                put("adaptation_factor_hp", band.adaptationFactorHp)
-                put("adaptation_factor_spk", band.adaptationFactorSpk)
-            }
-            db.insertWithOnConflict("balanced_ieq_curve", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
-        }
 
         db.execSQL(
             """

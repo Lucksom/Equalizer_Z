@@ -63,7 +63,7 @@ import kotlin.math.roundToInt
 fun EnhancerCard(
     config: EnhancerConfig,
     enabled: Boolean,
-    onSelectProfile: (AudioProfile) -> Unit,
+    onSelectProfile: (AudioProfile) -> Unit = {},
     onSelectIeqPreset: (IeqPreset) -> Unit,
     onIeqAmountChange: (Int) -> Unit,
     onIeqCustomBandChange: (Int, Float) -> Unit,
@@ -141,14 +141,14 @@ fun EnhancerCard(
                     }
                     Column {
                         Text(
-                            text = "Audio Enhancers & Profiles",
+                            text = "Audio Enhancers",
                             fontFamily = SpaceGroteskFontFamily,
                             fontSize = 18.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = palette.onSurface
                         )
                         Text(
-                            text = "Profiles and enhancers",
+                            text = "Dialogue & Bass Enhancers, IEQ, and Calibration",
                             fontSize = 12.sp,
                             color = palette.onVar
                         )
@@ -190,81 +190,6 @@ fun EnhancerCard(
                 }
             }
 
-            EnhancerModuleCard(
-                title = "Profiles",
-                subtitle = config.profile.subtitle,
-                badgeText = config.profile.badgeLabel,
-                isActive = config.profile != AudioProfile.OFF,
-                iconContent = { tint ->
-                    Canvas(modifier = Modifier.size(18.dp)) {
-                        val w = size.width
-                        val h = size.height
-                        val s = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-                        val spk = Path().apply {
-                            moveTo(w * 0.16f, h * 0.38f)
-                            lineTo(w * 0.34f, h * 0.38f)
-                            lineTo(w * 0.56f, h * 0.18f)
-                            lineTo(w * 0.56f, h * 0.82f)
-                            lineTo(w * 0.34f, h * 0.62f)
-                            lineTo(w * 0.16f, h * 0.62f)
-                            close()
-                        }
-                        drawPath(spk, color = tint, style = s)
-                        drawArc(
-                            color = tint,
-                            startAngle = -45f,
-                            sweepAngle = 90f,
-                            useCenter = false,
-                            style = s
-                        )
-                    }
-                }
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(palette.sHigh)
-                        .border(1.dp, palette.outlineV.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
-                        .padding(3.dp)
-                        .testTag("audio_profile_flow_row"),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    AudioProfile.entries.forEach { prof ->
-                        val isSelected = config.profile == prof
-                        val bg by animateColorAsState(
-                            targetValue = if (isSelected) palette.primary else Color.Transparent,
-                            animationSpec = tween(160),
-                            label = "profileSegBg_${prof.id}"
-                        )
-                        val fg by animateColorAsState(
-                            targetValue = if (isSelected) palette.onPrimary else palette.onVar,
-                            animationSpec = tween(160),
-                            label = "profileSegFg_${prof.id}"
-                        )
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(34.dp)
-                                .clip(RoundedCornerShape(11.dp))
-                                .background(bg)
-                                .clickable(enabled = enabled) { onSelectProfile(prof) }
-                                .testTag("audio_profile_chip_${prof.id}"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = prof.title,
-                                fontFamily = SpaceGroteskFontFamily,
-                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                                fontSize = 12.sp,
-                                color = fg,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                }
-            }
 
             val peakSubShelfDb = EnhancerMath.bassEnhancerBandBoostDb(
                 bandIndex = 1,

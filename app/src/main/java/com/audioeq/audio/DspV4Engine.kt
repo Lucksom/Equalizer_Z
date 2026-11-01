@@ -202,26 +202,36 @@ object Dsp {
         tiltBassDb: Double = 0.0,
         tiltTrebleDb: Double = 0.0
     ): DoubleArray {
-        if (profile == null || (profile.filters.isEmpty() && profile.rawText.isNullOrBlank())) {
+        val tilt = AutoEq.computeTiltCurve31(tiltBassDb, tiltTrebleDb)
+        if (profile == null || profile.id == "none") {
             return if (abs(tiltBassDb) > 0.01 || abs(tiltTrebleDb) > 0.01) {
-                AutoEq.peqToCorrection31(emptyList(), strength, 44100.0, fullRange, tiltBassDb, tiltTrebleDb)
+                tilt
             } else {
                 DoubleArray(31)
             }
         }
+        val s = strength.coerceIn(0.0, 1.0)
         val raw = profile.rawText
         if (!raw.isNullOrBlank()) {
             val peq = AutoEq.parsePeq(raw)
             if (peq.filters.isNotEmpty()) {
-                return AutoEq.peqToCorrection31(peq.filters, strength, 44100.0, fullRange, tiltBassDb, tiltTrebleDb)
+                return AutoEq.peqToCorrection31(peq.filters, s, 44100.0, fullRange, tiltBassDb, tiltTrebleDb)
             }
             val graphic = AutoEq.parseGraphic(raw)
-            if (graphic.size >= 4) {
-                return AutoEq.graphicToCorrection31(graphic, strength, fullRange, tiltBassDb, tiltTrebleDb)
+            if (graphic.size >= 2) {
+                return AutoEq.graphicToCorrection31(graphic, s, fullRange, tiltBassDb, tiltTrebleDb)
             }
         }
-        val peqFilters = AutoEq.fromBuiltInProfile(profile)
-        return AutoEq.peqToCorrection31(peqFilters, strength, 44100.0, fullRange, tiltBassDb, tiltTrebleDb)
+        if (profile.peqFilters.isNotEmpty()) {
+            return AutoEq.peqToCorrection31(profile.peqFilters, s, 44100.0, fullRange, tiltBassDb, tiltTrebleDb)
+        }
+        if (profile.graphicPoints.isNotEmpty()) {
+            return AutoEq.graphicToCorrection31(profile.graphicPoints, s, fullRange, tiltBassDb, tiltTrebleDb)
+        }
+        if (profile.correction31Db.size == 31 && profile.correction31Db.any { abs(it) > 0.01f }) {
+            return DoubleArray(31) { (profile.correction31Db[it] * s + tilt[it]).coerceIn(-15.0, 15.0) }
+        }
+        return if (abs(tiltBassDb) > 0.01 || abs(tiltTrebleDb) > 0.01) tilt else DoubleArray(31)
     }
 
     fun computeHeadphoneTrimmedDb(
@@ -230,14 +240,18 @@ object Dsp {
         tiltBassDb: Double = 0.0,
         tiltTrebleDb: Double = 0.0
     ): Double {
-        if (profile == null) return 0.0
+        if (profile == null || profile.id == "none") return 0.0
         val raw = profile.rawText
-        val peqFilters = if (!raw.isNullOrBlank()) {
-            AutoEq.parsePeq(raw).filters.ifEmpty { AutoEq.fromBuiltInProfile(profile) }
-        } else {
-            AutoEq.fromBuiltInProfile(profile)
+        if (!raw.isNullOrBlank()) {
+            val peq = AutoEq.parsePeq(raw)
+            if (peq.filters.isNotEmpty()) {
+                return AutoEq.computePeqTrimmedDb(peq.filters, 44100.0, fullRange, tiltBassDb, tiltTrebleDb)
+            }
         }
-        return AutoEq.computePeqTrimmedDb(peqFilters, 44100.0, fullRange, tiltBassDb, tiltTrebleDb)
+        if (profile.peqFilters.isNotEmpty()) {
+            return AutoEq.computePeqTrimmedDb(profile.peqFilters, 44100.0, fullRange, tiltBassDb, tiltTrebleDb)
+        }
+        return 0.0
     }
 
     fun computeHearingCurve31(earOffsets6Db: List<Float>, strength: Float = 0.5f): DoubleArray {

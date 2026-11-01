@@ -188,7 +188,6 @@ fun AudioEqScreen(
                     EnhancerCard(
                         config = uiState.enhancerConfig,
                         enabled = uiState.masterEnabled,
-                        onSelectProfile = viewModel::setAudioProfile,
                         onSelectIeqPreset = viewModel::setIeqPreset,
                         onIeqAmountChange = viewModel::updateIeqAmount,
                         onIeqCustomBandChange = viewModel::updateIeqCustomBand,

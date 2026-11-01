@@ -725,22 +725,14 @@ class MasterEqEngine(
             calCurve[i] = (calCurve[i] + enhancerCurve31[i]).coerceIn(-15.0, 15.0)
         }
 
-        val (profileDeltaL31, profileDeltaR31) = EnhancerDsp.computeProfileSpatialLRDelta31(
-            profile = params.enhancerConfig.profile
-        )
-
         val hearingL31 = interpolateHearingTo31(params.hearingCurve, isRight = false)
         val hearingR31 = interpolateHearingTo31(params.hearingCurve, isRight = true)
 
-        // Apply gentle, phase-coherent spatial L/R offset (<= ±0.4 dB) in PreEq so Stage 3 PostEq remains 0.0 dB
-        // and never introduces post-MBC comb-filtering or clipping when profiles are active.
         val calL = DoubleArray(31) {
-            val spatialL = (profileDeltaL31[it] * 0.25).coerceIn(-0.4, 0.4)
-            (calCurve[it] + hearingL31[it] + spatialL).coerceIn(-15.0, 15.0)
+            (calCurve[it] + hearingL31[it]).coerceIn(-15.0, 15.0)
         }
         val calR = DoubleArray(31) {
-            val spatialR = (profileDeltaR31[it] * 0.25).coerceIn(-0.4, 0.4)
-            (calCurve[it] + hearingR31[it] + spatialR).coerceIn(-15.0, 15.0)
+            (calCurve[it] + hearingR31[it]).coerceIn(-15.0, 15.0)
         }
 
         val targetL31 = Dsp.compute31BandTargets(
@@ -789,18 +781,15 @@ class MasterEqEngine(
             }
         }
 
-        // Keep Stage 3 PostEq flat (0.0f) across all bands — identical to Equalizer, Bass Enhancer, and Dialogue Enhancer
         val postL = FloatArray(bandCount) { 0.0f }
         val postR = FloatArray(bandCount) { 0.0f }
 
         val cfg = params.enhancerConfig
         val leftInputGain = if (effectiveEnabled) (basePreamp + trimL).toFloat() else 0.0f
         val rightInputGain = if (effectiveEnabled) (basePreamp + trimR).toFloat() else 0.0f
-        // Never add extra postGain when an AudioProfile is active so MBC never clips
         val makeupPostGain = if (
             effectiveEnabled &&
-            (cfg.bassEnhancerEnabled || cfg.dialogueEnhancerEnabled) &&
-            cfg.profile == AudioProfile.OFF
+            (cfg.bassEnhancerEnabled || cfg.dialogueEnhancerEnabled)
         ) 0.35f else 0.0f
 
         val hasDialogueMbc = cfg.dialogueEnhancerEnabled
@@ -870,7 +859,6 @@ class MasterEqEngine(
                         mbcBand.isEnabled = sessionEnabled
                         mbcBand.cutoffFrequency = Dsp.MBC_CUTOFFS[b]
                         when {
-                            // Stage 2: Bass & Virtual Bass bands (0 and 1: <=359 Hz): Volume-preserving upward density (high threshold so bass is NEVER ducked!)
                             cfg.bassEnhancerEnabled && (b == 0 || b == 1) -> {
                                 mbcBand.attackTime = 15.0f
                                 mbcBand.releaseTime = 110.0f
@@ -924,13 +912,7 @@ class MasterEqEngine(
             }
         }
 
-        // Do not auto-enable legacy 16-bit Virtualizer from profile when 32-bit float DynamicsProcessing is active,
-        // preventing fixed-point overflow distortion in libbundlewrapper.so.
-        val profileVirtPermille = if (dpSessions.isNotEmpty()) 0 else params.enhancerConfig.profile.virtualizerStrengthPermille
-        val virtStrength = max(
-            profileVirtPermille,
-            (((params.midSideWidth - 1.0f).coerceIn(0f, 1f)) * 1000f).roundToInt()
-        ).coerceIn(0, 1000)
+        val virtStrength = (((params.midSideWidth - 1.0f).coerceIn(0f, 1f)) * 1000f).roundToInt().coerceIn(0, 1000)
 
         for ((sid, virt) in virtualizerSessions) {
             try {
@@ -963,7 +945,6 @@ class MasterEqEngine(
             }
         }
 
-        // BassBoostMz (42b10000-0010-0000-0000-0002a5d5c51b) / Android BassBoost (0..1000)
         val targetBassStrength: Short = when {
             !effectiveEnabled -> 0
             cfg.bassEnhancerEnabled -> cfg.bassBoostStrengthPermille
