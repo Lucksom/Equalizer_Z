@@ -79,7 +79,8 @@ class DspReferenceMonitor(
         sourceId: String,
         applyEq: Boolean,
         curve31Db: List<Float>,
-        preampDb: Float
+        preampDb: Float,
+        enhancerConfig: EnhancerConfig = EnhancerConfig()
     ) {
         toneJob?.cancel()
         toneJob = scope.launch(Dispatchers.Default) {
@@ -101,49 +102,87 @@ class DspReferenceMonitor(
                     n > totalFrames - 1800 -> (totalFrames - n) / 1800.0
                     else -> 1.0
                 }
-                val sample = when (sourceId) {
+                val (sampleL, sampleR) = when (sourceId) {
                     "acoustic_chord" -> {
                         val env = exp(-t * 1.9)
                         val freqs = doubleArrayOf(110.0, 164.81, 220.0, 277.18, 329.63, 440.0, 659.25, 880.0, 1760.0, 3520.0)
-                        var acc = 0.0
+                        var accL = 0.0
+                        var accR = 0.0
                         for (i in freqs.indices) {
-                            acc += sin(2.0 * PI * freqs[i] * t) / (i + 1.0)
+                            val pan = if (i % 2 == 0) 0.62 else 0.38
+                            val wave = sin(2.0 * PI * freqs[i] * t + i * 0.15) / (i + 1.0)
+                            accL += wave * pan
+                            accR += wave * (1.0 - pan)
                         }
-                        acc * 0.22 * env
+                        (accL * 0.38 * env) to (accR * 0.38 * env)
                     }
                     "sub_pulse" -> {
                         val env = sin(PI * (t * 2.5 % 1.0)).pow(2.0)
-                        (sin(2.0 * PI * 55.0 * t) * 0.55 + sin(2.0 * PI * 110.0 * t) * 0.25 + sin(2.0 * PI * 2400.0 * t) * 0.08) * env
+                        val sub = sin(2.0 * PI * 55.0 * t) * 0.55 + sin(2.0 * PI * 110.0 * t) * 0.25
+                        val topL = sin(2.0 * PI * 2400.0 * t) * 0.10
+                        val topR = sin(2.0 * PI * 2400.0 * t + 0.65) * 0.10
+                        ((sub + topL) * env) to ((sub + topR) * env)
                     }
                     else -> {
-                        val white = rng.nextDouble() * 2.0 - 1.0
-                        pinkB0 = 0.99765 * pinkB0 + white * 0.0990460
-                        pinkB1 = 0.96300 * pinkB1 + white * 0.2965164
-                        pinkB2 = 0.57000 * pinkB2 + white * 1.0526913
-                        (pinkB0 + pinkB1 + pinkB2 + white * 0.1848) * 0.06
+                        val whiteL = rng.nextDouble() * 2.0 - 1.0
+                        val whiteR = rng.nextDouble() * 2.0 - 1.0
+                        val whiteMid = 0.75 * whiteL + 0.25 * whiteR
+                        pinkB0 = 0.99765 * pinkB0 + whiteMid * 0.0990460
+                        pinkB1 = 0.96300 * pinkB1 + whiteMid * 0.2965164
+                        pinkB2 = 0.57000 * pinkB2 + whiteMid * 1.0526913
+                        val basePink = (pinkB0 + pinkB1 + pinkB2 + whiteMid * 0.1848) * 0.06
+                        val sideAir = (whiteL - whiteR) * 0.018
+                        (basePink + sideAir) to (basePink - sideAir)
                     }
                 }
-                dryL[n] = (sample * fade).toFloat()
-                dryR[n] = (sample * fade).toFloat()
+                dryL[n] = (sampleL * fade).toFloat()
+                dryR[n] = (sampleR * fade).toFloat()
             }
 
             if (applyEq && curve31Db.size == 31) {
+                val (deltaL31, deltaR31) = EnhancerDsp.computeStereoWideningLRDelta31(enhancerConfig, 1.0f)
                 val preLin = 10.0.pow(preampDb.toDouble() / 20.0).toFloat()
                 val anchorIndices = intArrayOf(2, 5, 8, 11, 14, 17, 20, 23, 26, 29)
                 for (idx in anchorIndices) {
                     val fc = Dsp.F_DP[idx]
-                    val gain = curve31Db[idx].toDouble()
-                    if (kotlin.math.abs(gain) > 0.15) {
+                    val gainL = curve31Db[idx].toDouble() + deltaL31[idx]
+                    val gainR = curve31Db[idx].toDouble() + deltaR31[idx]
+                    if (kotlin.math.abs(gainL) > 0.12 || kotlin.math.abs(gainR) > 0.12) {
                         val biquadL = BiquadFilter().apply {
-                            configurePeaking(fc, sampleRate.toDouble(), gain, 1.414)
+                            configurePeaking(fc, sampleRate.toDouble(), gainL, 1.414)
                         }
                         val biquadR = BiquadFilter().apply {
-                            configurePeaking(fc, sampleRate.toDouble(), gain, 1.414)
+                            configurePeaking(fc, sampleRate.toDouble(), gainR, 1.414)
                         }
                         for (n in 0 until totalFrames) {
                             dryL[n] = biquadL.processSample(dryL[n])
                             dryR[n] = biquadR.processSample(dryR[n])
                         }
+                    }
+                }
+                if (enhancerConfig.stereoWideningMode != StereoWideningMode.NO_EFFECT ||
+                    enhancerConfig.profile == AudioProfile.MOVIE ||
+                    enhancerConfig.profile == AudioProfile.EFFECT_3D
+                ) {
+                    val msProc = MidSideProcessor(sampleRate).apply {
+                        updateParameters(
+                            width = 1.0f,
+                            vocalBoost = if (enhancerConfig.dialogueEnhancerEnabled) (enhancerConfig.dialogueAmount / 16f) else 0f,
+                            sampleRate = sampleRate,
+                            wideningMode = enhancerConfig.stereoWideningMode
+                        )
+                    }
+                    val hrtf = BinauralHrtfVirtualizer(sampleRate)
+                    val interleaved = FloatArray(totalFrames * 2)
+                    for (n in 0 until totalFrames) {
+                        interleaved[n * 2] = dryL[n]
+                        interleaved[n * 2 + 1] = dryR[n]
+                    }
+                    msProc.processInterleavedStereo(interleaved, totalFrames)
+                    for (n in 0 until totalFrames) {
+                        val (lOut, rOut) = hrtf.processPair(interleaved[n * 2], interleaved[n * 2 + 1])
+                        dryL[n] = lOut
+                        dryR[n] = rOut
                     }
                 }
                 for (n in 0 until totalFrames) {

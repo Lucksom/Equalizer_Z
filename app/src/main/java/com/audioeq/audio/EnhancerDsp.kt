@@ -241,13 +241,10 @@ object EnhancerMath {
     }
 
     fun computeTotalEnhancerOffsetDb(frequencyHz: Double, config: EnhancerConfig): Float {
-        var offset = 0.0f
-        if (config.dialogueEnhancerEnabled && frequencyHz in 1000.0..4000.0) {
-            val boost = (config.dialogueGain * 0.75f).coerceAtLeast(2.2f)
-            offset += boost
-        }
-        if (config.profile == AudioProfile.MOVIE && frequencyHz in 1000.0..4000.0) {
-            offset += 1.5f
+        val combined31 = EnhancerDsp.computeCombinedEnhancer31(config)
+        var offset = EnhancerDsp.interpolate31AtFrequency(combined31, frequencyHz).toFloat()
+        if (config.dialogueEnhancerEnabled && config.dialogueAmount == 0 && config.dialogueGain > 0 && frequencyHz in 1000.0..4000.0) {
+            offset += (config.dialogueGain * 0.75f).coerceAtLeast(2.2f)
         }
         return offset
     }
@@ -265,7 +262,7 @@ object EnhancerMath {
         }
         val maxVal = raw.maxOrNull() ?: 0f
         val trim = if (maxVal > ceilingDb) maxVal - ceilingDb else 0f
-        val effective = raw.map { (it - trim).coerceAtMost(ceilingDb + 0.5f) }
+        val effective = raw.map { (it - trim).coerceIn(-15.0f, ceilingDb + 0.5f) }
         return effective to trim
     }
 }
@@ -504,20 +501,71 @@ object EnhancerDsp {
         return 20.0 * kotlin.math.log10(w)
     }
 
+    fun interpolate31AtFrequency(curve31: DoubleArray, fHz: Double): Double {
+        return logLinearInterp(Dsp.F_DP, curve31, fHz)
+    }
+
     fun computeStereoWidening31(mode: StereoWideningMode): DoubleArray {
         val out = DoubleArray(Dsp.F_DP.size)
         if (mode == StereoWideningMode.NO_EFFECT) return out
-        val sideDb = mode.sideGainDb.toDouble()
-        val norm = (sideDb / 8.33).coerceIn(0.0, 1.0)
+        val stageScale = when (mode) {
+            StereoWideningMode.NO_EFFECT -> 0.0
+            StereoWideningMode.NEAR -> 0.48
+            StereoWideningMode.MIDDLE -> 0.76
+            StereoWideningMode.FAR -> 1.00
+        }
         for (k in out.indices) {
             val f = Dsp.F_DP[k]
-            val spatialAir = AutoEq.biquadDb("PK", 3200.0, 1.65 * norm, 1.10, f)
-            val upperStage = AutoEq.biquadDb("HSC", 8500.0, 1.40 * norm, 0.75, f)
-            val lowAnchor = AutoEq.biquadDb("PK", 180.0, 0.55 * norm, 1.20, f)
-            val centerDip = AutoEq.biquadDb("PK", 1450.0, -0.60 * norm, 1.50, f)
-            out[k] = spatialAir + upperStage + lowAnchor + centerDip
+            val warmthStage = AutoEq.biquadDb("PK", 165.0, 1.35 * stageScale, 1.15, f)
+            val headShadowCrossfeed = AutoEq.biquadDb("PK", 850.0, -1.65 * stageScale, 1.35, f)
+            val pinnaWidth = AutoEq.biquadDb("PK", 3200.0, 2.75 * stageScale, 1.05, f)
+            val spatialAir = AutoEq.biquadDb("HSC", 7800.0, 2.40 * stageScale, 0.72, f)
+            out[k] = warmthStage + headShadowCrossfeed + pinnaWidth + spatialAir
         }
         return out
+    }
+
+    fun computeStereoWideningLRDelta31(
+        config: EnhancerConfig,
+        midSideWidth: Float = 1.0f
+    ): Pair<DoubleArray, DoubleArray> {
+        val deltaL = DoubleArray(Dsp.F_DP.size)
+        val deltaR = DoubleArray(Dsp.F_DP.size)
+        val modeStrength = when (config.stereoWideningMode) {
+            StereoWideningMode.NO_EFFECT -> 0.0
+            StereoWideningMode.NEAR -> 0.48
+            StereoWideningMode.MIDDLE -> 0.78
+            StereoWideningMode.FAR -> 1.00
+        }
+        val profileSpatialStrength = when (config.profile) {
+            AudioProfile.EFFECT_3D -> 0.65
+            AudioProfile.MOVIE -> 0.45
+            AudioProfile.LIVE_MUSIC -> 0.50
+            AudioProfile.DYNAMIC -> 0.20
+            else -> 0.0
+        }
+        val manualWidthStrength = ((midSideWidth - 1.0f).coerceIn(0f, 1f)).toDouble() * 0.65
+        val totalStrength = max(modeStrength, max(profileSpatialStrength, manualWidthStrength)).coerceIn(0.0, 1.0)
+        if (totalStrength <= 1e-4) return deltaL to deltaR
+
+        val maxDichoticDb = 4.4 * totalStrength
+        for (k in Dsp.F_DP.indices) {
+            val f = Dsp.F_DP[k]
+            if (f < 200.0) {
+                deltaL[k] = 0.0
+                deltaR[k] = 0.0
+            } else {
+                val xoverWeight = ((ln(f / 200.0) / ln(400.0 / 200.0)).coerceIn(0.0, 1.0))
+                val combWave = sin((k - 10) * 1.08 + 0.42)
+                val pinnaAsym = AutoEq.biquadDb("PK", 1950.0, 1.8 * totalStrength, 1.6, f) -
+                    AutoEq.biquadDb("PK", 3550.0, 1.8 * totalStrength, 1.6, f)
+                val diff = (combWave * maxDichoticDb + pinnaAsym) * xoverWeight * AutoEq.taper(f)
+                val energyComp = 0.35 * abs(diff)
+                deltaL[k] = (diff + energyComp).coerceIn(-5.5, 6.0)
+                deltaR[k] = (-diff + energyComp).coerceIn(-5.5, 6.0)
+            }
+        }
+        return deltaL to deltaR
     }
 
     fun reverbOverSubtractionGamma(amount: Int): Double {

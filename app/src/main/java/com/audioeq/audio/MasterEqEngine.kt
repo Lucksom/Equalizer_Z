@@ -632,11 +632,20 @@ class MasterEqEngine(
             calCurve[i] = (calCurve[i] + enhancerCurve31[i]).coerceIn(-15.0, 15.0)
         }
 
+        val (stereoDeltaL31, stereoDeltaR31) = EnhancerDsp.computeStereoWideningLRDelta31(
+            config = params.enhancerConfig,
+            midSideWidth = params.midSideWidth
+        )
+
         val hearingL31 = interpolateHearingTo31(params.hearingCurve, isRight = false)
         val hearingR31 = interpolateHearingTo31(params.hearingCurve, isRight = true)
 
-        val calL = DoubleArray(31) { (calCurve[it] + hearingL31[it]).coerceIn(-15.0, 15.0) }
-        val calR = DoubleArray(31) { (calCurve[it] + hearingR31[it]).coerceIn(-15.0, 15.0) }
+        val calL = DoubleArray(31) {
+            (calCurve[it] + hearingL31[it] + stereoDeltaL31[it]).coerceIn(-15.0, 15.0)
+        }
+        val calR = DoubleArray(31) {
+            (calCurve[it] + hearingR31[it] + stereoDeltaR31[it]).coerceIn(-15.0, 15.0)
+        }
 
         val targetL31 = Dsp.compute31BandTargets(
             userGains10 = params.bandGains10L,
@@ -678,8 +687,8 @@ class MasterEqEngine(
         val trimR = if (bal < 0.0) bal else 0.0
 
         val is10BandMode = params.compatibility10Band
-        val bandFreqs = if (is10BandMode) Dsp.F_USER else Dsp.F_DP
-        val bandCount = bandFreqs.size
+        val bandCutoffs = if (is10BandMode) Dsp.FALLBACK_10_CUT else Dsp.RENDER_CUT
+        val bandCount = bandCutoffs.size
 
         val effL = FloatArray(bandCount) { k ->
             if (!effectiveEnabled) 0.0f
@@ -701,6 +710,8 @@ class MasterEqEngine(
         }
 
         val effPreamp = if (effectiveEnabled) basePreamp.toFloat() else 0.0f
+        val reverbNorm = (params.enhancerConfig.reduceReverbAmount.coerceIn(0, 9) / 9.0f)
+        val wideningActive = params.enhancerConfig.stereoWideningMode != StereoWideningMode.NO_EFFECT
 
         for ((sid, dp) in dpSessions) {
             try {
@@ -718,14 +729,35 @@ class MasterEqEngine(
 
                 for (k in 0 until bandCount) {
                     if (prevL[k].isNaN() || abs(prevL[k] - effL[k]) >= 0.05f) {
-                        val band = DynamicsProcessing.EqBand(true, bandFreqs[k].toFloat(), effL[k])
+                        val band = DynamicsProcessing.EqBand(true, bandCutoffs[k], effL[k])
                         dp.setPreEqBandByChannelIndex(0, k, band)
                         prevL[k] = effL[k]
                     }
                     if (prevR[k].isNaN() || abs(prevR[k] - effR[k]) >= 0.05f) {
-                        val band = DynamicsProcessing.EqBand(true, bandFreqs[k].toFloat(), effR[k])
+                        val band = DynamicsProcessing.EqBand(true, bandCutoffs[k], effR[k])
                         dp.setPreEqBandByChannelIndex(1, k, band)
                         prevR[k] = effR[k]
+                    }
+                }
+
+                if (reverbNorm > 0.01f || wideningActive) {
+                    for (ch in 0..1) {
+                        for (b in 0 until 6) {
+                            val mbcBand = dp.getMbcBandByChannelIndex(ch, b)
+                            mbcBand.isEnabled = effectiveEnabled
+                            mbcBand.cutoffFrequency = Dsp.MBC_CUTOFFS[b]
+                            mbcBand.attackTime = Dsp.MBC_ATTACK_MS[b]
+                            val widReleaseOffset = if (wideningActive && b >= 2) (if (ch == 0) -6f else 8f) else 0f
+                            mbcBand.releaseTime = (Dsp.MBC_RELEASE_MS[b] * (1f - 0.35f * reverbNorm) + widReleaseOffset).coerceAtLeast(18f)
+                            mbcBand.ratio = 1.5f + 0.3f * reverbNorm
+                            mbcBand.threshold = -18.0f
+                            mbcBand.kneeWidth = 6.0f
+                            mbcBand.noiseGateThreshold = -75.0f + (28.0f * reverbNorm)
+                            mbcBand.expanderRatio = 1.0f + (1.4f * reverbNorm)
+                            mbcBand.preGain = 0.0f
+                            mbcBand.postGain = if (wideningActive && b >= 3) 0.6f else 0.0f
+                            dp.setMbcBandByChannelIndex(ch, b, mbcBand)
+                        }
                     }
                 }
 
@@ -746,9 +778,9 @@ class MasterEqEngine(
 
         val wideningPermille = when (params.enhancerConfig.stereoWideningMode) {
             StereoWideningMode.NO_EFFECT -> 0
-            StereoWideningMode.NEAR -> 320
-            StereoWideningMode.MIDDLE -> 620
-            StereoWideningMode.FAR -> 950
+            StereoWideningMode.NEAR -> 450
+            StereoWideningMode.MIDDLE -> 750
+            StereoWideningMode.FAR -> 1000
         }
         val virtStrength = max(
             max(
@@ -758,12 +790,33 @@ class MasterEqEngine(
             (((params.midSideWidth - 1.0f).coerceIn(0f, 1f)) * 1000f).roundToInt()
         ).coerceIn(0, 1000)
 
+        val isSpeakerRoute = try {
+            detectCurrentRoute(audioManager) == OutputRoute.SPEAKER
+        } catch (_: Throwable) {
+            false
+        }
+
         for ((_, virt) in virtualizerSessions) {
             try {
                 val wantVirt = effectiveEnabled && virtStrength > 0
-                if (virt.enabled != wantVirt) virt.enabled = wantVirt
-                if (wantVirt && virt.strengthSupported) {
-                    virt.setStrength(virtStrength.toShort())
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && wantVirt) {
+                    val vMode = if (isSpeakerRoute) {
+                        Virtualizer.VIRTUALIZATION_MODE_TRANSAURAL
+                    } else {
+                        Virtualizer.VIRTUALIZATION_MODE_BINAURAL
+                    }
+                    try {
+                        virt.forceVirtualizationMode(vMode)
+                    } catch (_: Throwable) {
+                    }
+                }
+                if (virt.strengthSupported) {
+                    virt.setStrength(if (wantVirt) virtStrength.toShort() else 0)
+                } else {
+                    virt.setStrength(if (wantVirt) 1000 else 0)
+                }
+                if (virt.enabled != wantVirt) {
+                    virt.enabled = wantVirt
                 }
             } catch (_: Throwable) {
             }

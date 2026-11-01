@@ -53,7 +53,7 @@ data class EqUiState(
     val isAbCompare: Boolean = false,
     val editingRightChannel: Boolean = false,
     val intensity: Float = 1.0f,
-    val ceilingDb: Float = 12.0f,
+    val ceilingDb: Float = 0.0f,
     val effectiveGainsDb: List<Float> = emptyList(),
     val splitLREnabled: Boolean = false,
     val balanceDb: Float = 0f,
@@ -340,16 +340,47 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         }
         val activePresetName = p1.presets.find { it.id == p1.profile.presetId }?.name ?: "Flat"
         val sliderGains = if (p1.editingRightChannel) p1.rightBands.map { it.gainDb } else p1.bands.map { it.gainDb }
-        val effectiveGains = if (!p1.isEqEnabled || p1.isAbCompare) {
+        val tilt31 = AutoEq.computeTiltCurve31(
+            bassDb = p1.profile.tiltBassDb.toDouble(),
+            trebleDb = p1.profile.tiltTrebleDb.toDouble()
+        )
+        val contour10 = if (p1.profile.iso226ContourEnabled) {
+            Dsp.contour(10.0 / 15.0)
+        } else {
+            DoubleArray(10)
+        }
+        val baseWithTone10 = EqConstants.FREQ_10_BAND.indices.map { i ->
+            val eqGain = if (p1.isEqEnabled) sliderGains.getOrElse(i) { 0f } * p1.intensity else 0f
+            val fHz = EqConstants.FREQ_10_BAND[i].toDouble()
+            val tiltAtBand = EnhancerDsp.interpolate31AtFrequency(tilt31, fHz).toFloat()
+            val contourAtBand = contour10.getOrElse(i) { 0.0 }.toFloat()
+            eqGain + tiltAtBand + contourAtBand
+        }
+        val effectiveGains = if (!p1.masterEnabled || p1.isAbCompare) {
             List(10) { 0f }
         } else {
             val (curve, _) = EnhancerMath.computeCurveWithAutoHeadroom(
                 freqs = EqConstants.FREQ_10_BAND,
-                baseGains = sliderGains.map { it * p1.intensity },
+                baseGains = baseWithTone10,
                 config = p1.enhancerConfig,
                 ceilingDb = 12.0f
             )
             curve
+        }
+        val computedCeilingDb = if (!p1.masterEnabled || p1.isAbCompare) {
+            0.0f
+        } else {
+            val maxPositiveGain = (effectiveGains.maxOrNull() ?: 0f).coerceAtLeast(0f)
+            val wideningLoad = when (p1.enhancerConfig.stereoWideningMode) {
+                StereoWideningMode.NO_EFFECT -> 0f
+                StereoWideningMode.NEAR -> 0.5f
+                StereoWideningMode.MIDDLE -> 0.9f
+                StereoWideningMode.FAR -> 1.4f
+            }
+            val reverbLoad = p1.enhancerConfig.reduceReverbAmount * 0.12f
+            val virtualBassLoad = if (p1.enhancerConfig.virtualBassEnabled) 0.7f else 0f
+            (maxPositiveGain * 0.52f + wideningLoad + reverbLoad + virtualBassLoad + trimmed * 0.35f)
+                .coerceIn(0f, 9.0f)
         }
 
         EqUiState(
@@ -368,7 +399,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             isAbCompare = p1.isAbCompare,
             editingRightChannel = p1.editingRightChannel,
             intensity = p1.intensity,
-            ceilingDb = 12.0f,
+            ceilingDb = computedCeilingDb,
             effectiveGainsDb = effectiveGains,
             splitLREnabled = p1.profile.splitLREnabled,
             balanceDb = p1.profile.balanceDb,
@@ -823,9 +854,13 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     fun auditionAbx(channel: String) {
         _abxAuditionMode.value = channel
         val s = uiState.value
+        val enh31 = EnhancerDsp.computeCombinedEnhancer31(s.enhancerConfig)
+        val cal31 = DoubleArray(31) {
+            (s.speakerCorrection31Db.getOrElse(it) { 0f }.toDouble() + enh31[it]).coerceIn(-15.0, 15.0)
+        }
         val target31 = Dsp.compute31BandTargets(
-            userGains10 = DoubleArray(10) { s.bands[it].gainDb.toDouble() },
-            cal31 = DoubleArray(31) { s.speakerCorrection31Db.getOrElse(it) { 0f }.toDouble() },
+            userGains10 = DoubleArray(10) { if (s.isEqEnabled) (s.bands[it].gainDb * s.intensity).toDouble() else 0.0 },
+            cal31 = cal31,
             hpFc = s.highPassHz.toDouble(),
             iso226On = s.iso226Enabled,
             volIdx = 10,
@@ -839,7 +874,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                     sourceId = _abxSourceId.value,
                     applyEq = true,
                     curve31Db = target31,
-                    preampDb = s.preampDb
+                    preampDb = s.preampDb,
+                    enhancerConfig = s.enhancerConfig
                 )
             }
             "B" -> {
@@ -848,7 +884,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                     sourceId = _abxSourceId.value,
                     applyEq = false,
                     curve31Db = emptyList(),
-                    preampDb = 0f
+                    preampDb = 0f,
+                    enhancerConfig = EnhancerConfig()
                 )
             }
             "X" -> {
@@ -858,7 +895,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                     sourceId = _abxSourceId.value,
                     applyEq = isEq,
                     curve31Db = if (isEq) target31 else emptyList(),
-                    preampDb = if (isEq) s.preampDb else 0f
+                    preampDb = if (isEq) s.preampDb else 0f,
+                    enhancerConfig = if (isEq) s.enhancerConfig else EnhancerConfig()
                 )
             }
         }
