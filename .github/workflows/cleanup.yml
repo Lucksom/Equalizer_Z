@@ -1,4 +1,4 @@
-name: Clean Workflows and Releases
+name: Clean Workflows, Releases, and Assets
 
 on:
   workflow_dispatch:
@@ -8,10 +8,17 @@ on:
         required: true
         type: choice
         options:
+          - 'All (Action History, Releases, and public/ folder)'
           - 'Both (Action History & Releases)'
           - 'Action History Only'
           - 'Releases & Tags Only'
-        default: 'Both (Action History & Releases)'
+          - 'public/ Assets Folder Only'
+        default: 'All (Action History, Releases, and public/ folder)'
+      delete_public_assets:
+        description: 'Purge public/ assets folder from repository'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   actions: write
@@ -28,7 +35,7 @@ jobs:
           fetch-depth: 0
 
       - name: Delete Workflow Run History
-        if: ${{ inputs.cleanup_target == 'Both (Action History & Releases)' || inputs.cleanup_target == 'Action History Only' }}
+        if: ${{ inputs.cleanup_target == 'All (Action History, Releases, and public/ folder)' || inputs.cleanup_target == 'Both (Action History & Releases)' || inputs.cleanup_target == 'Action History Only' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -46,7 +53,7 @@ jobs:
           echo "Action history cleanup completed."
 
       - name: Delete Releases and Release Assets
-        if: ${{ inputs.cleanup_target == 'Both (Action History & Releases)' || inputs.cleanup_target == 'Releases & Tags Only' }}
+        if: ${{ inputs.cleanup_target == 'All (Action History, Releases, and public/ folder)' || inputs.cleanup_target == 'Both (Action History & Releases)' || inputs.cleanup_target == 'Releases & Tags Only' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -61,7 +68,7 @@ jobs:
           echo "Releases cleanup completed."
 
       - name: Delete Git Tags
-        if: ${{ inputs.cleanup_target == 'Both (Action History & Releases)' || inputs.cleanup_target == 'Releases & Tags Only' }}
+        if: ${{ inputs.cleanup_target == 'All (Action History, Releases, and public/ folder)' || inputs.cleanup_target == 'Both (Action History & Releases)' || inputs.cleanup_target == 'Releases & Tags Only' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -74,3 +81,18 @@ jobs:
             git tag -d "$T" || true
           done
           echo "All git tags purged successfully."
+
+      - name: Remove public/ Directory from Repository
+        if: ${{ inputs.cleanup_target == 'All (Action History, Releases, and public/ folder)' || inputs.cleanup_target == 'public/ Assets Folder Only' || inputs.delete_public_assets == true }}
+        run: |
+          echo "Checking for public/ directory in repository..."
+          if [ -d "public" ] || git ls-files --error-unmatch public >/dev/null 2>&1; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git rm -rf public || rm -rf public
+            git commit -m "Remove public/ directory and unneeded asset uploads" || true
+            git push origin HEAD || true
+            echo "public/ directory removed successfully from GitHub repository."
+          else
+            echo "public/ directory is not present in repository tree."
+          fi

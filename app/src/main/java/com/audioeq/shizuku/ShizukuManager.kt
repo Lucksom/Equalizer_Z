@@ -18,12 +18,12 @@ import kotlinx.coroutines.withTimeout
 import rikka.shizuku.Shizuku
 
 enum class ShizukuState {
-    NOT_INSTALLED,        // Shizuku app not found (and no Sui)
-    NOT_RUNNING,          // installed, but the service is not started
-    UNSUPPORTED_VERSION,  // Shizuku older than v11
-    NEEDS_PERMISSION,     // running; call requestPermission()
-    DENIED_PERMANENTLY,   // user chose "deny and don't ask again"
-    READY                 // permission granted
+    NOT_INSTALLED,
+    NOT_RUNNING,
+    UNSUPPORTED_VERSION,
+    NEEDS_PERMISSION,
+    DENIED_PERMANENTLY,
+    READY
 }
 
 object ShizukuManager {
@@ -36,10 +36,57 @@ object ShizukuManager {
     private val _state = MutableStateFlow(ShizukuState.NOT_RUNNING)
     val state: StateFlow<ShizukuState> = _state.asStateFlow()
 
+    private val _privilegeSummary = MutableStateFlow("none")
+    val privilegeSummary: StateFlow<String> = _privilegeSummary.asStateFlow()
+
+    operator fun invoke(context: Context): ShizukuManager {
+        init(context)
+        return this
+    }
+
+    fun refreshStatus() = refresh()
+
+    fun isRootAvailable(): Boolean {
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
+            val exit = process.waitFor()
+            exit == 0
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun discoverAudioFlingerSessions(): List<Int> {
+        val output = execIfBound("dumpsys media.audio_flinger") ?: runCatching {
+            if (isRootAvailable()) {
+                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "dumpsys media.audio_flinger"))
+                process.inputStream.bufferedReader().use { it.readText() }
+            } else null
+        }.getOrNull() ?: return emptyList()
+
+        val sessionRegex = Regex("""(?:session(?:Id)?|Session)\s*[:=]?\s*(\d+)""", RegexOption.IGNORE_CASE)
+        return sessionRegex.findAll(output)
+            .mapNotNull { it.groupValues[1].toIntOrNull() }
+            .filter { it > 0 }
+            .distinct()
+            .toList()
+    }
+
+    fun readBluetoothCodecSummary(): String? {
+        val output = execIfBound("dumpsys bluetooth_manager") ?: runCatching {
+            if (isRootAvailable()) {
+                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "dumpsys bluetooth_manager"))
+                process.inputStream.bufferedReader().use { it.readText() }
+            } else null
+        }.getOrNull() ?: return null
+
+        val codecRegex = Regex("""(?:codecConfig|mCodecConfig|mCodecType|Selected codec)\s*[:=]?\s*([^\n,]+)""", RegexOption.IGNORE_CASE)
+        val match = codecRegex.find(output)
+        return match?.groupValues?.get(1)?.trim() ?: "Bluetooth (A2DP)"
+    }
+
     @Volatile private var service: IUserService? = null
     @Volatile private var pending: CompletableDeferred<IUserService>? = null
-
-    // ---- Shizuku listeners -------------------------------------------------
 
     private val onBinderReceived = Shizuku.OnBinderReceivedListener { refresh() }
 
@@ -53,11 +100,10 @@ object ShizukuManager {
             if (requestCode == REQUEST_CODE) refresh()
         }
 
-    
     fun init(context: Context) {
         appContext = context.applicationContext
         runCatching {
-            // "Sticky" fires immediately if the binder is already available.
+
             Shizuku.addBinderReceivedListenerSticky(onBinderReceived)
             Shizuku.addBinderDeadListener(onBinderDead)
             Shizuku.addRequestPermissionResultListener(onPermissionResult)
@@ -73,12 +119,10 @@ object ShizukuManager {
         }
     }
 
-    // ---- State ---------------------------------------------------------------
-
     fun isShizukuAppInstalled(context: Context? = appContext): Boolean {
         val ctx = context ?: return false
         return try {
-            // Needs the <queries> entry in the manifest on Android 11+.
+
             ctx.packageManager.getPackageInfo(SHIZUKU_PACKAGE, 0)
             true
         } catch (_: PackageManager.NameNotFoundException) {
@@ -102,10 +146,10 @@ object ShizukuManager {
             if (isShizukuAppInstalled()) ShizukuState.NOT_RUNNING else ShizukuState.NOT_INSTALLED
         }
         _state.value = newState
+        _privilegeSummary.value = privilege()
         if (newState == ShizukuState.READY && service == null) bind()
     }
 
-    
     fun privilege(): String = try {
         when {
             !Shizuku.pingBinder() -> "none"
@@ -116,9 +160,6 @@ object ShizukuManager {
         "none"
     }
 
-    // ---- Permission ----------------------------------------------------------
-
-    
     fun requestPermission() {
         refresh()
         runCatching {
@@ -132,7 +173,6 @@ object ShizukuManager {
         }
     }
 
-    
     fun openShizukuApp() {
         val ctx = appContext ?: return
         val intent = ctx.packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE)
@@ -147,7 +187,8 @@ object ShizukuManager {
         runCatching { ctx.startActivity(intent) }
     }
 
-    // ---- Shell access through a UserService ---------------------------------
+    fun launchShizukuApp() = openShizukuApp()
+    fun openPlayStoreForShizuku() = openShizukuDownloadPage()
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
@@ -171,7 +212,7 @@ object ShizukuManager {
             .daemon(false)
             .processNameSuffix("shell")
             .debuggable(false)
-            .version(version) // bump the app version when the service code changes
+            .version(version)
     }
 
     private fun bind() {
@@ -186,7 +227,6 @@ object ShizukuManager {
         service = null
     }
 
-    
     suspend fun exec(command: String): Result<String> = runCatching {
         check(_state.value == ShizukuState.READY) { "Shizuku is not ready: ${_state.value}" }
         val s = service ?: CompletableDeferred<IUserService>().let { d ->
@@ -201,7 +241,6 @@ object ShizukuManager {
         out
     }
 
-    
     fun execIfBound(command: String): String? {
         if (_state.value != ShizukuState.READY) return null
         val s = service ?: run {

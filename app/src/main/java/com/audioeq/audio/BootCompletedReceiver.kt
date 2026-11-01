@@ -18,31 +18,48 @@ class BootCompletedReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val repo = EqRepository(context.applicationContext)
-                val prefs = repo.preferencesFlow.firstOrNull() ?: return@launch
-                if (!prefs.startOnBoot || !prefs.isEnabled) return@launch
+                val startOnBoot = repo.startOnBoot.value
+                val masterEnabled = repo.masterEnabled.value
+                if (!startOnBoot || !masterEnabled) return@launch
 
-                val controller = AudioEngineController(context.applicationContext)
-                val mode = EngineMode.entries.firstOrNull { it.id == prefs.selectedModeId } ?: EngineMode.LEGACY
-                val preset = EqConstants.BUILT_IN_PRESETS.firstOrNull { it.id == prefs.selectedPresetId }
-                val route = controller.getCurrentRoute()
-
-                val layers = Layers(
-                    userDb = DoubleArray(10) { prefs.gainsDb.getOrElse(it) { 0f }.toDouble() },
-                    intensity = prefs.intensity.toDouble(),
-                    routeDb = route.offsetsDb,
-                    contourDb = DoubleArray(10)
+                val controller = AudioEngineController(
+                    context = context.applicationContext,
+                    shizukuManager = com.audioeq.shizuku.ShizukuManager(context.applicationContext),
+                    scope = this,
+                    onRouteChanged = { route, devKey, _ ->
+                        repo.switchOutputRoute(route, devKey)
+                    }
                 )
-                controller.loadEngineState(
+                val mode = repo.engineMode.value
+                val profile = repo.currentRouteProfile.value
+                controller.applyDspState(
                     mode = mode,
-                    enabled = prefs.isEnabled,
-                    abCompare = false,
-                    layers = layers,
-                    mbc = EqConstants.mbcForPreset(preset, prefs.nightModeEnabled),
-                    routeBaseDb = route.baseInputGainDb,
-                    limiterDb = route.limiterThresholdDb,
-                    flatBypass = preset?.bypassChain == true,
-                    bassBoostStrength = preset?.bassBoostStrength ?: 150,
-                    virtualizerStrength = preset?.virtualizerStrength ?: 150
+                    masterEnabled = masterEnabled,
+                    bandGainsDb = profile.bandGainsDb,
+                    rightBandGainsDb = profile.rightBandGainsDb,
+                    splitLREnabled = profile.splitLREnabled,
+                    balanceDb = profile.balanceDb,
+                    preampDb = profile.preampDb,
+                    autoGainEnabled = profile.autoGainEnabled,
+                    limiterEnabled = profile.limiterEnabled,
+                    limiterCeilingDb = profile.limiterCeilingDb,
+                    subBassHighPassHz = profile.subBassHighPassHz,
+                    iso226ContourEnabled = profile.iso226ContourEnabled,
+                    midSideWidth = profile.midSideWidth,
+                    vocalPresenceBoost = profile.vocalPresenceBoost,
+                    headphoneProfile = null,
+                    headphoneCorrectionStrength = profile.headphoneCorrectionStrength,
+                    headphoneFullRange = profile.headphoneFullRange,
+                    tiltBassDb = profile.tiltBassDb,
+                    tiltTrebleDb = profile.tiltTrebleDb,
+                    speakerCalibrationEnabled = profile.speakerCalibrationEnabled,
+                    speakerCalStrength = profile.speakerCalStrength,
+                    speakerCorrection31Db = emptyList(),
+                    hearingCurve = repo.hearingCurve.value,
+                    enhancerConfig = repo.enhancerConfig.value,
+                    compatibility10Band = repo.compatibility10Band.value,
+                    transientMode = repo.transientMode.value,
+                    usbBitPerfectEnabled = repo.usbBitPerfectEnabled.value
                 )
             } catch (_: Throwable) {
             } finally {

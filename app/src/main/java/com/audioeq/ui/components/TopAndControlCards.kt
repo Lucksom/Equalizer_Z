@@ -88,7 +88,7 @@ fun TopBarHeader(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Left: .title-wrap (.brand + h1 + #sub)
+
         Row(
             modifier = Modifier
                 .weight(1f)
@@ -114,7 +114,7 @@ fun TopBarHeader(
                     val w = size.width
                     val h = size.height
                     val strokeW = 2.2.dp.toPx()
-                    // 3 vertical bars + 3 circle thumbs matching audio-eq-v7.html SVG
+
                     val x1 = w * (6f / 24f)
                     val x2 = w * (12f / 24f)
                     val x3 = w * (18f / 24f)
@@ -179,12 +179,11 @@ fun TopBarHeader(
             }
         }
 
-        // Right: .top-actions (#enginePill + #master + #settingsBtn)
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // .engine-pill (#enginePill)
+
             Row(
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
@@ -219,7 +218,6 @@ fun TopBarHeader(
                 )
             }
 
-            // #master power icon button
             Box(
                 modifier = Modifier
                     .size(46.dp)
@@ -252,7 +250,6 @@ fun TopBarHeader(
                 )
             }
 
-            // #settingsBtn gear icon button
             Box(
                 modifier = Modifier
                     .size(46.dp)
@@ -348,7 +345,7 @@ fun PresetsCard(
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // .kicker
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -372,7 +369,6 @@ fun PresetsCard(
                 )
             }
 
-            // .chips (#presetChips)
             FlowRow(
                 modifier = Modifier
                     .fillMaxWidth()

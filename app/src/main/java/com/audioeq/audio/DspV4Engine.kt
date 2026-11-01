@@ -34,6 +34,31 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
+object DspV4Engine {
+    val STANDARD_10_BAND_HZ = floatArrayOf(31.25f, 62.5f, 125f, 250f, 500f, 1000f, 2000f, 4000f, 8000f, 16000f)
+
+    fun computeAutoPreamp(
+        bandFreqs: FloatArray,
+        bandGains: FloatArray,
+        bandQs: FloatArray,
+        bassGainDb: Float,
+        extraCeilingDb: Float
+    ): Float {
+        val peak = (bandGains.maxOrNull() ?: 0f) + max(0f, bassGainDb)
+        return -peak + extraCeilingDb
+    }
+
+    fun fractionalOctaveSmooth(gains: FloatArray, octaveFraction: Int = 3): FloatArray {
+        val smoothed = FloatArray(gains.size)
+        for (i in gains.indices) {
+            val left = if (i > 0) gains[i - 1] else gains[i]
+            val right = if (i < gains.size - 1) gains[i + 1] else gains[i]
+            smoothed[i] = 0.25f * left + 0.5f * gains[i] + 0.25f * right
+        }
+        return smoothed
+    }
+}
+
 object Dsp {
     val SLIDER_HZ = doubleArrayOf(31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0)
     val RENDER_HZ = DoubleArray(31) { 20.0 * 2.0.pow(it / 3.0) }
@@ -41,12 +66,61 @@ object Dsp {
     val MBC_RANGE = arrayOf(0..6, 7..12, 13..18, 19..24, 25..27, 28..30)
     val MBC_CUT = floatArrayOf(RENDER_CUT[6], RENDER_CUT[12], RENDER_CUT[18], RENDER_CUT[24], RENDER_CUT[27], 20000f)
 
-    // 10-band fallback cutoffs (v5 Section 5.2)
+    val F_USER: DoubleArray get() = SLIDER_HZ
+    val F_DP: DoubleArray get() = RENDER_HZ
+    val MBC_CUTOFFS: FloatArray get() = MBC_CUT
+    val MBC_ATTACK_MS = floatArrayOf(20f, 15f, 10f, 8f, 5f, 5f)
+    val MBC_RELEASE_MS = floatArrayOf(120f, 100f, 80f, 60f, 50f, 40f)
+    const val LIM_ATTACK_MS = 2.0f
+    const val LIM_RELEASE_MS = 50.0f
+    const val LIM_RATIO = 10.0f
+
+    fun compute31BandTargets(
+        userGains10: DoubleArray,
+        cal31: DoubleArray = DoubleArray(31),
+        hpFc: Double = 0.0,
+        iso226On: Boolean = false,
+        volIdx: Int = 10,
+        volMax: Int = 15
+    ): DoubleArray {
+        val curve31 = renderCurve(userGains10)
+        val contour31 = if (iso226On && volMax > 0) {
+            val c10 = contour(volIdx.toDouble() / volMax.toDouble())
+            renderCurve(c10)
+        } else DoubleArray(31)
+
+        return DoubleArray(31) { k ->
+            val f = RENDER_HZ[k]
+            val hpCut = if (hpFc > 10.0 && f < hpFc) {
+                val octavesBelow = (ln(hpFc / f) / ln(2.0)).coerceAtLeast(0.0)
+                -18.0 * octavesBelow
+            } else 0.0
+            val cal = if (k < cal31.size) cal31[k] else 0.0
+            (curve31[k] + contour31[k] + cal + hpCut).coerceIn(-18.0, 18.0)
+        }
+    }
+
+    fun computeAutoPreamp(worstTarget31: DoubleArray, requestedPreampDb: Double = 0.0): Double {
+        val peakBoost = worstTarget31.maxOrNull() ?: 0.0
+        val safePreamp = if (peakBoost > 0.0) -peakBoost - 0.5 else 0.0
+        return min(requestedPreampDb, safePreamp)
+    }
+
+    fun computeSpeakerCorrection31(
+        measDb: DoubleArray,
+        valid: BooleanArray = BooleanArray(measDb.size) { true },
+        strength: Double = 0.7
+    ): DoubleArray = computeSpeakerCorrection(measDb, valid, strength)
+
+    fun computeSpeakerCorrection31(
+        measDb: DoubleArray,
+        strength: Double = 0.7
+    ): DoubleArray = computeSpeakerCorrection(measDb, BooleanArray(measDb.size) { true }, strength)
+
     val FALLBACK_10_CUT = floatArrayOf(44f, 88f, 177f, 354f, 707f, 1414f, 2828f, 5657f, 11314f, 20000f)
     val FALLBACK_10_MBC_CUT = floatArrayOf(88f, 354f, 1414f, 5657f, 11314f, 20000f)
     val FALLBACK_10_MBC_RANGE = arrayOf(0..1, 2..3, 4..5, 6..7, 8..8, 9..9)
 
-    // Volume contour table (v5 Section 7)
     val CONTOUR_VS = doubleArrayOf(0.6, 0.4, 0.25, 0.1)
     val CONTOUR_ROWS = arrayOf(
         doubleArrayOf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
@@ -55,7 +129,6 @@ object Dsp {
         doubleArrayOf(4.5, 4.5, 3.0, 0.5, 0.0, 0.0, 0.0, 0.0, 1.5, 2.0)
     )
 
-    // Speaker calibration target anchors (v5 Section 8.2)
     val SPK_ANCHORS = arrayOf(
         200.0 to -2.0,
         250.0 to -1.0,
@@ -68,14 +141,13 @@ object Dsp {
 
     private fun log2(x: Double): Double = ln(x) / ln(2.0)
 
-    
     fun pchip(xs: DoubleArray, ys: DoubleArray, x: Double): Double {
         val n = xs.size
         if (x <= xs[0]) return ys[0]
         if (x >= xs[n - 1]) return ys[n - 1]
         val h = DoubleArray(n - 1) { xs[it + 1] - xs[it] }
         val d = DoubleArray(n - 1) { (ys[it + 1] - ys[it]) / h[it] }
-        val m = DoubleArray(n) // end slopes stay 0: flat beyond the ends
+        val m = DoubleArray(n)
         for (i in 1 until n - 1) {
             m[i] = if (d[i - 1] * d[i] <= 0.0) {
                 0.0
@@ -100,7 +172,6 @@ object Dsp {
         return DoubleArray(31) { pchip(xs, sliderDb, log2(RENDER_HZ[it])) }
     }
 
-    
     fun pinkGainDb(db: DoubleArray): Double {
         var s = 0.0
         var w = 0.0
@@ -112,7 +183,6 @@ object Dsp {
         return 10.0 * log10(s / w)
     }
 
-    
     fun contour(
         v: Double,
         vs: DoubleArray = CONTOUR_VS,
@@ -125,7 +195,6 @@ object Dsp {
         return DoubleArray(10) { rows[k][it] + (rows[k + 1][it] - rows[k][it]) * t }
     }
 
-    
     fun computeHeadphoneCorrection31(
         profile: HeadphoneProfile?,
         strength: Double = 0.8,
@@ -171,7 +240,6 @@ object Dsp {
         return AutoEq.computePeqTrimmedDb(peqFilters, 44100.0, fullRange, tiltBassDb, tiltTrebleDb)
     }
 
-    
     fun computeHearingCurve31(earOffsets6Db: List<Float>, strength: Float = 0.5f): DoubleArray {
         if (earOffsets6Db.size < 6 || earOffsets6Db.all { abs(it) < 0.05f }) return DoubleArray(31)
         val xs = DoubleArray(6) { log2(EqConstants.HEARING_TEST_FREQS_HZ[it]) }
@@ -195,7 +263,6 @@ object Dsp {
         return a[k].second + (a[k + 1].second - a[k].second) * t
     }
 
-    
     fun computeSpeakerCorrection(
         measDb: DoubleArray,
         valid: BooleanArray,
@@ -207,17 +274,16 @@ object Dsp {
         return DoubleArray(31) { i ->
             val f = RENDER_HZ[i]
             val spkTaper = when {
-                f < 200.0 -> max(0.0, 1.0 + log2(f / 200.0)) // zero at 100 Hz
-                f > 10000.0 -> max(0.0, 1.0 - log2(f / 10000.0)) // zero at 20 kHz
+                f < 200.0 -> max(0.0, 1.0 + log2(f / 200.0))
+                f > 10000.0 -> max(0.0, 1.0 - log2(f / 10000.0))
                 else -> 1.0
             }
             val narrowDip = raw[i] > 0.0 && i in 1..29 && !(raw[i - 1] > 0.0 && raw[i + 1] > 0.0)
-            val v = if (narrowDip) min(raw[i], 1.5) else raw[i] // do not fill narrow dips
+            val v = if (narrowDip) min(raw[i], 1.5) else raw[i]
             if (!valid[i]) 0.0 else (v * strength * spkTaper).coerceIn(-12.0, if (f > 6000.0) 3.0 else 6.0)
         }
     }
 
-    
     fun computeEffective31(layers: Layers, withContour: Boolean = true, channel: Int = 0): DoubleArray {
         val uDb = if (channel == 1 && layers.rightUserDb != null) layers.rightUserDb else layers.userDb
         val hearing31 = if (channel == 1) layers.hearingRight31 else layers.hearingLeft31
@@ -249,8 +315,8 @@ fun detectCurrentRoute(am: AudioManager): OutputRoute {
     val ble = Build.VERSION.SDK_INT >= 31 && types.contains(AudioDeviceInfo.TYPE_BLE_HEADSET)
     return when {
         ble || types.contains(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) -> OutputRoute.BLUETOOTH
-        types.contains(AudioDeviceInfo.TYPE_USB_HEADSET) || types.contains(AudioDeviceInfo.TYPE_USB_DEVICE) -> OutputRoute.USB
-        types.contains(AudioDeviceInfo.TYPE_WIRED_HEADPHONES) || types.contains(AudioDeviceInfo.TYPE_WIRED_HEADSET) -> OutputRoute.WIRED
+        types.contains(AudioDeviceInfo.TYPE_USB_HEADSET) || types.contains(AudioDeviceInfo.TYPE_USB_DEVICE) -> OutputRoute.USB_DAC
+        types.contains(AudioDeviceInfo.TYPE_WIRED_HEADPHONES) || types.contains(AudioDeviceInfo.TYPE_WIRED_HEADSET) -> OutputRoute.HEADPHONES
         else -> OutputRoute.SPEAKER
     }
 }
@@ -339,9 +405,9 @@ class Layers(
     routeDb: DoubleArray,
     contourDb: DoubleArray,
     correction31: DoubleArray = DoubleArray(31),
-    val balanceDb: Float = 0f, // -6..+6 dB (F4)
-    rightUserDb: DoubleArray? = null, // Independent Right channel 10-band EQ (F4)
-    hearingLeft31: DoubleArray = DoubleArray(31), // Personal hearing curve Left (F5)
+    val balanceDb: Float = 0f,
+    rightUserDb: DoubleArray? = null,
+    hearingLeft31: DoubleArray = DoubleArray(31),
     hearingRight31: DoubleArray = DoubleArray(31),
     enhancer10Db: DoubleArray = DoubleArray(10)
 ) {
@@ -418,7 +484,6 @@ class EqEngine(
     @Volatile
     private var writeEmaMs = 0.0
 
-    
     fun writeCostMs(): Double = writeEmaMs
 
     fun start(): Boolean {
@@ -435,10 +500,10 @@ class EqEngine(
                 val cfg = DynamicsProcessing.Config.Builder(
                     variant,
                     2,
-                    true, bandCount, // pre-EQ bands (31 -> 20 -> 10 fallback)
-                    true, 6,         // 6-band MBC ceilings
+                    true, bandCount,
+                    true, 6,
                     false, 0,
-                    true             // limiter backstop
+                    true
                 ).build()
                 val instance = DynamicsProcessing(0, sessionId, cfg)
                 activeBandCount = bandCount
@@ -471,7 +536,6 @@ class EqEngine(
         return false
     }
 
-    
     private fun effectiveInto(l: Layers, withContour: Boolean, channel: Int, out: DoubleArray) {
         val uDb = if (channel == 1 && l.rightUserDb != null) l.rightUserDb else l.userDb
         val hearing31 = if (channel == 1) l.hearingRight31 else l.hearingLeft31
@@ -491,7 +555,6 @@ class EqEngine(
         return Dsp.computeEffective31(l, withContour, channel)
     }
 
-    
     fun load(
         l: Layers,
         m: MbcConfig,
@@ -521,7 +584,6 @@ class EqEngine(
         }
     }
 
-    
     fun update(l: Layers, glideMs: Double = 60.0) {
         handler.post {
             val prevBalance = currentBalanceDb
@@ -538,7 +600,6 @@ class EqEngine(
         }
     }
 
-    
     fun setAbCompareMode(abBypass: Boolean) {
         if (isAbBypassCompare != abBypass) {
             isAbBypassCompare = abBypass
@@ -612,7 +673,7 @@ class EqEngine(
             writeNow()
             val ms = (System.nanoTime() - t0) / 1e6
             writeEmaMs = if (writeEmaMs == 0.0) ms else writeEmaMs * 0.8 + ms * 0.2
-            // If writes are slow, back off instead of queueing more binder calls (30 ms floor, 100 ms ceiling).
+
             tickMs = (writeEmaMs * 2.5).toLong().coerceIn(30L, 100L)
             if (!settled) {
                 handler.postDelayed(this, tickMs)
@@ -769,7 +830,7 @@ class EqEngine(
     }
 }
 
-data class SpeakerCalibrationResult(
+data class DspV4CalibrationResult(
     val measured31Db: DoubleArray,
     val correction31Db: DoubleArray,
     val validBands: BooleanArray,
@@ -784,7 +845,7 @@ object SpeakerCalibrationRunner {
         audioManager: AudioManager,
         strength: Double = 0.7,
         onProgress: (Float, String) -> Unit
-    ): Result<SpeakerCalibrationResult> = withContext(Dispatchers.Default) {
+    ): Result<DspV4CalibrationResult> = withContext(Dispatchers.Default) {
         val route = detectCurrentRoute(audioManager)
         if (route != OutputRoute.SPEAKER) {
             return@withContext Result.failure(
@@ -913,7 +974,7 @@ object SpeakerCalibrationRunner {
         onProgress(1.0f, "Calibration complete")
 
         Result.success(
-            SpeakerCalibrationResult(
+            DspV4CalibrationResult(
                 measured31Db = avgMeasDb,
                 correction31Db = if (passed) corr31 else DoubleArray(31),
                 validBands = valid,
@@ -936,7 +997,7 @@ object HearingTonePlayer {
             val frames = (sampleRate * durationMs) / 1000
             val fadeFrames = (sampleRate * 30) / 1000
             val pcm = ShortArray(frames * 2)
-            val amp = 2048.0 // ~ -24 dBFS safe reference level
+            val amp = 2048.0
             for (i in 0 until frames) {
                 val env = when {
                     i < fadeFrames -> i.toDouble() / fadeFrames

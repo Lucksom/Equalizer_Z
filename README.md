@@ -22,13 +22,15 @@ A modern, system-wide Android audio equalizer built with **Kotlin** and **Jetpac
 * Overall **Intensity Slider** (`50%` to `150%`) to scale the entire curve smoothly with a single touch.
 
 ### 3. Built-in Equalizer Presets
-* **Standard Presets**: Flat, Balanced Deep, Bass Boost, Vocal Clarity, Percussion Clarity, and Cinema.
+* **Standard Presets**: Flat, Balanced Deep, Vocal Clarity, and Percussion Clarity.
 * **Genre & Tuning Presets**: Classical, Jazz, Rock, Pop, Pure Voice, and Power Bass.
 * **Custom Curves**: Adjust any slider to automatically switch to Custom mode, with one-tap reset.
 
 ### 4. Audio Enhancers & Acoustic Profiles
 * **Dialogue Enhancer**: Enhances spoken voice clarity, brings dialogue forward, and reduces low-frequency background noise. Includes an adjustable strength slider.
 * **Bass Enhancer**: Delivers deep, punchy low-end with virtual bass harmonic synthesis. Includes a dedicated boost slider that amplifies bass without lowering or suppressing overall volume.
+* **Stereo Widening**: Spatial soundstage expansion with four selectable distances (**No Effect**, **Near**, **Middle**, and **Far**).
+* **Reduce Reverb**: Suppresses late room reverberation and echo for cleaner, tighter acoustics via an adjustable slider.
 * **Intelligent Equalizer (IEQ)**: Dynamic spectral enhancement with four selectable styles:
   * **Detailed**: Open and bright soundstage.
   * **Balanced**: Natural, full-bodied audio balance.
@@ -37,12 +39,13 @@ A modern, system-wide Android audio equalizer built with **Kotlin** and **Jetpac
 * **Sound Profiles**:
   * **Dynamic**: Energetic tuning with enhanced sub-bass and airy highs.
   * **Balanced**: Smooth, neutral tuning for extended listening.
+  * **Movie**: Wide cinematic soundstage with clear dialogue focus and deep low-frequency extension.
   * **3D**: Binaural spatial audio with wide acoustic imaging.
   * **Live Music**: Realistic concert-hall acoustics, early reflections, and natural stage presence.
 
 ### 5. AutoEq Headphone & IEM Calibration
 * Integrated database of thousands of headphone and IEM measurement corrections from the AutoEq project.
-* Search and apply calibrated profiles for popular models (Sony, Sennheiser, Apple, Samsung, Audio-Technica, Moondrop, Beyerdynamic, and more).
+* Search and apply calibrated profiles for popular models (Sennheiser, Apple, Samsung, Audio-Technica, Moondrop, Beyerdynamic, and more).
 * Adjustable correction strength and optional full-range boost modes.
 
 ### 6. Per-Device Profile Memory

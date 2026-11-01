@@ -119,7 +119,6 @@ fun ModeSelectorCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Horizontal 3-Profile Segmented Selector Row
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -142,7 +141,6 @@ fun ModeSelectorCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Compact Status & Subtitle Row
             val isAvailable = activeStatus.level == CapabilityLevel.AVAILABLE
             val pillContainer = if (isAvailable) {
                 MaterialTheme.colorScheme.primaryContainer
@@ -225,14 +223,12 @@ fun ModeSelectorCard(
                             color = MaterialTheme.colorScheme.onSurface
                         )
 
-                        if (activeStatus.setupSteps.isNotEmpty()) {
-                            activeStatus.setupSteps.forEach { step ->
-                                Text(
-                                    text = step,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                        for (step in activeStatus.setupSteps) {
+                            Text(
+                                text = step,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
 
                         if (selectedMode == EngineMode.ADB_SHIZUKU) {

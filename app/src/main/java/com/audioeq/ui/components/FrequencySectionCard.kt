@@ -164,7 +164,7 @@ fun EqualizerCard(
                 .padding(22.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 1. eq-head
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -177,7 +177,7 @@ fun EqualizerCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    // #power (56x56dp)
+
                     Box(
                         modifier = Modifier
                             .size(56.dp)
@@ -227,7 +227,6 @@ fun EqualizerCard(
                     }
                 }
 
-                // .route pill
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(999.dp))
@@ -258,7 +257,6 @@ fun EqualizerCard(
                 }
             }
 
-            // 2. .headroom
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -299,13 +297,11 @@ fun EqualizerCard(
                 )
             }
 
-            // 3. .curve (#curveWrap)
             FrequencyResponseGraph(
                 displayGainsDb = effectiveGainsDb,
                 isEnabled = masterEnabled && !isAbCompare && !usbBitPerfectActive
             )
 
-            // 4. .zones
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -341,7 +337,6 @@ fun EqualizerCard(
                 }
             }
 
-            // Optional Left / Right Channel Selector when Independent L/R EQ is enabled in Settings
             AnimatedVisibility(visible = splitLREnabled) {
                 V7SegmentedRow(
                     options = listOf(false to "Left Channel (10-Band)", true to "Right Channel (10-Band)"),
@@ -351,7 +346,6 @@ fun EqualizerCard(
                 )
             }
 
-            // 5. .bands (#bands)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -363,7 +357,7 @@ fun EqualizerCard(
                 for (i in 0 until 10) {
                     val userGain = sliderGainsDb.getOrElse(i) { 0f }
                     val effGain = effectiveGainsDb.getOrElse(i) { 0f }
-                    val freqLabel = FREQ_LABELS.getOrElse(i) { EqConstants.MASTER_BANDS[i].label }
+                    val freqLabel = FREQ_LABELS[i]
                     V7VerticalBandSlider(
                         bandIndex = i,
                         freqLabel = freqLabel,
@@ -419,7 +413,7 @@ private fun V7VerticalBandSlider(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // .db
+
         Text(
             text = activeDbText,
             fontFamily = JetBrainsMonoFontFamily,
@@ -430,7 +424,6 @@ private fun V7VerticalBandSlider(
             textAlign = TextAlign.Center
         )
 
-        // .rail (height 172dp)
         BoxWithConstraints(
             modifier = Modifier
                 .width(32.dp)
@@ -449,7 +442,7 @@ private fun V7VerticalBandSlider(
                         lastTapTimeMs = now
 
                         val hPx = size.height.toFloat().coerceAtLeast(1f)
-                        // Keep enhancer delta steady while dragging so knob tracks finger
+
                         val enhancerDelta = currentEffGain - (currentUserGain * currentIntensity)
 
                         fun updateFromY(yPx: Float) {
@@ -490,7 +483,6 @@ private fun V7VerticalBandSlider(
             val fillFraction = abs(pct - 0.5f)
             val knobYOffset = railHeight * (0.5f - pct)
 
-            // .rail-track (6dp wide)
             Box(
                 modifier = Modifier
                     .width(6.dp)
@@ -499,7 +491,6 @@ private fun V7VerticalBandSlider(
                     .background(palette.sTop)
             )
 
-            // .rail-zero (14dp x 1dp at 50%)
             Box(
                 modifier = Modifier
                     .width(14.dp)
@@ -507,7 +498,6 @@ private fun V7VerticalBandSlider(
                     .background(palette.outline)
             )
 
-            // .rail-fill (6dp wide between 50% and pct)
             if (fillFraction > 0.002f) {
                 Box(
                     modifier = Modifier
@@ -520,7 +510,6 @@ private fun V7VerticalBandSlider(
                 )
             }
 
-            // .knob (28dp x 16dp pill, rounded 9dp, 2dp primary border)
             Box(
                 modifier = Modifier
                     .offset(y = knobYOffset)
@@ -534,7 +523,6 @@ private fun V7VerticalBandSlider(
             )
         }
 
-        // .hz
         Text(
             text = freqLabel,
             fontFamily = JetBrainsMonoFontFamily,
@@ -587,7 +575,7 @@ fun ToneCard(
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Header (.enhance-head)
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -640,7 +628,6 @@ fun ToneCard(
                 }
             }
 
-            // .tone-grid (2 columns: Bass tilt & Treble tilt)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -669,7 +656,6 @@ fun ToneCard(
                 )
             }
 
-            // Intensity Segmented Row
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -713,7 +699,6 @@ fun ToneCard(
 
             HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
 
-            // Switch Row 1: Volume contour
             V7SwitchRow(
                 title = "Volume contour",
                 subtitle = "Lifts bass and treble at low volume",
@@ -723,7 +708,6 @@ fun ToneCard(
                 testTag = "volume_contour_switch"
             )
 
-            // Switch Row 2: A/B loudness compare
             V7SwitchRow(
                 title = "A/B loudness compare",
                 subtitle = "Level-matched bypass comparison",

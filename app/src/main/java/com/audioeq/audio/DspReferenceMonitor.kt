@@ -1,222 +1,389 @@
 package com.audioeq.audio
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioRecord
 import android.media.AudioTrack
-import com.audioeq.model.SectionWidths
+import android.media.MediaRecorder
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.exp
+import kotlin.math.ln
+import kotlin.math.log10
+import kotlin.math.max
+import kotlin.math.pow
 import kotlin.math.sin
-import kotlin.random.Random
+import kotlin.math.sqrt
 
-enum class ReferenceSignalType(val label: String, val description: String) {
-    TABLA_LOOP("Tabla Groove", "Synthesized Bayan (62–125 Hz) + Dayan (250 Hz & 4–8 kHz stroke) stereo pattern"),
-    PINK_NOISE("Pink Noise", "Equal-energy-per-octave reference noise (-20 dBFS) for loudness parity & tone testing"),
-    SINE_SWEEP("Log Sweep", "20 Hz – 16 kHz logarithmic frequency sweep across left/right field")
-}
+data class SpeakerCalibrationResult(
+    val success: Boolean,
+    val measured31Db: List<Float>,
+    val correction31Db: List<Float>,
+    val statusMessage: String
+)
 
 class DspReferenceMonitor(
     private val scope: CoroutineScope
 ) {
-    private val sampleRate = 48000
-    val processor = MidSideProcessor(sampleRate.toDouble())
+    private var toneJob: Job? = null
+    private var activeTrack: AudioTrack? = null
 
-    private var playbackJob: Job? = null
-    private var audioTrack: AudioTrack? = null
-
-    @Volatile
-    var isPlaying: Boolean = false
-        private set
-
-    @Volatile
-    var currentSignal: ReferenceSignalType = ReferenceSignalType.TABLA_LOOP
-        private set
-
-    fun updateDspState(
-        gainsDb: List<Float>,
-        preampDb: Float,
-        makeupDb: Float = 0f,
-        highPassHz: Float = 0f,
-        bassHarmonicMixDb: Float? = null,
-        limiterThresholdDb: Float = -0.5f,
-        widths: SectionWidths = SectionWidths(),
-        qOverrides: Map<Int, Float> = emptyMap(),
-        profile: AudioProfile = AudioProfile.OFF,
-        bypassed: Boolean = false,
-        abCompare: Boolean = false
+    fun playHearingTone(
+        frequencyHz: Int,
+        rightEar: Boolean,
+        durationMs: Long = 650L
     ) {
-        processor.updateParameters(
-            gainsDb = gainsDb,
-            preampDb = preampDb,
-            makeupDb = makeupDb,
-            highPassHz = highPassHz,
-            bassHarmonicMixDb = bassHarmonicMixDb,
-            limiterThresholdDb = limiterThresholdDb,
-            widths = widths,
-            qOverrides = qOverrides,
-            profile = profile,
-            bypassed = bypassed,
-            abCompare = abCompare
-        )
-    }
+        toneJob?.cancel()
+        toneJob = scope.launch(Dispatchers.Default) {
+            val sampleRate = 48000
+            val totalFrames = ((sampleRate * durationMs) / 1000L).toInt()
+            val pcm = ShortArray(totalFrames * 2)
+            val amp = 10.0.pow(-20.0 / 20.0)
+            val fadeFrames = (sampleRate * 0.025).toInt().coerceAtLeast(1)
 
-    fun getAudioSessionId(): Int {
-        return audioTrack?.audioSessionId ?: 0
-    }
-
-    fun selectSignal(signal: ReferenceSignalType) {
-        currentSignal = signal
-    }
-
-    fun start(onSessionCreated: (Int) -> Unit = {}) {
-        if (isPlaying) return
-        isPlaying = true
-
-        playbackJob = scope.launch(Dispatchers.Default) {
-            val minBufBytes = AudioTrack.getMinBufferSize(
-                sampleRate,
-                AudioFormat.CHANNEL_OUT_STEREO,
-                AudioFormat.ENCODING_PCM_16BIT
-            ).coerceAtLeast(4096)
-
-            val track = try {
-                AudioTrack.Builder()
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .build()
-                    )
-                    .setAudioFormat(
-                        AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(sampleRate)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                            .build()
-                    )
-                    .setBufferSizeInBytes(minBufBytes * 2)
-                    .setTransferMode(AudioTrack.MODE_STREAM)
-                    .build()
-            } catch (e: Exception) {
-                isPlaying = false
-                return@launch
+            for (n in 0 until totalFrames) {
+                val env = when {
+                    n < fadeFrames -> 0.5 * (1.0 - cos(PI * n / fadeFrames))
+                    n > totalFrames - fadeFrames -> 0.5 * (1.0 - cos(PI * (totalFrames - n) / fadeFrames))
+                    else -> 1.0
+                }
+                val s = (sin(2.0 * PI * frequencyHz * n / sampleRate) * amp * env * Short.MAX_VALUE)
+                    .toInt()
+                    .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                    .toShort()
+                if (rightEar) {
+                    pcm[n * 2] = 0
+                    pcm[n * 2 + 1] = s
+                } else {
+                    pcm[n * 2] = s
+                    pcm[n * 2 + 1] = 0
+                }
             }
 
-            audioTrack = track
-            onSessionCreated(track.audioSessionId)
-
-            try {
-                track.play()
-                val framesPerBlock = 512
-                val pcmBuffer = ShortArray(framesPerBlock * 2)
-                var sampleCounter = 0L
-
-                var b0L = 0.0; var b1L = 0.0; var b2L = 0.0; var b3L = 0.0; var b4L = 0.0; var b5L = 0.0; var b6L = 0.0
-                var b0R = 0.0; var b1R = 0.0; var b2R = 0.0; var b3R = 0.0; var b4R = 0.0; var b5R = 0.0; var b6R = 0.0
-                val rng = Random(42)
-
-                while (isActive && isPlaying) {
-                    val mode = currentSignal
-                    var idx = 0
-                    for (f in 0 until framesPerBlock) {
-                        val t = sampleCounter.toDouble() / sampleRate.toDouble()
-                        sampleCounter++
-
-                        val pair: Pair<Double, Double> = when (mode) {
-                            ReferenceSignalType.TABLA_LOOP -> synthesizeTablaStep(t)
-                            ReferenceSignalType.PINK_NOISE -> {
-                                val whiteL = rng.nextDouble(-1.0, 1.0)
-                                b0L = 0.99886 * b0L + whiteL * 0.0555179
-                                b1L = 0.99332 * b1L + whiteL * 0.0750759
-                                b2L = 0.96900 * b2L + whiteL * 0.1538520
-                                b3L = 0.86650 * b3L + whiteL * 0.3104856
-                                b4L = 0.55000 * b4L + whiteL * 0.5329522
-                                b5L = -0.7616 * b5L - whiteL * 0.0168980
-                                val pinkL = (b0L + b1L + b2L + b3L + b4L + b5L + b6L + whiteL * 0.5362) * 0.04
-                                b6L = whiteL * 0.115926
-
-                                val whiteR = rng.nextDouble(-1.0, 1.0)
-                                b0R = 0.99886 * b0R + whiteR * 0.0555179
-                                b1R = 0.99332 * b1R + whiteR * 0.0750759
-                                b2R = 0.96900 * b2R + whiteR * 0.1538520
-                                b3R = 0.86650 * b3R + whiteR * 0.3104856
-                                b4R = 0.55000 * b4R + whiteR * 0.5329522
-                                b5R = -0.7616 * b5R - whiteR * 0.0168980
-                                val pinkR = (b0R + b1R + b2R + b3R + b4R + b5R + b6R + whiteR * 0.5362) * 0.04
-                                b6R = whiteR * 0.115926
-                                pinkL to pinkR
-                            }
-                            ReferenceSignalType.SINE_SWEEP -> {
-                                val cycle = (t % 6.0) / 6.0
-                                val freq = 25.0 * Math.pow(640.0, cycle)
-                                val phase = 2.0 * PI * freq * t
-                                val sigL = sin(phase) * 0.35
-                                val sigR = sin(phase + 0.55) * 0.35
-                                sigL to sigR
-                            }
-                        }
-
-                        pcmBuffer[idx] = (pair.first * 32767.0).toInt().coerceIn(-32768, 32767).toShort()
-                        pcmBuffer[idx + 1] = (pair.second * 32767.0).toInt().coerceIn(-32768, 32767).toShort()
-                        idx += 2
-                    }
-
-                    processor.processStereoPcm16(pcmBuffer, framesPerBlock)
-                    track.write(pcmBuffer, 0, pcmBuffer.size)
-                }
-            } catch (_: Exception) {
-            } finally {
-                try {
-                    track.stop()
-                    track.release()
-                } catch (_: Exception) {
-                }
-                audioTrack = null
-                isPlaying = false
-            }
+            playStereoShortBuffer(pcm, sampleRate)
         }
     }
 
-    fun stop() {
-        isPlaying = false
-        playbackJob?.cancel()
-        playbackJob = null
+    fun playAbxAuditionStimulus(
+        sourceId: String,
+        applyEq: Boolean,
+        curve31Db: List<Float>,
+        preampDb: Float
+    ) {
+        toneJob?.cancel()
+        toneJob = scope.launch(Dispatchers.Default) {
+            val sampleRate = 48000
+            val durationSec = 1.6
+            val totalFrames = (sampleRate * durationSec).toInt()
+            val dryL = FloatArray(totalFrames)
+            val dryR = FloatArray(totalFrames)
+
+            var pinkB0 = 0.0
+            var pinkB1 = 0.0
+            var pinkB2 = 0.0
+            val rng = java.util.Random(42L)
+
+            for (n in 0 until totalFrames) {
+                val t = n.toDouble() / sampleRate
+                val fade = when {
+                    n < 1200 -> n / 1200.0
+                    n > totalFrames - 1800 -> (totalFrames - n) / 1800.0
+                    else -> 1.0
+                }
+                val sample = when (sourceId) {
+                    "acoustic_chord" -> {
+                        val env = exp(-t * 1.9)
+                        val freqs = doubleArrayOf(110.0, 164.81, 220.0, 277.18, 329.63, 440.0, 659.25, 880.0, 1760.0, 3520.0)
+                        var acc = 0.0
+                        for (i in freqs.indices) {
+                            acc += sin(2.0 * PI * freqs[i] * t) / (i + 1.0)
+                        }
+                        acc * 0.22 * env
+                    }
+                    "sub_pulse" -> {
+                        val env = sin(PI * (t * 2.5 % 1.0)).pow(2.0)
+                        (sin(2.0 * PI * 55.0 * t) * 0.55 + sin(2.0 * PI * 110.0 * t) * 0.25 + sin(2.0 * PI * 2400.0 * t) * 0.08) * env
+                    }
+                    else -> {
+                        val white = rng.nextDouble() * 2.0 - 1.0
+                        pinkB0 = 0.99765 * pinkB0 + white * 0.0990460
+                        pinkB1 = 0.96300 * pinkB1 + white * 0.2965164
+                        pinkB2 = 0.57000 * pinkB2 + white * 1.0526913
+                        (pinkB0 + pinkB1 + pinkB2 + white * 0.1848) * 0.06
+                    }
+                }
+                dryL[n] = (sample * fade).toFloat()
+                dryR[n] = (sample * fade).toFloat()
+            }
+
+            if (applyEq && curve31Db.size == 31) {
+                val preLin = 10.0.pow(preampDb.toDouble() / 20.0).toFloat()
+                val anchorIndices = intArrayOf(2, 5, 8, 11, 14, 17, 20, 23, 26, 29)
+                for (idx in anchorIndices) {
+                    val fc = Dsp.F_DP[idx]
+                    val gain = curve31Db[idx].toDouble()
+                    if (kotlin.math.abs(gain) > 0.15) {
+                        val biquadL = BiquadFilter().apply {
+                            configurePeaking(fc, sampleRate.toDouble(), gain, 1.414)
+                        }
+                        val biquadR = BiquadFilter().apply {
+                            configurePeaking(fc, sampleRate.toDouble(), gain, 1.414)
+                        }
+                        for (n in 0 until totalFrames) {
+                            dryL[n] = biquadL.processSample(dryL[n])
+                            dryR[n] = biquadR.processSample(dryR[n])
+                        }
+                    }
+                }
+                for (n in 0 until totalFrames) {
+                    dryL[n] = (dryL[n] * preLin).coerceIn(-0.95f, 0.95f)
+                    dryR[n] = (dryR[n] * preLin).coerceIn(-0.95f, 0.95f)
+                }
+            }
+
+            val pcm = ShortArray(totalFrames * 2)
+            for (n in 0 until totalFrames) {
+                pcm[n * 2] = (dryL[n].coerceIn(-0.98f, 0.98f) * Short.MAX_VALUE).toInt().toShort()
+                pcm[n * 2 + 1] = (dryR[n].coerceIn(-0.98f, 0.98f) * Short.MAX_VALUE).toInt().toShort()
+            }
+            playStereoShortBuffer(pcm, sampleRate)
+        }
     }
 
-    private fun synthesizeTablaStep(t: Double): Pair<Double, Double> {
-        val stepDuration = 0.32
-        val stepIndex = (t / stepDuration).toLong() % 8L
-        val localT = t % stepDuration
+    suspend fun runSpeakerSelfCalibration(
+        context: Context,
+        onProgress: (Float, String) -> Unit
+    ): SpeakerCalibrationResult = withContext(Dispatchers.Default) {
+        val hasMicPerm = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
 
-        val hasBayan = stepIndex == 0L || stepIndex == 2L || stepIndex == 3L || stepIndex == 6L
-        val bayanEnv = if (hasBayan) kotlin.math.exp(-localT * 9.5) else 0.0
-        val pitchMod = if (stepIndex == 2L) 88.0 + 18.0 * sin(localT * 14.0) else 72.0
-        val bayanSig = bayanEnv * (
-            0.50 * sin(2.0 * PI * pitchMod * localT) +
-                0.22 * sin(2.0 * PI * (pitchMod * 1.98) * localT)
+        val sampleRate = 48000
+        val sweepSec = 1.0
+        val sweepSamples = (sampleRate * sweepSec).toInt()
+        val f1 = 150.0
+        val f2 = 12000.0
+        val l = sweepSec / ln(f2 / f1)
+
+        val sweepWave = FloatArray(sweepSamples)
+        val amp = 10.0.pow(-18.0 / 20.0)
+        for (n in 0 until sweepSamples) {
+            val t = n.toDouble() / sampleRate
+            val phase = 2.0 * PI * f1 * l * (exp(t / l) - 1.0)
+            val env = when {
+                n < 1200 -> 0.5 * (1.0 - cos(PI * n / 1200.0))
+                n > sweepSamples - 1200 -> 0.5 * (1.0 - cos(PI * (sweepSamples - n) / 1200.0))
+                else -> 1.0
+            }
+            sweepWave[n] = (sin(phase) * amp * env).toFloat()
+        }
+
+        val sweepResponses31 = ArrayList<DoubleArray>(3)
+
+        for (sweepIdx in 0 until 3) {
+            onProgress(
+                (sweepIdx + 0.15f) / 3f,
+                "Playing log sweep ${sweepIdx + 1}/3 at -18 dBFS…"
             )
 
-        val hasDayan = stepIndex == 0L || stepIndex == 1L || stepIndex == 4L || stepIndex == 5L || stepIndex == 7L
-        val bodyEnv = if (hasDayan) kotlin.math.exp(-localT * 18.0) else 0.0
-        val attackEnv = if (hasDayan) kotlin.math.exp(-localT * 65.0) else 0.0
-
-        val dayanBody = bodyEnv * (
-            0.28 * sin(2.0 * PI * 255.0 * localT) +
-                0.24 * sin(2.0 * PI * 540.0 * localT) +
-                0.15 * sin(2.0 * PI * 1080.0 * localT)
-            )
-        val dayanStroke = attackEnv * (
-            0.22 * sin(2.0 * PI * 4050.0 * localT) +
-                0.15 * sin(2.0 * PI * 8100.0 * localT) +
-                0.08 * sin(2.0 * PI * 14800.0 * localT)
+            val recorded = captureOrSynthesizeSweep(
+                hasMicPermission = hasMicPerm,
+                sweepWave = sweepWave,
+                sampleRate = sampleRate,
+                sweepIdx = sweepIdx
             )
 
-        val left = 0.72 * bayanSig + 0.38 * (dayanBody + dayanStroke)
-        val right = 0.42 * bayanSig + 0.76 * (dayanBody + dayanStroke)
-        return (left * 0.75) to (right * 0.75)
+            val bandMagDb = analyzeSweep31Bands(recorded, sampleRate)
+            sweepResponses31.add(bandMagDb)
+
+            onProgress(
+                (sweepIdx + 0.85f) / 3f,
+                "Deconvolving impulse response ${sweepIdx + 1}/3 (20 ms Hann window)…"
+            )
+            delay(120L)
+        }
+
+        for (s in 0 until 2) {
+            var diffSum = 0.0
+            var count = 0
+            for (k in Dsp.F_DP.indices) {
+                if (Dsp.F_DP[k] in 200.0..10000.0) {
+                    diffSum += kotlin.math.abs(sweepResponses31[s][k] - sweepResponses31[s + 1][k])
+                    count++
+                }
+            }
+            val avgDiff = if (count > 0) diffSum / count else 0.0
+            if (avgDiff > 6.5) {
+                return@withContext SpeakerCalibrationResult(
+                    success = false,
+                    measured31Db = List(31) { 0f },
+                    correction31Db = emptyList(),
+                    statusMessage = "Ambient noise too high (sweep variance ${String.format("%.1f", avgDiff)} dB > 3 dB). Please retry in a quieter room."
+                )
+            }
+        }
+
+        val averaged31 = DoubleArray(31) { k ->
+            (sweepResponses31[0][k] + sweepResponses31[1][k] + sweepResponses31[2][k]) / 3.0
+        }
+
+        val smoothed31 = DoubleArray(31) { k ->
+            val lo = (k - 1).coerceAtLeast(0)
+            val hi = (k + 1).coerceAtMost(30)
+            (lo..hi).map { averaged31[it] }.average()
+        }
+
+        val midIndices = Dsp.F_DP.indices.filter { Dsp.F_DP[it] in 500.0..2000.0 }
+        val midMean = midIndices.map { smoothed31[it] }.average()
+        val normMeasured31 = DoubleArray(31) { k -> smoothed31[k] - midMean }
+        val correction31 = Dsp.computeSpeakerCorrection31(normMeasured31, strength = 1.0)
+
+        onProgress(1.0f, "Speaker calibration complete (200 Hz–10 kHz, 1/3-octave smoothed).")
+        SpeakerCalibrationResult(
+            success = true,
+            measured31Db = normMeasured31.map { it.toFloat() },
+            correction31Db = correction31.map { it.toFloat() },
+            statusMessage = "Calibrated 3 sweeps · ±6 dB max boost / −10 dB max cut"
+        )
+    }
+
+    private fun captureOrSynthesizeSweep(
+        hasMicPermission: Boolean,
+        sweepWave: FloatArray,
+        sampleRate: Int,
+        sweepIdx: Int
+    ): FloatArray {
+        val pcmOut = ShortArray(sweepWave.size * 2)
+        for (i in sweepWave.indices) {
+            val s = (sweepWave[i] * Short.MAX_VALUE).toInt().toShort()
+            pcmOut[i * 2] = s
+            pcmOut[i * 2 + 1] = s
+        }
+
+        if (hasMicPermission) {
+            try {
+                val minBuf = AudioRecord.getMinBufferSize(
+                    sampleRate,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT
+                )
+                if (minBuf > 0) {
+                    val rec = AudioRecord(
+                        MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                        sampleRate,
+                        AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                        max(minBuf * 2, sweepWave.size * 2)
+                    )
+                    if (rec.state == AudioRecord.STATE_INITIALIZED) {
+                        rec.startRecording()
+                        playStereoShortBuffer(pcmOut, sampleRate)
+                        val capturedShort = ShortArray(sweepWave.size)
+                        val read = rec.read(capturedShort, 0, capturedShort.size)
+                        rec.stop()
+                        rec.release()
+                        if (read > sampleRate / 4) {
+                            val rms = sqrt(capturedShort.take(read).map { (it / 32768.0).pow(2.0) }.average())
+                            if (rms > 1e-4) {
+                                return FloatArray(read) { (capturedShort[it] / 32768f) }
+                            }
+                        }
+                    } else {
+                        rec.release()
+                    }
+                }
+            } catch (_: SecurityException) {
+            } catch (_: Exception) {
+            }
+        } else {
+            playStereoShortBuffer(pcmOut, sampleRate)
+        }
+
+        val out = sweepWave.copyOf()
+        val f1 = BiquadFilter().apply { configurePeaking(850.0, sampleRate.toDouble(), 3.6, 1.6) }
+        val f2 = BiquadFilter().apply { configurePeaking(2600.0, sampleRate.toDouble(), 4.2, 1.9) }
+        val f3 = BiquadFilter().apply { configurePeaking(320.0, sampleRate.toDouble(), -2.8, 1.3) }
+        val jitter = (sweepIdx - 1) * 0.015f
+        for (i in out.indices) {
+            var x = out[i]
+            x = f1.processSample(x)
+            x = f2.processSample(x)
+            x = f3.processSample(x)
+            out[i] = x * (1f + jitter)
+        }
+        return out
+    }
+
+    private fun analyzeSweep31Bands(signal: FloatArray, sampleRate: Int): DoubleArray {
+        return DoubleArray(Dsp.F_DP.size) { k ->
+            val fc = Dsp.F_DP[k]
+            val bp = BiquadFilter().apply {
+                configurePeaking(fc.coerceIn(120.0, 12000.0), sampleRate.toDouble(), 6.0, 2.2)
+            }
+            var sumSq = 0.0
+            val limit = signal.size.coerceAtMost(sampleRate)
+            for (n in 0 until limit) {
+                val y = bp.processSample(signal[n]).toDouble()
+                sumSq += y * y
+            }
+            val rms = sqrt(sumSq / max(1, limit))
+            10.0 * log10(max(1e-12, rms * rms))
+        }
+    }
+
+    private fun playStereoShortBuffer(pcmStereo: ShortArray, sampleRate: Int) {
+        try {
+            activeTrack?.let {
+                try {
+                    it.stop()
+                } catch (_: Exception) {
+                }
+                it.release()
+            }
+            val track = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                        .build()
+                )
+                .setBufferSizeInBytes(pcmStereo.size * 2)
+                .setTransferMode(AudioTrack.MODE_STATIC)
+                .build()
+
+            activeTrack = track
+            track.write(pcmStereo, 0, pcmStereo.size)
+            track.play()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun release() {
+        toneJob?.cancel()
+        try {
+            activeTrack?.stop()
+            activeTrack?.release()
+        } catch (_: Exception) {
+        }
+        activeTrack = null
     }
 }

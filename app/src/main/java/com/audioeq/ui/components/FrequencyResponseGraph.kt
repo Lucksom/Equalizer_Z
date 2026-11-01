@@ -78,7 +78,6 @@ fun FrequencyResponseGraph(
             val midY = h * 0.5f
             val maxAmpY = h * (86f / 220f)
 
-            // 1. Vertical log-frequency grid lines (130/720, 360/720, 590/720)
             val vGridRatios = listOf(
                 (130f / 720f) to "100",
                 (360f / 720f) to "1k",
@@ -102,7 +101,6 @@ fun FrequencyResponseGraph(
                 )
             }
 
-            // 2. Dashed 0 dB center line
             drawLine(
                 color = palette.outline.copy(alpha = 0.7f),
                 start = Offset(0f, midY),
@@ -114,7 +112,6 @@ fun FrequencyResponseGraph(
                 )
             )
 
-            // 3. Left dB labels (+12, 0, −12)
             val leftX = 10.dp.toPx()
             val plus12Measured = textMeasurer.measure("+12", style = labelStyle)
             drawText(
@@ -132,7 +129,6 @@ fun FrequencyResponseGraph(
                 topLeft = Offset(leftX, h - minus12Measured.size.height - 8.dp.toPx())
             )
 
-            // 4. Compute 10 band spline points matching audio-eq-v7.html
             val xs = FloatArray(10) { i -> ((36f + i * 72f) / 720f) * w }
             val ys = FloatArray(10) { i ->
                 val g = displayGainsDb.getOrElse(i) { 0f }.coerceIn(-12f, 12f)
@@ -154,7 +150,6 @@ fun FrequencyResponseGraph(
                 close()
             }
 
-            // 5. Gradient fill under curve
             drawPath(
                 path = areaPath,
                 brush = Brush.verticalGradient(
@@ -167,7 +162,6 @@ fun FrequencyResponseGraph(
                 )
             )
 
-            // 6. Drop-shadow glow stroke + primary curve stroke
             drawPath(
                 path = curvePath,
                 color = palette.glow,

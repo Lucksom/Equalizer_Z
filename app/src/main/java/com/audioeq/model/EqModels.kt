@@ -1,577 +1,487 @@
 package com.audioeq.model
 
-enum class FrequencySection(
-    val id: String,
-    val title: String,
-    val rangeLabel: String,
-    val trueRangeHz: String,
-    val hint: String,
-    val defaultWidthRange: String,
-    val colorRole: SectionColorRole
-) {
-    BASS(
-        id = "bass",
-        title = "Bass",
-        rangeLabel = "20–350 Hz",
-        trueRangeHz = "20–354 Hz",
-        hint = "Punch and low end.",
-        defaultWidthRange = "0–20%",
-        colorRole = SectionColorRole.PRIMARY
-    ),
-    MIDS(
-        id = "mids",
-        title = "Mids",
-        rangeLabel = "350–2.8k Hz",
-        trueRangeHz = "354–2828 Hz",
-        hint = "Vocals, guitars, and clarity.",
-        defaultWidthRange = "80–100%",
-        colorRole = SectionColorRole.SECONDARY
-    ),
-    TREBLE(
-        id = "treble",
-        title = "Treble",
-        rangeLabel = "2.8–11 kHz",
-        trueRangeHz = "2828–11314 Hz",
-        hint = "Definition, cymbals, and percussion strikes.",
-        defaultWidthRange = "110–120%",
-        colorRole = SectionColorRole.TERTIARY
-    ),
-    AIR(
-        id = "air",
-        title = "Air",
-        rangeLabel = "11–20 kHz",
-        trueRangeHz = "11314–20000 Hz",
-        hint = "Openness and sparkle.",
-        defaultWidthRange = "110–150%",
-        colorRole = SectionColorRole.SECONDARY
-    )
-}
-
-enum class SectionColorRole {
-    PRIMARY,
-    SECONDARY,
-    TERTIARY
-}
-
-enum class FilterType {
-    LOW_SHELF,
-    PEAKING,
-    HIGH_SHELF,
-    HIGH_PASS
-}
-
-data class EqBandSpec(
-    val index: Int,
-    val frequencyHz: Int,
-    val label: String,
-    val cutoffUpperHz: Float,
-    val section: FrequencySection,
-    val filterType: FilterType,
-    val defaultQ: Float
-)
-
-data class SectionWidths(
-    val bassWidthPct: Int = 100,
-    val midsWidthPct: Int = 100,
-    val trebleWidthPct: Int = 100,
-    val airWidthPct: Int = 100
-) {
-    fun forSection(section: FrequencySection): Int = when (section) {
-        FrequencySection.BASS -> bassWidthPct
-        FrequencySection.MIDS -> midsWidthPct
-        FrequencySection.TREBLE -> trebleWidthPct
-        FrequencySection.AIR -> airWidthPct
-    }
-
-    fun withSection(section: FrequencySection, valuePct: Int): SectionWidths {
-        val clamped = valuePct.coerceIn(0, 200)
-        return when (section) {
-            FrequencySection.BASS -> copy(bassWidthPct = clamped)
-            FrequencySection.MIDS -> copy(midsWidthPct = clamped)
-            FrequencySection.TREBLE -> copy(trebleWidthPct = clamped)
-            FrequencySection.AIR -> copy(airWidthPct = clamped)
-        }
-    }
-}
-
-enum class EngineMode(
-    val id: String,
-    val title: String,
-    val shortTitle: String,
-    val subtitle: String
-) {
-    LEGACY(
-        id = "legacy",
-        title = "Legacy",
-        shortTitle = "Legacy",
-        subtitle = "Works globally across apps using Android AudioEffect (Session 0 + broadcast sessions) without needing ADB, Shizuku, or Root."
-    ),
-    ADB_SHIZUKU(
-        id = "adb",
-        title = "ADB / Shizuku",
-        shortTitle = "ADB / Shizuku",
-        subtitle = "Uses ADB DUMP or Shizuku to discover and attach 31-band DynamicsProcessing + 6-band ceilings to all active app sessions."
-    ),
-    ROOT(
-        id = "root",
-        title = "Root",
-        shortTitle = "Root",
-        subtitle = "APK-only su helper: global session discovery, start-on-boot, codec readout & BT absolute-volume control (no flashing)."
-    )
-}
+import android.media.AudioDeviceInfo
+import com.audioeq.audio.AutoEq
+import com.audioeq.audio.PeqFilter
 
 enum class CapabilityLevel {
     AVAILABLE,
-    REQUIRES_PERMISSION,
+    SETUP_REQUIRED,
     UNSUPPORTED
 }
 
 data class ModeStatusInfo(
-    val mode: EngineMode,
-    val level: CapabilityLevel,
-    val summaryText: String,
-    val detailReason: String,
-    val setupSteps: List<String> = emptyList(),
-    val activeSessionsCount: Int = 0
+    val level: CapabilityLevel = CapabilityLevel.AVAILABLE,
+    val summaryText: String = "Ready",
+    val description: String = "",
+    val detailReason: String = description,
+    val setupSteps: List<String> = emptyList()
 )
+
+enum class FilterType {
+    PEAKING,
+    LOW_SHELF,
+    HIGH_SHELF,
+    HIGH_PASS
+}
+
+enum class EqMode(val bandCount: Int) {
+    TEN_BAND(10),
+    THIRTY_TWO_BAND(32),
+    SIXTY_FOUR_BAND(64)
+}
+
+data class MbcConfig(
+    val baseThresholdDb: FloatArray = floatArrayOf(-12f, -14f, -16f, -16f, -18f, -20f),
+    val attackMs: FloatArray = floatArrayOf(20f, 15f, 10f, 8f, 5f, 5f),
+    val releaseMs: FloatArray = floatArrayOf(120f, 100f, 80f, 60f, 50f, 40f),
+    val ratio: FloatArray = floatArrayOf(2.5f, 2.5f, 2.0f, 2.0f, 1.8f, 1.5f),
+    val kneeDb: FloatArray = floatArrayOf(6f, 6f, 6f, 6f, 6f, 6f)
+)
+
+enum class EngineMode(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val badgeText: String,
+    val description: String,
+    val shortTitle: String = when (id) {
+        "adb_shizuku" -> "ADB / Shizuku"
+        "root" -> "Root"
+        else -> "Legacy"
+    }
+) {
+    LEGACY(
+        id = "legacy",
+        title = "Legacy Mode",
+        subtitle = "Zero-Permission · DynamicsProcessing API 28+",
+        badgeText = "Legacy (DP 31-Band)",
+        description = "Attaches to media players via ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION using 31-band PCHIP + MBC + Limiter."
+    ),
+    ADB_SHIZUKU(
+        id = "adb_shizuku",
+        title = "ADB / Shizuku",
+        subtitle = "System-Wide AudioFlinger Discovery",
+        badgeText = "Shizuku Global",
+        description = "Polls dumpsys media.audio_flinger every 2s to attach 31-band DSP to every active audio session."
+    ),
+    ROOT(
+        id = "root",
+        title = "Root Mode",
+        subtitle = "APK-Only Root Helper · Global Session 0 + Boot",
+        badgeText = "Root Global",
+        description = "Starts APK-only helper process via su for global session attachment, Bluetooth codec inspection & boot restore."
+    );
+
+    companion object {
+        fun fromId(id: String?): EngineMode = entries.find { it.id == id } ?: LEGACY
+    }
+}
+
+enum class OperatingMode(val badge: String) {
+    ROOT_GLOBAL("Root · Global DSP"),
+    SHIZUKU_GLOBAL("Shizuku · Global DSP"),
+    LEGACY_TIER2_DP("Legacy · 31-Band DP"),
+    LEGACY_TIER1_EQ("Legacy · 5-Band EQ"),
+    SUSPENDED_PRIVILEGED("Suspended · Awaiting Grant")
+}
 
 enum class OutputRoute(
     val id: String,
     val label: String,
-    val offsetsDb: DoubleArray,
-    val baseInputGainDb: Float,
-    val limiterThresholdDb: Float,
-    val rootHighPassHz: Float = 0f,
-    val harmonicMixDeltaDb: Float = 0f,
-    val note: String? = null
+    val shortBadge: String,
+    val defaultSafeCutDb: Float,
+    val defaultLimiterCeilingDb: Float,
+    val defaultHighPassHz: Float
 ) {
     SPEAKER(
         id = "speaker",
-        label = "Speaker",
-        offsetsDb = doubleArrayOf(0.0, 0.0, 0.0, 1.5, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-        baseInputGainDb = 0.0f,
-        limiterThresholdDb = -0.5f,
-        rootHighPassHz = 80f,
-        harmonicMixDeltaDb = 3.0f,
-        note = "Lifts 250–500 Hz body with unity headroom"
+        label = "Phone Speaker",
+        shortBadge = "Speaker",
+        defaultSafeCutDb = -4.5f,
+        defaultLimiterCeilingDb = -1.5f,
+        defaultHighPassHz = 85f
     ),
-    WIRED(
-        id = "wired",
+    HEADPHONES(
+        id = "headphones",
         label = "Wired Headphones",
-        offsetsDb = doubleArrayOf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-        baseInputGainDb = 0.0f,
-        limiterThresholdDb = -0.5f
+        shortBadge = "Wired HP",
+        defaultSafeCutDb = -3.0f,
+        defaultLimiterCeilingDb = -1.0f,
+        defaultHighPassHz = 0f
     ),
     BLUETOOTH(
         id = "bluetooth",
-        label = "Bluetooth",
-        offsetsDb = doubleArrayOf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-        baseInputGainDb = 0.0f,
-        limiterThresholdDb = -0.8f,
-        note = "-0.8 dB ceiling for lossy codec peak protection"
+        label = "Bluetooth Audio",
+        shortBadge = "Bluetooth",
+        defaultSafeCutDb = -3.5f,
+        defaultLimiterCeilingDb = -1.0f,
+        defaultHighPassHz = 20f
     ),
-    USB(
-        id = "usb",
+    USB_DAC(
+        id = "usb_dac",
         label = "USB DAC",
-        offsetsDb = doubleArrayOf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-        baseInputGainDb = 0.0f,
-        limiterThresholdDb = -0.5f,
-        note = "Some USB DAC paths may bypass OS effects"
-    )
+        shortBadge = "USB DAC",
+        defaultSafeCutDb = -2.0f,
+        defaultLimiterCeilingDb = -0.5f,
+        defaultHighPassHz = 0f
+    );
+
+    companion object {
+        fun fromId(id: String?): OutputRoute = entries.find { it.id == id } ?: SPEAKER
+
+        fun fromDeviceTypes(types: Collection<Int>): OutputRoute {
+            if (types.any {
+                    it == AudioDeviceInfo.TYPE_USB_HEADSET ||
+                        it == AudioDeviceInfo.TYPE_USB_DEVICE ||
+                        it == AudioDeviceInfo.TYPE_USB_ACCESSORY
+                }
+            ) {
+                return USB_DAC
+            }
+            if (types.any {
+                    it == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                        it == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                        it == AudioDeviceInfo.TYPE_BLE_SPEAKER ||
+                        it == AudioDeviceInfo.TYPE_BLE_BROADCAST
+                }
+            ) {
+                return BLUETOOTH
+            }
+            if (types.any {
+                    it == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                        it == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                        it == AudioDeviceInfo.TYPE_LINE_ANALOG ||
+                        it == AudioDeviceInfo.TYPE_LINE_DIGITAL
+                }
+            ) {
+                return HEADPHONES
+            }
+            return SPEAKER
+        }
+    }
 }
 
-data class MbcConfig(
-    val attackMs: FloatArray,
-    val releaseMs: FloatArray,
-    val ratio: FloatArray,
-    val baseThresholdDb: FloatArray = floatArrayOf(-6f, -6f, -6f, -7f, -9f, -8f),
-    val kneeDb: FloatArray = floatArrayOf(6f, 6f, 6f, 6f, 4f, 6f)
+data class EqBand(
+    val index: Int,
+    val frequencyHz: Int,
+    val label: String,
+    val gainDb: Float = 0f
 )
 
-data class PresetConfig(
+typealias PresetConfig = EqPreset
+
+data class EqPreset(
     val id: String,
     val name: String,
-    val description: String,
-    val gainsDb: List<Float>, // 10 bands: 31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000
-    val largestBoostDb: Float,
-    val highPassHz: Float,
-    val bassHarmonicMixDb: Float?, // null = off (v4 Section 12.2)
-    val widths: SectionWidths = SectionWidths(),
-    val legacyNativeDb: List<Float>, // 5 bands: ~60, ~230, ~910, ~3600, ~14000 (v4 Section 13)
-    val bassBoostStrength: Int, // 0..1000 (Legacy tier 1 only)
-    val virtualizerStrength: Int, // 0..1000
-    val qOverrides: Map<Int, Float> = emptyMap(),
-    val mbcOverride: MbcConfig? = null,
-    val bypassChain: Boolean = false,
-    val isBuiltIn: Boolean = true
-)
-
-data class ParametricCorrectionFilter(
-    val type: FilterType,
-    val fcHz: Double,
-    val gainDb: Double,
-    val q: Double
-)
+    val gainsDb: List<Float>,
+    val isCustom: Boolean = false,
+    val recommendedPreampDb: Float = -3.0f,
+    val recommendedHighPassHz: Float = 0f
+) {
+    val gains10Band: List<Float> get() = gainsDb
+    val isBuiltIn: Boolean get() = !isCustom
+}
 
 data class HeadphoneProfile(
     val id: String,
     val name: String,
-    val category: String, // "over_ear", "in_ear", "earbuds"
     val source: String,
-    val license: String,
-    val preampDb: Float,
-    val filters: List<ParametricCorrectionFilter>,
-    val rig: String? = null,
-    val autoEqPath: String? = null,
-    val rawText: String? = null,
-    val isApproximation: Boolean = false
-)
-
-data class DeviceProfileMemory(
-    val deviceKey: String,
-    val routeId: String,
-    val productName: String,
-    val profileId: String,
-    val profileName: String,
-    val profileSource: String,
-    val autoEqPath: String,
-    val rawPeqOrGraphicText: String,
-    val strength: Float = 0.8f,
-    val fullRange: Boolean = false,
-    val presetId: String = "percussion_clarity",
-    val intensity: Float = 1.0f,
-    val tiltBassDb: Float = 0.0f,
-    val tiltTrebleDb: Float = 0.0f,
-    val daxProfileId: Int = 2 // 0=Dynamic, 1=Movie, 2=Music, 3=Voice (equalizer.db device_routing_memory)
-)
+    val rig: String = "HMS II.3",
+    val peqFilters: List<PeqFilter> = emptyList(),
+    val graphicPoints: List<Pair<Double, Double>> = emptyList(),
+    val correction31Db: List<Float>,
+    val isApproximation: Boolean = false,
+    val license: String = "CC-BY-NC-SA-4.0",
+    val rawText: String? = null
+) {
+    val filters: List<PeqFilter> get() = peqFilters
+}
 
 data class PersonalHearingCurve(
     val enabled: Boolean = false,
-    val leftEarDb: List<Float> = listOf(0f, 0f, 0f, 0f, 0f, 0f),  // 250, 500, 1k, 2k, 4k, 8k Hz
-    val rightEarDb: List<Float> = listOf(0f, 0f, 0f, 0f, 0f, 0f), // 250, 500, 1k, 2k, 4k, 8k Hz
-    val strength: Float = 0.5f
+    val frequenciesHz: List<Int> = listOf(250, 500, 1000, 2000, 4000, 8000),
+    val leftEarBoostDb: List<Float> = listOf(0f, 0f, 0f, 0f, 0f, 0f),
+    val rightEarBoostDb: List<Float> = listOf(0f, 0f, 0f, 0f, 0f, 0f)
+) {
+    val leftEarDb: List<Float> get() = leftEarBoostDb
+    val rightEarDb: List<Float> get() = rightEarBoostDb
+}
+
+data class RouteMemoryProfile(
+    val route: OutputRoute,
+    val deviceKey: String = route.id,
+    val presetId: String = "flat",
+    val bandGainsDb: List<Float> = List(10) { 0f },
+    val rightBandGainsDb: List<Float> = List(10) { 0f },
+    val splitLREnabled: Boolean = false,
+    val balanceDb: Float = 0f,
+    val preampDb: Float = route.defaultSafeCutDb,
+    val autoGainEnabled: Boolean = true,
+    val limiterEnabled: Boolean = true,
+    val limiterCeilingDb: Float = route.defaultLimiterCeilingDb,
+    val subBassHighPassHz: Float = route.defaultHighPassHz,
+    val iso226ContourEnabled: Boolean = false,
+    val midSideWidth: Float = 1.0f,
+    val vocalPresenceBoost: Float = 0.0f,
+    val headphoneProfileId: String = "none",
+    val headphoneCorrectionStrength: Float = 0.8f,
+    val headphoneFullRange: Boolean = false,
+    val tiltBassDb: Float = 0f,
+    val tiltTrebleDb: Float = 0f,
+    val speakerCalibrationEnabled: Boolean = false,
+    val speakerCalStrength: Float = 0.7f
 )
 
 object EqConstants {
-    // v4 Section 2 & 12.1 Biquad types and Q values:
-    // 31 Hz Low-shelf Q 0.9, 62 Hz Peaking Q 1.4, 125–4k Peaking Q 1.6, 8k Peaking Q 1.4, 16k High-shelf Q 0.7
-    val MASTER_BANDS: List<EqBandSpec> = listOf(
-        EqBandSpec(0, 31, "31", 44f, FrequencySection.BASS, FilterType.LOW_SHELF, 0.9f),
-        EqBandSpec(1, 62, "62", 88f, FrequencySection.BASS, FilterType.PEAKING, 1.4f),
-        EqBandSpec(2, 125, "125", 177f, FrequencySection.BASS, FilterType.PEAKING, 1.6f),
-        EqBandSpec(3, 250, "250", 354f, FrequencySection.BASS, FilterType.PEAKING, 1.6f),
-        EqBandSpec(4, 500, "500", 707f, FrequencySection.MIDS, FilterType.PEAKING, 1.6f),
-        EqBandSpec(5, 1000, "1k", 1414f, FrequencySection.MIDS, FilterType.PEAKING, 1.6f),
-        EqBandSpec(6, 2000, "2k", 2828f, FrequencySection.MIDS, FilterType.PEAKING, 1.6f),
-        EqBandSpec(7, 4000, "4k", 5657f, FrequencySection.TREBLE, FilterType.PEAKING, 1.6f),
-        EqBandSpec(8, 8000, "8k", 11314f, FrequencySection.TREBLE, FilterType.PEAKING, 1.4f),
-        EqBandSpec(9, 16000, "16k", 20000f, FrequencySection.AIR, FilterType.HIGH_SHELF, 0.7f)
+    const val MIN_GAIN_DB = -12f
+    const val MAX_GAIN_DB = 12f
+    const val MIN_PREAMP_DB = -12f
+    const val MAX_PREAMP_DB = 6f
+    const val DEFAULT_SEED_HEX = "#5B8CFF"
+
+    val DEFAULT_MBC_CONFIG = MbcConfig()
+
+    fun mbcForPreset(preset: EqPreset? = null, nightMode: Boolean = false): MbcConfig {
+        if (nightMode) {
+            return MbcConfig(
+                baseThresholdDb = floatArrayOf(-18f, -20f, -22f, -22f, -24f, -26f),
+                ratio = floatArrayOf(3.5f, 3.5f, 3.0f, 3.0f, 2.5f, 2.0f)
+            )
+        }
+        return DEFAULT_MBC_CONFIG
+    }
+
+    val TEN_BAND_FREQUENCIES_HZ = listOf(
+        31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000
     )
 
-    val DEFAULT_MBC_CONFIG = MbcConfig(
-        attackMs = floatArrayOf(40f, 15f, 12f, 6f, 1.5f, 2f),
-        releaseMs = floatArrayOf(250f, 160f, 130f, 90f, 45f, 50f),
-        ratio = floatArrayOf(4.0f, 3.5f, 2.5f, 3.0f, 3.5f, 2.5f),
-        baseThresholdDb = floatArrayOf(-6f, -6f, -6f, -7f, -9f, -8f),
-        kneeDb = floatArrayOf(6f, 6f, 6f, 6f, 4f, 6f)
+    val TEN_BAND_LABELS = listOf(
+        "31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"
     )
 
-    val PERCUSSION_CLARITY_MBC_CONFIG = MbcConfig(
-        attackMs = floatArrayOf(50f, 30f, 25f, 12f, 4f, 5f),
-        releaseMs = floatArrayOf(250f, 150f, 120f, 80f, 50f, 50f),
-        ratio = floatArrayOf(3.0f, 2.8f, 2.2f, 2.5f, 2.8f, 2.0f),
-        baseThresholdDb = floatArrayOf(-6f, -6f, -6f, -7f, -9f, -8f),
-        kneeDb = floatArrayOf(6f, 6f, 6f, 6f, 4f, 6f)
+    val THIRTY_ONE_BAND_FREQUENCIES_HZ = listOf(
+        20f, 25f, 31.5f, 40f, 50f, 63f, 80f, 100f, 125f, 160f,
+        200f, 250f, 315f, 400f, 500f, 630f, 800f, 1000f, 1250f, 1600f,
+        2000f, 2500f, 3150f, 4000f, 5000f, 6300f, 8000f, 10000f, 12500f, 16000f,
+        20000f
     )
 
-    // Built-in Presets including Meizu Square Sound EqualizerUtils.java 10-band profiles
-    val BUILT_IN_PRESETS: List<PresetConfig> = listOf(
-        PresetConfig(
+    val HEARING_TEST_FREQUENCIES_HZ = listOf(250, 500, 1000, 2000, 4000, 8000)
+    val HEARING_TEST_FREQS_HZ = HEARING_TEST_FREQUENCIES_HZ.map { it.toDouble() }
+
+    val FREQ_10_BAND = listOf(31.25f, 62.5f, 125f, 250f, 500f, 1000f, 2000f, 4000f, 8000f, 16000f)
+    val FREQ_32_BAND = (0 until 32).map { i -> (20.0 * Math.pow(2.0, i / 3.1)).toFloat() }
+    val FREQ_64_BAND = (0 until 64).map { i -> (20.0 * Math.pow(2.0, i / 6.33)).toFloat() }
+
+    fun frequenciesForMode(mode: EqMode): List<Float> = when (mode) {
+        EqMode.TEN_BAND -> FREQ_10_BAND
+        EqMode.THIRTY_TWO_BAND -> FREQ_32_BAND
+        EqMode.SIXTY_FOUR_BAND -> FREQ_64_BAND
+    }
+
+    fun resampleCurve(srcFreqs: List<Float>, srcGains: List<Float>, dstFreqs: List<Float>): List<Float> {
+        if (srcFreqs.isEmpty() || srcGains.isEmpty()) return dstFreqs.map { 0f }
+        val srcLog = srcFreqs.map { kotlin.math.ln(it.toDouble()) }
+        return dstFreqs.map { df ->
+            val x = kotlin.math.ln(df.toDouble())
+            when {
+                x <= srcLog.first() -> srcGains.first()
+                x >= srcLog.last() -> srcGains.last()
+                else -> {
+                    var idx = 0
+                    while (idx < srcLog.size - 1 && srcLog[idx + 1] < x) {
+                        idx++
+                    }
+                    val t = (x - srcLog[idx]) / (srcLog[idx + 1] - srcLog[idx])
+                    (srcGains[idx] + t * (srcGains[idx + 1] - srcGains[idx])).toFloat()
+                }
+            }
+        }
+    }
+
+    val BUILT_IN_PRESETS = listOf(
+        EqPreset(
             id = "flat",
             name = "Flat",
-            description = "Chain bypassed for bit-transparent reference (payload 10101010101010101010).",
             gainsDb = listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f),
-            largestBoostDb = 0f,
-            highPassHz = 0f,
-            bassHarmonicMixDb = null,
-            legacyNativeDb = listOf(0f, 0f, 0f, 0f, 0f),
-            bassBoostStrength = 0,
-            virtualizerStrength = 0,
-            bypassChain = true
+            recommendedPreampDb = -1.5f,
+            recommendedHighPassHz = 0f
         ),
-        PresetConfig(
+        EqPreset(
             id = "classical",
             name = "Classical",
-            description = "Natural orchestral dynamics and concert-hall high-frequency absorption (-5 dB @ 2–8 kHz, -8 dB @ 16 kHz · payload 10101010101005050502).",
-            gainsDb = listOf(0f, 0f, 0f, 0f, 0f, 0f, -5f, -5f, -5f, -8f),
-            largestBoostDb = 0f,
-            highPassHz = 0f,
-            bassHarmonicMixDb = null,
-            legacyNativeDb = listOf(0f, 0f, 0f, -4f, -4f),
-            bassBoostStrength = 0,
-            virtualizerStrength = 150
+            gainsDb = listOf(4.5f, 3.2f, 2.0f, 0.5f, -1.0f, -1.0f, 0.5f, 2.0f, 3.2f, 4.0f),
+            recommendedPreampDb = -4.5f,
+            recommendedHighPassHz = 20f
         ),
-        PresetConfig(
+        EqPreset(
             id = "jazz",
             name = "Jazz",
-            description = "Warm acoustic instrumentation, upright double-bass & horn body (+5 dB @ 250 Hz–1 kHz), and open air (+5 dB @ 16 kHz · payload 10101015151510121315).",
-            gainsDb = listOf(0f, 0f, 0f, 5f, 5f, 5f, 0f, 2f, 3f, 5f),
-            largestBoostDb = 5f,
-            highPassHz = 0f,
-            bassHarmonicMixDb = null,
-            legacyNativeDb = listOf(0f, 2.5f, 4f, 1.0f, 4f),
-            bassBoostStrength = 0,
-            virtualizerStrength = 100
+            gainsDb = listOf(3.5f, 2.5f, 1.0f, 1.5f, -1.5f, -1.5f, 0.0f, 1.5f, 2.5f, 3.5f),
+            recommendedPreampDb = -3.5f,
+            recommendedHighPassHz = 20f
         ),
-        PresetConfig(
+        EqPreset(
             id = "rock",
             name = "Rock",
-            description = "Punchy kick drums (+3 dB bass), -2 dB @ 500 Hz guitar decoupling dip, and bright cymbals (+6 dB @ 8–16 kHz · payload 13121313081213151616).",
-            gainsDb = listOf(3f, 2f, 3f, 3f, -2f, 2f, 3f, 5f, 6f, 6f),
-            largestBoostDb = 6f,
-            highPassHz = 20f,
-            bassHarmonicMixDb = -12f,
-            legacyNativeDb = listOf(2.5f, 3.0f, 0.0f, 4.0f, 4.0f),
-            bassBoostStrength = 250,
-            virtualizerStrength = 100
+            gainsDb = listOf(4.8f, 3.5f, 1.8f, -1.0f, -2.0f, -0.5f, 2.0f, 3.2f, 4.0f, 4.2f),
+            recommendedPreampDb = -4.8f,
+            recommendedHighPassHz = 25f
         ),
-        PresetConfig(
+        EqPreset(
             id = "pop",
             name = "Pop",
-            description = "Low-end lift (+2 to +3 dB), lower-mid scoop (-6 dB @ 500 Hz, -5 dB @ 1 kHz), and controlled upper treble (payload 12131007040507101208).",
-            gainsDb = listOf(2f, 3f, 0f, -3f, -6f, -5f, -3f, 0f, 2f, -2f),
-            largestBoostDb = 3f,
-            highPassHz = 20f,
-            bassHarmonicMixDb = -14f,
-            legacyNativeDb = listOf(2.5f, -1.5f, -5.5f, -1.5f, 0.0f),
-            bassBoostStrength = 200,
-            virtualizerStrength = 100
+            gainsDb = listOf(-1.5f, 1.0f, 3.0f, 4.0f, 3.5f, 1.5f, -0.5f, 1.0f, 2.5f, 3.0f),
+            recommendedPreampDb = -4.0f,
+            recommendedHighPassHz = 30f
         ),
-        PresetConfig(
+        EqPreset(
             id = "pure_voice",
             name = "Pure Voice",
-            description = "Steep 500 Hz notch (-2 dB) with +5 dB formant shelf (2–8 kHz) and +3 dB air for vocal clarity (payload 10101010081215151513).",
-            gainsDb = listOf(0f, 0f, 0f, 0f, -2f, 2f, 5f, 5f, 5f, 3f),
-            largestBoostDb = 5f,
-            highPassHz = 50f,
-            bassHarmonicMixDb = null,
-            legacyNativeDb = listOf(0f, 0f, 0f, 4f, 4f),
-            bassBoostStrength = 0,
-            virtualizerStrength = 0
+            gainsDb = listOf(-4.0f, -2.5f, -1.0f, 1.5f, 3.5f, 4.0f, 3.0f, 1.5f, -1.0f, -2.5f),
+            recommendedPreampDb = -4.0f,
+            recommendedHighPassHz = 80f
         ),
-        PresetConfig(
+        EqPreset(
             id = "power_bass",
             name = "Power Bass",
-            description = "Two-stage low-frequency reinforcement (+9 dB @ 31 Hz, +8 dB @ 62 Hz, +6 dB @ 125 Hz, +4 dB @ 250 Hz · payload 19181614101010101010 + BassBoost 1000).",
-            gainsDb = listOf(9f, 8f, 6f, 4f, 0f, 0f, 0f, 0f, 0f, 0f),
-            largestBoostDb = 9f,
-            highPassHz = 20f,
-            bassHarmonicMixDb = -6f,
-            legacyNativeDb = listOf(4f, 4f, 0f, 0f, 0f),
-            bassBoostStrength = 1000,
-            virtualizerStrength = 0
+            gainsDb = listOf(6.0f, 5.0f, 3.5f, 1.5f, 0.0f, -0.5f, -1.0f, 0.0f, 1.0f, 1.5f),
+            recommendedPreampDb = -6.0f,
+            recommendedHighPassHz = 20f
         ),
-        PresetConfig(
+        EqPreset(
             id = "balanced_deep",
             name = "Balanced Deep",
-            description = "Bass shelf weight, 250–500 Hz dip for tightness, ear-gain lift at 2–4 kHz, and airy top end.",
-            gainsDb = listOf(3.5f, 4.5f, 2.5f, -2.5f, -1.5f, 0f, 1f, 2.5f, 2.5f, 1.5f),
-            largestBoostDb = 4.5f,
-            highPassHz = 20f,
-            bassHarmonicMixDb = -12f,
-            legacyNativeDb = listOf(4f, -1.9f, -0.2f, 2.3f, 1.7f),
-            bassBoostStrength = 150,
-            virtualizerStrength = 150
+            gainsDb = listOf(3.8f, 3.0f, 1.5f, 0.0f, -0.5f, 0.5f, 1.5f, 2.2f, 2.8f, 2.5f),
+            recommendedPreampDb = -3.8f,
+            recommendedHighPassHz = 25f
         ),
-        PresetConfig(
-            id = "bass_boost",
-            name = "Bass Boost",
-            description = "Deep punchy low end (+6.5 dB @ 62 Hz) kept clean by a -2 dB @ 250 Hz dip.",
-            gainsDb = listOf(5.5f, 6.5f, 4f, -2f, -1.5f, -0.5f, 0f, 0f, 0.5f, 0.5f),
-            largestBoostDb = 6.5f,
-            highPassHz = 25f,
-            bassHarmonicMixDb = -9f,
-            legacyNativeDb = listOf(4f, -1.3f, -0.6f, 0f, 0.5f),
-            bassBoostStrength = 400,
-            virtualizerStrength = 0
-        ),
-        PresetConfig(
+        EqPreset(
             id = "vocal_clarity",
             name = "Vocal Clarity",
-            description = "Body cut, presence peak at 2–4 kHz (+3.5 dB), restrained 8 kHz to avoid sibilance.",
-            gainsDb = listOf(-3.5f, -2.5f, -1f, -3f, -1.5f, 1.5f, 3.5f, 3.5f, 1.5f, 0.5f),
-            largestBoostDb = 3.5f,
-            highPassHz = 60f,
-            bassHarmonicMixDb = null,
-            legacyNativeDb = listOf(-2.6f, -2.8f, 1.1f, 3.5f, 0.7f),
-            bassBoostStrength = 0,
-            virtualizerStrength = 100
+            gainsDb = listOf(-3.5f, -2.0f, 0.0f, 2.0f, 3.8f, 4.2f, 3.2f, 1.8f, 0.5f, -1.0f),
+            recommendedPreampDb = -4.2f,
+            recommendedHighPassHz = 80f
         ),
-        PresetConfig(
-            id = "percussion_clarity",
+        EqPreset(
+            id = "percussion",
             name = "Percussion",
-            description = "Tuned for tabla: 62–125 Hz bayan weight, -3.5 dB @ 250 Hz boxiness cut, +3.5 dB @ 4 kHz stroke attack, +3 dB @ 8 kHz sizzle.",
-            gainsDb = listOf(-4f, 1.5f, 2.5f, -3.5f, -2f, 0f, 1.5f, 3.5f, 3f, 1.5f),
-            largestBoostDb = 3.5f,
-            highPassHz = 40f,
-            bassHarmonicMixDb = -15f,
-            legacyNativeDb = listOf(1.2f, -2.8f, -0.3f, 3.2f, 1.8f),
-            bassBoostStrength = 100,
-            virtualizerStrength = 200,
-            qOverrides = mapOf(250 to 1.0f, 4000 to 2.0f),
-            mbcOverride = PERCUSSION_CLARITY_MBC_CONFIG
-        ),
-        PresetConfig(
-            id = "cinema",
-            name = "Cinema",
-            description = "Low-end sub weight (+4 dB @ 31–62 Hz) plus clear dialogue presence at 2–4 kHz (+2.5 dB).",
-            gainsDb = listOf(4f, 4f, 2f, -2f, -1f, 0.5f, 2.5f, 2.5f, 2f, 2f),
-            largestBoostDb = 4f,
-            highPassHz = 20f,
-            bassHarmonicMixDb = -12f,
-            legacyNativeDb = listOf(4f, -1.5f, 0.3f, 2.5f, 2.0f),
-            bassBoostStrength = 200,
-            virtualizerStrength = 250
+            gainsDb = listOf(3.0f, 2.0f, -0.5f, -1.5f, 0.0f, 1.0f, 2.5f, 4.2f, 4.8f, 4.5f),
+            recommendedPreampDb = -4.8f,
+            recommendedHighPassHz = 30f
         )
     )
 
-    // v4 Section 8.1 Built-in Headphone Correction Profiles (AutoEQ / Harman OE & IE open data)
-    val HEADPHONE_PROFILES: List<HeadphoneProfile> = listOf(
+    private fun buildProfileFromPeq(
+        id: String,
+        name: String,
+        source: String,
+        rig: String,
+        filters: List<PeqFilter>
+    ): HeadphoneProfile {
+        val corr31 = AutoEq.peqToCorrection31(filters).map { it.toFloat() }
+        return HeadphoneProfile(
+            id = id,
+            name = name,
+            source = source,
+            rig = rig,
+            peqFilters = filters,
+            correction31Db = corr31,
+            isApproximation = false,
+            license = "CC-BY-NC-SA-4.0"
+        )
+    }
+
+    val BUILT_IN_HEADPHONE_PROFILES: List<HeadphoneProfile> = listOf(
         HeadphoneProfile(
             id = "none",
-            name = "None (Flat Device)",
-            category = "none",
+            name = "Off (No Headphone Profile)",
             source = "Bypass",
-            license = "Public Domain",
-            preampDb = 0f,
-            filters = emptyList()
+            rig = "None",
+            peqFilters = emptyList(),
+            correction31Db = List(31) { 0f }
         ),
-        HeadphoneProfile(
-            id = "sony_wh1000xm5",
-            name = "Sony WH-1000XM5",
-            category = "over_ear",
-            source = "AutoEQ / Oratory1990 Harman OE",
-            license = "MIT",
-            preampDb = -4.8f,
+        buildProfileFromPeq(
+            id = "hd650",
+            name = "Sennheiser HD 650",
+            source = "oratory1990",
+            rig = "GRAS 43AG-7",
             filters = listOf(
-                ParametricCorrectionFilter(FilterType.LOW_SHELF, 105.0, -3.5, 0.7),
-                ParametricCorrectionFilter(FilterType.PEAKING, 210.0, -4.2, 1.1),
-                ParametricCorrectionFilter(FilterType.PEAKING, 1650.0, 2.8, 1.6),
-                ParametricCorrectionFilter(FilterType.PEAKING, 3100.0, 3.6, 1.8),
-                ParametricCorrectionFilter(FilterType.HIGH_SHELF, 8500.0, 2.0, 0.7)
+                PeqFilter("LSC", 105.0, 5.5, 0.70),
+                PeqFilter("PK", 210.0, -2.1, 1.30),
+                PeqFilter("PK", 1050.0, 1.0, 1.80),
+                PeqFilter("PK", 3300.0, 2.3, 2.10),
+                PeqFilter("HSC", 10000.0, 1.8, 0.70)
             )
         ),
-        HeadphoneProfile(
-            id = "sennheiser_hd650",
-            name = "Sennheiser HD 650 / HD 6XX",
-            category = "over_ear",
-            source = "AutoEQ / Oratory1990 Harman OE",
-            license = "MIT",
-            preampDb = -5.5f,
+        buildProfileFromPeq(
+            id = "wh1000xm5",
+            name = "WH-1000XM5",
+            source = "oratory1990",
+            rig = "GRAS 43AG-7",
             filters = listOf(
-                ParametricCorrectionFilter(FilterType.LOW_SHELF, 75.0, 5.5, 0.7),
-                ParametricCorrectionFilter(FilterType.PEAKING, 190.0, -2.2, 1.2),
-                ParametricCorrectionFilter(FilterType.PEAKING, 2150.0, 1.5, 2.0),
-                ParametricCorrectionFilter(FilterType.PEAKING, 3300.0, 2.4, 2.1),
-                ParametricCorrectionFilter(FilterType.HIGH_SHELF, 9500.0, 1.8, 0.7)
+                PeqFilter("LSC", 105.0, -3.8, 0.70),
+                PeqFilter("PK", 195.0, -4.6, 1.10),
+                PeqFilter("PK", 460.0, 2.4, 1.40),
+                PeqFilter("PK", 1550.0, 3.2, 1.60),
+                PeqFilter("PK", 3100.0, 2.5, 2.00),
+                PeqFilter("HSC", 8500.0, 2.6, 0.70)
             )
         ),
-        HeadphoneProfile(
+        buildProfileFromPeq(
             id = "airpods_pro_2",
-            name = "Apple AirPods Pro (2nd Gen)",
-            category = "in_ear",
-            source = "AutoEQ / Crinacle IEF Neutral",
-            license = "MIT",
-            preampDb = -3.2f,
+            name = "Apple AirPods Pro 2",
+            source = "crinacle",
+            rig = "Bruel & Kjaer 5128",
             filters = listOf(
-                ParametricCorrectionFilter(FilterType.LOW_SHELF, 90.0, 1.8, 0.7),
-                ParametricCorrectionFilter(FilterType.PEAKING, 320.0, -1.5, 1.4),
-                ParametricCorrectionFilter(FilterType.PEAKING, 2600.0, 2.2, 1.9),
-                ParametricCorrectionFilter(FilterType.PEAKING, 5200.0, -2.4, 2.2),
-                ParametricCorrectionFilter(FilterType.HIGH_SHELF, 10000.0, 1.5, 0.7)
+                PeqFilter("LSC", 105.0, 1.4, 0.70),
+                PeqFilter("PK", 230.0, -1.6, 1.50),
+                PeqFilter("PK", 1200.0, -1.1, 1.80),
+                PeqFilter("PK", 2850.0, 2.4, 1.90),
+                PeqFilter("PK", 5800.0, -2.0, 2.50),
+                PeqFilter("HSC", 10000.0, 1.5, 0.70)
             )
         ),
-        HeadphoneProfile(
+        buildProfileFromPeq(
             id = "galaxy_buds2_pro",
             name = "Samsung Galaxy Buds2 Pro",
-            category = "in_ear",
-            source = "AutoEQ / Harman IE Target",
-            license = "MIT",
-            preampDb = -3.8f,
+            source = "crinacle",
+            rig = "GRAS 43AG-7",
             filters = listOf(
-                ParametricCorrectionFilter(FilterType.LOW_SHELF, 105.0, -1.5, 0.7),
-                ParametricCorrectionFilter(FilterType.PEAKING, 2900.0, -2.8, 1.8),
-                ParametricCorrectionFilter(FilterType.PEAKING, 4800.0, -2.0, 2.0),
-                ParametricCorrectionFilter(FilterType.HIGH_SHELF, 9500.0, -1.8, 0.7)
+                PeqFilter("LSC", 105.0, -1.6, 0.70),
+                PeqFilter("PK", 320.0, 1.2, 1.40),
+                PeqFilter("PK", 1600.0, -1.5, 1.70),
+                PeqFilter("PK", 3000.0, -2.8, 2.10),
+                PeqFilter("PK", 7200.0, -3.0, 2.80)
             )
         ),
-        HeadphoneProfile(
-            id = "pixel_buds_pro",
-            name = "Google Pixel Buds Pro",
-            category = "in_ear",
-            source = "AutoEQ / RTINGS Harman IE",
-            license = "MIT",
-            preampDb = -4.2f,
+        buildProfileFromPeq(
+            id = "dt990_pro",
+            name = "Beyerdynamic DT 990 Pro",
+            source = "oratory1990",
+            rig = "GRAS 43AG-7",
             filters = listOf(
-                ParametricCorrectionFilter(FilterType.LOW_SHELF, 95.0, -2.5, 0.7),
-                ParametricCorrectionFilter(FilterType.PEAKING, 450.0, 1.8, 1.3),
-                ParametricCorrectionFilter(FilterType.PEAKING, 1850.0, 3.2, 1.6),
-                ParametricCorrectionFilter(FilterType.PEAKING, 4200.0, -2.0, 2.0)
+                PeqFilter("LSC", 85.0, 4.8, 0.70),
+                PeqFilter("PK", 180.0, -2.8, 1.20),
+                PeqFilter("PK", 650.0, 1.4, 1.40),
+                PeqFilter("PK", 3500.0, 2.0, 2.00),
+                PeqFilter("PK", 6000.0, -3.5, 3.00),
+                PeqFilter("PK", 8800.0, -6.2, 3.20)
             )
         ),
-        HeadphoneProfile(
-            id = "audiotechnica_m50x",
-            name = "Audio-Technica ATH-M50x",
-            category = "over_ear",
-            source = "AutoEQ / Oratory1990 Harman OE",
-            license = "MIT",
-            preampDb = -4.5f,
+        buildProfileFromPeq(
+            id = "sundara",
+            name = "HIFIMAN Sundara",
+            source = "oratory1990",
+            rig = "GRAS 43AG-7",
             filters = listOf(
-                ParametricCorrectionFilter(FilterType.LOW_SHELF, 80.0, 2.0, 0.7),
-                ParametricCorrectionFilter(FilterType.PEAKING, 150.0, -3.8, 1.4),
-                ParametricCorrectionFilter(FilterType.PEAKING, 410.0, 2.6, 1.5),
-                ParametricCorrectionFilter(FilterType.PEAKING, 2100.0, 3.1, 1.8),
-                ParametricCorrectionFilter(FilterType.PEAKING, 4500.0, -3.2, 2.2)
-            )
-        ),
-        HeadphoneProfile(
-            id = "qc_ultra",
-            name = "QuietComfort Ultra",
-            category = "over_ear",
-            source = "AutoEQ / Harman OE Target",
-            license = "MIT",
-            preampDb = -4.0f,
-            filters = listOf(
-                ParametricCorrectionFilter(FilterType.LOW_SHELF, 110.0, -3.2, 0.7),
-                ParametricCorrectionFilter(FilterType.PEAKING, 240.0, -2.5, 1.3),
-                ParametricCorrectionFilter(FilterType.PEAKING, 1400.0, 2.2, 1.5),
-                ParametricCorrectionFilter(FilterType.PEAKING, 3400.0, 2.5, 1.8)
+                PeqFilter("LSC", 105.0, 5.2, 0.70),
+                PeqFilter("PK", 950.0, -1.4, 2.10),
+                PeqFilter("PK", 1950.0, 3.0, 1.80),
+                PeqFilter("PK", 4600.0, -1.8, 2.60),
+                PeqFilter("PK", 7200.0, -2.5, 3.00)
             )
         )
     )
-
-    val HEARING_TEST_FREQS_HZ = doubleArrayOf(250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0)
-
-    
-    fun mbcForPreset(preset: PresetConfig?, nightMode: Boolean = false): MbcConfig {
-        val base = preset?.mbcOverride ?: DEFAULT_MBC_CONFIG
-        if (!nightMode) return base
-        return MbcConfig(
-            attackMs = base.attackMs.clone(),
-            releaseMs = base.releaseMs.clone(),
-            ratio = FloatArray(6) { (base.ratio[it] + 1.5f).coerceAtMost(8.0f) },
-            baseThresholdDb = FloatArray(6) { base.baseThresholdDb[it] - 6.0f },
-            kneeDb = base.kneeDb.clone()
-        )
-    }
-
-    fun convert10BandTo5BandNative(gainsDb: List<Float>): List<Float> {
-        if (gainsDb.size < 10) return List(5) { 0f }
-        val b0 = ((gainsDb[0] + gainsDb[1]) / 2f).coerceIn(-12f, 4f)
-        val b1 = ((gainsDb[2] + gainsDb[3]) / 2f).coerceIn(-12f, 4f)
-        val b2 = ((gainsDb[4] + gainsDb[5]) / 2f).coerceIn(-12f, 4f)
-        val b3 = ((gainsDb[6] + gainsDb[7]) / 2f).coerceIn(-12f, 4f)
-        val b4 = ((gainsDb[8] + gainsDb[9]) / 2f).coerceIn(-12f, 4f)
-        return listOf(b0, b1, b2, b3, b4)
-    }
 }

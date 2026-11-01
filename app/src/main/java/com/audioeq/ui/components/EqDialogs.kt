@@ -318,7 +318,6 @@ fun SoundCalibrationSheet(
         ).map { it.toFloat() }
     }
 
-    // Section 16.5 & 16.6: Suggest top AutoEq entry when matchScore >= 0.6
     val suggestedAutoEqEntry = remember(connectedProductName, autoEqCatalog) {
         val prod = connectedProductName?.takeIf { it.isNotBlank() } ?: return@remember null
         autoEqCatalog
@@ -370,7 +369,6 @@ fun SoundCalibrationSheet(
                 }
             }
 
-            // 1. Headphone Profile Database & AutoEq Section (v5 Section 8.1 & 16)
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerHigh
@@ -409,7 +407,6 @@ fun SoundCalibrationSheet(
                         }
                     }
 
-                    // Status chips (Rate-limited, Offline cache, GraphicEQ approximation)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (autoEqRateLimited) {
                             Surface(
@@ -452,7 +449,6 @@ fun SoundCalibrationSheet(
                         }
                     }
 
-                    // Suggested for connected device (Section 16.6: matchScore >= 0.6)
                     if (suggestedAutoEqEntry != null) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
@@ -490,7 +486,6 @@ fun SoundCalibrationSheet(
                         }
                     }
 
-                    // Strength Slider (Default 0.8)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -515,7 +510,6 @@ fun SoundCalibrationSheet(
                             .testTag("headphone_strength_slider")
                     )
 
-                    // Section 16.4 Trim notice & Full Range (+10 dB boost limit) switch
                     if (headphoneTrimmedDb > 1.0f || headphoneFullRange) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
@@ -553,7 +547,6 @@ fun SoundCalibrationSheet(
                         }
                     }
 
-                    // Section 16.4 & 17.2 F3: Tilt Knobs (Bass LSC 105 Hz Q 0.7 [-6..+6 dB], Treble HSC 6 kHz Q 0.7 [-4..+4 dB])
                     Surface(
                         shape = RoundedCornerShape(14.dp),
                         color = MaterialTheme.colorScheme.surface
@@ -642,7 +635,6 @@ fun SoundCalibrationSheet(
                         )
                     }
 
-                    // Search Bar for Built-in + AutoEq GitHub Catalog
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
@@ -658,7 +650,6 @@ fun SoundCalibrationSheet(
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     }
 
-                    // Built-in / Active Profiles
                     val filteredBuiltIn = headphoneProfiles.filter {
                         searchQuery.isBlank() ||
                             it.name.contains(searchQuery, ignoreCase = true) ||
@@ -711,7 +702,6 @@ fun SoundCalibrationSheet(
                         }
                     }
 
-                    // AutoEq GitHub Index Matches
                     val matchingCatalog = remember(searchQuery, autoEqCatalog) {
                         if (searchQuery.isBlank()) {
                             autoEqCatalog.take(6)
@@ -774,7 +764,6 @@ fun SoundCalibrationSheet(
                         }
                     }
 
-                    // Section 16.6 & 17.2 F9: Import & Export ParametricEQ / GraphicEQ text
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -848,7 +837,6 @@ fun SoundCalibrationSheet(
                 }
             }
 
-            // 2. Speaker Self-Calibration Wizard (v5 Section 8.2)
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerHigh
@@ -972,7 +960,6 @@ fun SoundCalibrationSheet(
                 }
             }
 
-            // 3. Personal Hearing Curve Per-Ear Tone Test (v5 Section 17.2 F5)
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerHigh
@@ -1101,7 +1088,6 @@ fun SoundCalibrationSheet(
                 }
             }
 
-            // 4. Attribution & Licensing Notice (v5 Section 16.6 & 16.8)
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = MaterialTheme.colorScheme.surfaceContainer
@@ -1162,7 +1148,6 @@ fun AbxBlindTestSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            // 3 Audition Buttons: A, B, X
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1208,7 +1193,6 @@ fun AbxBlindTestSheet(
                 }
             }
 
-            // Identification Guess Buttons
             Text(
                 text = "Identify Hidden Source X:",
                 style = MaterialTheme.typography.titleSmall
@@ -1237,7 +1221,6 @@ fun AbxBlindTestSheet(
                 }
             }
 
-            // Score Card
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -1366,7 +1349,6 @@ fun SettingsAndDiagnosticsSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var showCustomColorPicker by remember { mutableStateOf(false) }
 
-    // Zero-permission Photo Picker for "From wallpaper" image seed color extraction
     val wallpaperPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
@@ -1397,7 +1379,7 @@ fun SettingsAndDiagnosticsSheet(
                 .padding(horizontal = 22.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Sheet Header (.sheet-head)
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1429,9 +1411,6 @@ fun SettingsAndDiagnosticsSheet(
                 }
             }
 
-            // ================================================================
-            // GROUP 1: AUDIO ENGINE
-            // ================================================================
             SettingsGroupCard(title = "AUDIO ENGINE") {
                 val engineOptions = listOf(
                     Triple(EngineMode.LEGACY, "Legacy", "Global EQ, no ADB or root"),
@@ -1484,7 +1463,6 @@ fun SettingsAndDiagnosticsSheet(
                             )
                         }
 
-                        // Radio dot (.radio-dot)
                         Box(
                             modifier = Modifier
                                 .size(18.dp)
@@ -1549,9 +1527,6 @@ fun SettingsAndDiagnosticsSheet(
                 )
             }
 
-            // ================================================================
-            // GROUP 2: CHANNEL BALANCE & DUAL-CHANNEL EQ
-            // ================================================================
             SettingsGroupCard(title = "CHANNEL BALANCE & DUAL-CHANNEL EQ") {
                 V7SwitchRow(
                     title = "Independent left / right 10-band EQ",
@@ -1611,9 +1586,6 @@ fun SettingsAndDiagnosticsSheet(
                 }
             }
 
-            // ================================================================
-            // GROUP 3: RENDERER, USB DAC & BOOT
-            // ================================================================
             SettingsGroupCard(title = "RENDERER, USB DAC & BOOT") {
                 V7SwitchRow(
                     title = "Start equalizer on boot",
@@ -1659,9 +1631,6 @@ fun SettingsAndDiagnosticsSheet(
                 }
             }
 
-            // ================================================================
-            // GROUP 4: SUB-BASS BUTTERWORTH HIGH-PASS
-            // ================================================================
             SettingsGroupCard(title = "SUB-BASS BUTTERWORTH HIGH-PASS") {
                 val hpInt = ((highPassHz / 5f).roundToInt() * 5).coerceIn(0, 200)
                 val hpLabel = if (hpInt == 0) "Off" else "$hpInt Hz"
@@ -1709,9 +1678,6 @@ fun SettingsAndDiagnosticsSheet(
                 }
             }
 
-            // ================================================================
-            // GROUP 5: HARDWARE & AUDIO EFFECT DIAGNOSTICS
-            // ================================================================
             SettingsGroupCard(title = "HARDWARE & AUDIO EFFECT DIAGNOSTICS") {
                 val opModeLabel = when (selectedMode) {
                     EngineMode.LEGACY -> "LEGACY_TIER2_DP"
@@ -1757,9 +1723,6 @@ fun SettingsAndDiagnosticsSheet(
                 DiagnosticRow("Active Audio Sessions", sessionsLabel, showBottomBorder = false)
             }
 
-            // ================================================================
-            // GROUP 6: KEEP EQUALIZER ALIVE
-            // ================================================================
             SettingsGroupCard(title = "KEEP EQUALIZER ALIVE") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1809,9 +1772,6 @@ fun SettingsAndDiagnosticsSheet(
                 }
             }
 
-            // ================================================================
-            // GROUP 7: APPEARANCE (MONET / DYNAMIC COLOR)
-            // ================================================================
             SettingsGroupCard(title = "APPEARANCE") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
@@ -1840,7 +1800,6 @@ fun SettingsAndDiagnosticsSheet(
 
                 HorizontalDivider(color = palette.outlineV.copy(alpha = 0.5f))
 
-                // Dynamic color header + "From wallpaper" button
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1895,7 +1854,6 @@ fun SettingsAndDiagnosticsSheet(
                     }
                 }
 
-                // .swatch-row (#swatches): 8 preset seed swatches + 9th conic-gradient custom picker
                 FlowRow(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1937,7 +1895,6 @@ fun SettingsAndDiagnosticsSheet(
                         }
                     }
 
-                    // 9th swatch: Custom Color Picker (.swatch.picker)
                     val isCustomSeed = MonetEngine.PRESET_SWATCHES.none {
                         it.equals(normalizedCurrentSeed, ignoreCase = true)
                     }
@@ -1984,7 +1941,6 @@ fun SettingsAndDiagnosticsSheet(
                     }
                 }
 
-                // Tonal palette preview (#tonalStrip + #seedMeta + 3 role badges)
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -2008,7 +1964,6 @@ fun SettingsAndDiagnosticsSheet(
                         )
                     }
 
-                    // 9-step OKLCH tonal ramp strip (95, 90, 80, 70, 60, 50, 40, 30, 20)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2037,7 +1992,6 @@ fun SettingsAndDiagnosticsSheet(
                         }
                     }
 
-                    // 3 Role Preview Badges (Primary, Secondary, Tertiary)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)

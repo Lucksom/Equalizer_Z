@@ -2,7 +2,6 @@ package com.audioeq.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Light M3 tokens from audio-eq-interface-v3.html
 val PrimaryLight = Color(0xFF6750A4)
 val OnPrimaryLight = Color(0xFFFFFFFF)
 val PrimaryContainerLight = Color(0xFFEADDFF)
@@ -25,7 +24,6 @@ val OnSurfaceVariantLight = Color(0xFF49454F)
 val OutlineLight = Color(0xFF79747E)
 val OutlineVariantLight = Color(0xFFCAC4D0)
 
-// Dark M3 tokens from audio-eq-interface-v3.html
 val PrimaryDark = Color(0xFFD0BCFF)
 val OnPrimaryDark = Color(0xFF381E72)
 val PrimaryContainerDark = Color(0xFF4F378B)

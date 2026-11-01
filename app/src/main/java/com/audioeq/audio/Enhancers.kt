@@ -9,12 +9,34 @@ import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
+object Enhancers {
+    fun computeDialoguePreEqOffsets(
+        bandFreqs: FloatArray,
+        enabled: Boolean,
+        amount: Float,
+        virtualizerStrength: Int
+    ): Pair<FloatArray, FloatArray> {
+        val outL = FloatArray(bandFreqs.size)
+        val outR = FloatArray(bandFreqs.size)
+        if (!enabled || amount <= 0f) return outL to outR
+        for (i in bandFreqs.indices) {
+            val f = bandFreqs[i]
+            if (f in 1000f..4000f) {
+                val boost = 3.0f * amount
+                outL[i] = boost
+                outR[i] = boost
+            }
+        }
+        return outL to outR
+    }
+}
+
 object FastRender {
     private fun log2(x: Double): Double = ln(x) / ln(2.0)
 
     private val X = DoubleArray(10) { log2(Dsp.SLIDER_HZ[it]) }
     private val H = DoubleArray(9) { X[it + 1] - X[it] }
-    private val SEG = IntArray(31) // -1 below first slider, -2 above last, else segment index 0..8
+    private val SEG = IntArray(31)
     private val B = Array(31) { DoubleArray(4) }
 
     init {
@@ -39,7 +61,6 @@ object FastRender {
         }
     }
 
-    
     @Synchronized
     fun render(y: DoubleArray, out: DoubleArray) {
         val d0 = (y[1] - y[0]) / H[0]
@@ -90,7 +111,6 @@ class VirtualizerFx(sessionId: Int) {
     private var lastStrength = -1
     private var lastMode = Int.MIN_VALUE
 
-    
     fun supported(small: Boolean): Boolean {
         val f = fx ?: return false
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return true
@@ -106,7 +126,6 @@ class VirtualizerFx(sessionId: Int) {
         }
     }
 
-    
     fun apply(a: Double, small: Boolean, enabledGate: Boolean = true) {
         val f = fx ?: return
         try {

@@ -21,7 +21,6 @@ class BiquadFilter {
     var a2: Double = 0.0
         private set
 
-    // State variables for Left and Right channels
     private var z1L: Double = 0.0
     private var z2L: Double = 0.0
     private var z1R: Double = 0.0
@@ -33,6 +32,18 @@ class BiquadFilter {
         z1R = 0.0
         z2R = 0.0
     }
+
+    fun configurePeaking(
+        frequencyHz: Double,
+        sampleRate: Double,
+        gainDb: Double,
+        q: Double
+    ) {
+        configure(FilterType.PEAKING, frequencyHz, sampleRate, gainDb, q)
+    }
+
+    fun processSample(sample: Double): Double = processLeft(sample)
+    fun processSample(sample: Float): Float = processLeft(sample.toDouble()).toFloat()
 
     fun configure(
         type: FilterType,
@@ -136,7 +147,6 @@ class BiquadFilter {
         return out
     }
 
-    
     fun magnitudeDbAt(fHz: Double, sampleRate: Double = 48000.0): Double {
         val w = 2.0 * PI * fHz / sampleRate
         val cosW = cos(w)

@@ -32,7 +32,10 @@ class MainActivity : ComponentActivity() {
                         eqViewModel.attachExternalAudioSession(launchedSessionId)
                     }
                 }
-                AudioEqScreen(viewModel = eqViewModel)
+                AudioEqScreen(
+                    uiState = state,
+                    viewModel = eqViewModel
+                )
             }
         }
     }

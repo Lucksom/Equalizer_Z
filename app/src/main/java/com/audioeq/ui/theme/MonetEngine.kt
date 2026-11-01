@@ -64,10 +64,12 @@ data class MonetPalette(
 )
 
 val LocalMonetPalette = staticCompositionLocalOf {
-    MonetEngine.buildPalette(seedHex = "#6750a4", dark = true)
+    MonetEngine.buildPalette(seedHex = "#6750a4", dark = false)
 }
 
 object MonetEngine {
+
+    const val DEFAULT_SEED_HEX = "#5B8CFF"
 
     val PRESET_SWATCHES = listOf(
         "#6750a4",
@@ -320,7 +322,6 @@ object MonetEngine {
         }
     }
 
-    
     fun extractSeedHexFromBitmap(bitmap: Bitmap): String {
         val scaled = Bitmap.createScaledBitmap(bitmap, 48, 48, true)
         var bestHex = "#6750a4"
