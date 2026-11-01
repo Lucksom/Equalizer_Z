@@ -59,41 +59,41 @@ enum class AudioProfile(
     DYNAMIC(
         id = "profile_dynamic",
         title = "Dynamic",
-        subtitle = "Adaptive loudness contour, punchy bass & crisp presence",
+        subtitle = "Energetic tuning with enhanced sub-bass and airy highs",
         badgeLabel = "Dynamic",
-        virtualizerStrengthPermille = 350,
-        bassBoostStrengthPermille = 400
+        virtualizerStrengthPermille = 0,
+        bassBoostStrengthPermille = 0
     ),
     BALANCED(
         id = "profile_balanced",
         title = "Balanced",
-        subtitle = "Neutral studio balance with gentle vocal focus",
+        subtitle = "Smooth, neutral studio balance for extended listening",
         badgeLabel = "Balanced",
-        virtualizerStrengthPermille = 150,
-        bassBoostStrengthPermille = 150
+        virtualizerStrengthPermille = 0,
+        bassBoostStrengthPermille = 0
     ),
     EFFECT_3D(
         id = "profile_3d",
         title = "3D",
-        subtitle = "Wide binaural crossfeed stage & spatial air",
+        subtitle = "Binaural spatial audio with wide acoustic imaging",
         badgeLabel = "3D Spatial",
-        virtualizerStrengthPermille = 850,
-        bassBoostStrengthPermille = 300
+        virtualizerStrengthPermille = 0,
+        bassBoostStrengthPermille = 0
     ),
     LIVE_MUSIC(
         id = "profile_live_music",
         title = "Live Music",
-        subtitle = "Concert hall presence, stage depth & upper-harmonic air",
+        subtitle = "Realistic concert-hall acoustics & natural stage presence",
         badgeLabel = "Live Stage",
-        virtualizerStrengthPermille = 650,
-        bassBoostStrengthPermille = 350
+        virtualizerStrengthPermille = 0,
+        bassBoostStrengthPermille = 0
     ),
     MOVIE(
         id = "profile_movie",
         title = "Movie",
-        subtitle = "Binaural HRTF virtualizer (±35°), surround decoder, +2.5 dB dialogue & −12 dB de-reverb",
-        badgeLabel = "Movie · HRTF",
-        virtualizerStrengthPermille = 650,
+        subtitle = "Wide cinematic soundstage, clear dialogue focus & deep sub-bass",
+        badgeLabel = "Movie",
+        virtualizerStrengthPermille = 0,
         bassBoostStrengthPermille = 0
     );
 
@@ -379,12 +379,18 @@ object EnhancerDsp {
 
         val target20 = ieqTarget20Db(config.ieqPreset, config.ieqCustom10Db)
         val freqs20 = DoubleArray(20) { IEQ_FREQS_20[it].toDouble() }
+        if (config.ieqPreset == IeqPreset.CUSTOM) {
+            return DoubleArray(Dsp.F_DP.size) { k ->
+                val f = Dsp.F_DP[k]
+                (alpha * logLinearInterp(freqs20, target20, f)).coerceIn(-8.0, 8.0)
+            }
+        }
         val meanTarget = target20.TakeMidrangeMean()
 
         return DoubleArray(Dsp.F_DP.size) { k ->
             val f = Dsp.F_DP[k]
-            val raw = logLinearInterp(freqs20, target20, f) - meanTarget * 0.45
-            (alpha * raw).coerceIn(-6.0, 6.0)
+            val raw = logLinearInterp(freqs20, target20, f) - meanTarget * 0.72
+            (alpha * raw).coerceIn(-1.2, 6.0)
         }
     }
 
@@ -402,9 +408,9 @@ object EnhancerDsp {
         if (amt <= 1e-6) return DoubleArray(Dsp.F_DP.size)
         val duck = (config.dialogueDucking.coerceIn(0, 16) / 16.0)
 
-        val fSibilance = 6800.0
-        val sibilanceCutDb = -2.2 * amt
-        val mudCutDb = -3.0 * amt * (0.45 + 0.55 * duck)
+        val fSibilance = 7200.0
+        val sibilanceCutDb = -1.0 * amt
+        val mudCutDb = -1.4 * amt * duck
 
         return DoubleArray(Dsp.F_DP.size) { k ->
             val f = Dsp.F_DP[k]
@@ -412,38 +418,38 @@ object EnhancerDsp {
                 type = "PK",
                 fc = 1150.0,
                 gain = 3.2 * amt,
-                q = 1.15,
+                q = 1.10,
                 f = f
             )
             val presencePeak = AutoEq.biquadDb(
                 type = "PK",
                 fc = 2650.0,
                 gain = 4.6 * amt,
-                q = 1.25,
+                q = 1.15,
                 f = f
             )
             val chestClarity = AutoEq.biquadDb(
                 type = "PK",
                 fc = 420.0,
-                gain = 1.4 * amt,
-                q = 1.40,
+                gain = 1.6 * amt,
+                q = 1.30,
                 f = f
             )
             val lowMudCut = AutoEq.biquadDb(
                 type = "LSC",
-                fc = 145.0,
+                fc = 135.0,
                 gain = mudCutDb,
-                q = 0.75,
+                q = 0.72,
                 f = f
             )
             val deEsser = AutoEq.biquadDb(
                 type = "PK",
                 fc = fSibilance,
                 gain = sibilanceCutDb,
-                q = 2.6,
+                q = 2.4,
                 f = f
             )
-            (bodyPeak + presencePeak + chestClarity + lowMudCut + deEsser).coerceIn(-6.0, 7.5)
+            (bodyPeak + presencePeak + chestClarity + lowMudCut + deEsser).coerceIn(-2.5, 7.5)
         }
     }
 
@@ -454,13 +460,11 @@ object EnhancerDsp {
         if (config.bassEnhancerEnabled) {
             val strength01 = (config.bassEnhancerStrength.coerceIn(0, 100) / 100.0)
             val subGain = 6.2 * strength01
-            val punchGain = 3.8 * strength01
-            val mudTrim = -1.6 * strength01
+            val punchGain = 4.0 * strength01
             for (k in out.indices) {
                 val f = Dsp.F_DP[k]
-                out[k] += AutoEq.biquadDb("PK", 62.0, subGain, 0.85, f) +
-                    AutoEq.biquadDb("PK", 112.0, punchGain, 1.10, f) +
-                    AutoEq.biquadDb("PK", 260.0, mudTrim, 1.45, f)
+                out[k] += AutoEq.biquadDb("PK", 62.0, subGain, 0.80, f) +
+                    AutoEq.biquadDb("PK", 112.0, punchGain, 1.05, f)
             }
         }
 
@@ -476,17 +480,15 @@ object EnhancerDsp {
 
             for (k in out.indices) {
                 val f = Dsp.F_DP[k]
-                val subProtect = AutoEq.biquadDb("LSC", 38.0, -2.2, 0.75, f)
-                val h2Band = AutoEq.biquadDb("PK", 115.0, h2BoostDb, 1.20, f)
-                val h3Band = AutoEq.biquadDb("PK", 175.0, h3BoostDb, 1.35, f)
-                val h4Band = AutoEq.biquadDb("PK", 235.0, h4BoostDb, 1.55, f)
-                val highRoll = AutoEq.biquadDb("PK", 469.0, -0.8, 1.4, f)
-                out[k] += subProtect + h2Band + h3Band + h4Band + highRoll
+                val h2Band = AutoEq.biquadDb("PK", 115.0, h2BoostDb, 1.15, f)
+                val h3Band = AutoEq.biquadDb("PK", 175.0, h3BoostDb, 1.30, f)
+                val h4Band = AutoEq.biquadDb("PK", 235.0, h4BoostDb, 1.50, f)
+                out[k] += h2Band + h3Band + h4Band
             }
         }
 
         for (k in out.indices) {
-            out[k] = out[k].coerceIn(-6.0, 9.5)
+            out[k] = out[k].coerceIn(0.0, 9.5)
         }
         return out
     }
@@ -516,11 +518,10 @@ object EnhancerDsp {
         }
         for (k in out.indices) {
             val f = Dsp.F_DP[k]
-            val warmthStage = AutoEq.biquadDb("PK", 165.0, 1.35 * stageScale, 1.15, f)
-            val headShadowCrossfeed = AutoEq.biquadDb("PK", 850.0, -1.65 * stageScale, 1.35, f)
-            val pinnaWidth = AutoEq.biquadDb("PK", 3200.0, 2.75 * stageScale, 1.05, f)
-            val spatialAir = AutoEq.biquadDb("HSC", 7800.0, 2.40 * stageScale, 0.72, f)
-            out[k] = warmthStage + headShadowCrossfeed + pinnaWidth + spatialAir
+            val warmthStage = AutoEq.biquadDb("PK", 160.0, 1.40 * stageScale, 1.10, f)
+            val pinnaWidth = AutoEq.biquadDb("PK", 3200.0, 2.40 * stageScale, 1.05, f)
+            val spatialAir = AutoEq.biquadDb("HSC", 8000.0, 2.60 * stageScale, 0.72, f)
+            out[k] = warmthStage + pinnaWidth + spatialAir
         }
         return out
     }
@@ -537,32 +538,25 @@ object EnhancerDsp {
             StereoWideningMode.MIDDLE -> 0.78
             StereoWideningMode.FAR -> 1.00
         }
-        val profileSpatialStrength = when (config.profile) {
-            AudioProfile.EFFECT_3D -> 0.65
-            AudioProfile.MOVIE -> 0.45
-            AudioProfile.LIVE_MUSIC -> 0.50
-            AudioProfile.DYNAMIC -> 0.20
-            else -> 0.0
-        }
         val manualWidthStrength = ((midSideWidth - 1.0f).coerceIn(0f, 1f)).toDouble() * 0.65
-        val totalStrength = max(modeStrength, max(profileSpatialStrength, manualWidthStrength)).coerceIn(0.0, 1.0)
+        val totalStrength = max(modeStrength, manualWidthStrength).coerceIn(0.0, 1.0)
         if (totalStrength <= 1e-4) return deltaL to deltaR
 
-        val maxDichoticDb = 4.4 * totalStrength
+        val maxDichoticDb = 3.8 * totalStrength
         for (k in Dsp.F_DP.indices) {
             val f = Dsp.F_DP[k]
-            if (f < 200.0) {
+            if (f < 220.0) {
                 deltaL[k] = 0.0
                 deltaR[k] = 0.0
             } else {
-                val xoverWeight = ((ln(f / 200.0) / ln(400.0 / 200.0)).coerceIn(0.0, 1.0))
+                val xoverWeight = ((ln(f / 220.0) / ln(440.0 / 220.0)).coerceIn(0.0, 1.0))
                 val combWave = sin((k - 10) * 1.08 + 0.42)
-                val pinnaAsym = AutoEq.biquadDb("PK", 1950.0, 1.8 * totalStrength, 1.6, f) -
-                    AutoEq.biquadDb("PK", 3550.0, 1.8 * totalStrength, 1.6, f)
+                val pinnaAsym = AutoEq.biquadDb("PK", 1950.0, 1.6 * totalStrength, 1.5, f) -
+                    AutoEq.biquadDb("PK", 3550.0, 1.6 * totalStrength, 1.5, f)
                 val diff = (combWave * maxDichoticDb + pinnaAsym) * xoverWeight * AutoEq.taper(f)
-                val energyComp = 0.35 * abs(diff)
-                deltaL[k] = (diff + energyComp).coerceIn(-5.5, 6.0)
-                deltaR[k] = (-diff + energyComp).coerceIn(-5.5, 6.0)
+                val energyComp = 0.55 * abs(diff)
+                deltaL[k] = (diff + energyComp).coerceIn(-3.0, 6.0)
+                deltaR[k] = (-diff + energyComp).coerceIn(-3.0, 6.0)
             }
         }
         return deltaL to deltaR
@@ -598,15 +592,14 @@ object EnhancerDsp {
         val out = DoubleArray(Dsp.F_DP.size)
         val clamped = amount.coerceIn(0, 9)
         if (clamped == 0) return out
-        val gamma = reverbOverSubtractionGamma(clamped)
         val norm = (clamped / 9.0).coerceIn(0.0, 1.0)
         for (k in out.indices) {
             val f = Dsp.F_DP[k]
-            val muddyRoomCut = AutoEq.biquadDb("PK", 280.0, -2.4 * norm, 1.15, f)
-            val boxyDecayCut = AutoEq.biquadDb("PK", 520.0, -1.8 * norm, 1.30, f)
-            val directClarity = AutoEq.biquadDb("PK", 2150.0, 1.15 * (gamma / 3.65), 1.40, f)
-            val tailDampShelf = AutoEq.biquadDb("HSC", 7500.0, -1.25 * norm, 0.75, f)
-            out[k] = (muddyRoomCut + boxyDecayCut + directClarity + tailDampShelf).coerceIn(-5.5, 2.5)
+            val muddyRoomCut = AutoEq.biquadDb("PK", 280.0, -1.8 * norm, 1.25, f)
+            val boxyDecayCut = AutoEq.biquadDb("PK", 520.0, -1.2 * norm, 1.35, f)
+            val directPresence = AutoEq.biquadDb("PK", 1850.0, 2.0 * norm, 1.20, f)
+            val transientClarity = AutoEq.biquadDb("PK", 3400.0, 1.6 * norm, 1.30, f)
+            out[k] = (muddyRoomCut + boxyDecayCut + directPresence + transientClarity).coerceIn(-3.0, 3.5)
         }
         return out
     }
@@ -618,50 +611,49 @@ object EnhancerDsp {
             AudioProfile.DYNAMIC -> {
                 for (k in out.indices) {
                     val f = Dsp.F_DP[k]
-                    out[k] = AutoEq.biquadDb("LSC", 95.0, 3.2, 0.72, f) +
-                        AutoEq.biquadDb("PK", 420.0, -1.4, 1.25, f) +
-                        AutoEq.biquadDb("PK", 2800.0, 2.4, 1.15, f) +
-                        AutoEq.biquadDb("HSC", 8500.0, 2.8, 0.72, f)
+                    out[k] = AutoEq.biquadDb("LSC", 90.0, 3.5, 0.72, f) +
+                        AutoEq.biquadDb("PK", 125.0, 1.8, 1.10, f) +
+                        AutoEq.biquadDb("PK", 2800.0, 2.4, 1.10, f) +
+                        AutoEq.biquadDb("HSC", 8500.0, 3.0, 0.72, f)
                 }
             }
             AudioProfile.BALANCED -> {
                 for (k in out.indices) {
                     val f = Dsp.F_DP[k]
-                    out[k] = AutoEq.biquadDb("LSC", 105.0, 1.4, 0.70, f) +
-                        AutoEq.biquadDb("PK", 1600.0, 1.6, 1.10, f) +
-                        AutoEq.biquadDb("HSC", 10000.0, 1.0, 0.70, f)
+                    out[k] = AutoEq.biquadDb("LSC", 100.0, 1.8, 0.70, f) +
+                        AutoEq.biquadDb("PK", 1500.0, 1.6, 1.00, f) +
+                        AutoEq.biquadDb("HSC", 9500.0, 1.5, 0.70, f)
                 }
             }
             AudioProfile.EFFECT_3D -> {
                 for (k in out.indices) {
                     val f = Dsp.F_DP[k]
-                    out[k] = AutoEq.biquadDb("PK", 75.0, 2.6, 0.90, f) +
-                        AutoEq.biquadDb("PK", 320.0, -1.8, 1.30, f) +
-                        AutoEq.biquadDb("PK", 2200.0, -1.2, 1.50, f) +
-                        AutoEq.biquadDb("PK", 4800.0, 3.4, 1.20, f) +
-                        AutoEq.biquadDb("HSC", 10500.0, 3.8, 0.70, f)
+                    out[k] = AutoEq.biquadDb("LSC", 80.0, 3.0, 0.72, f) +
+                        AutoEq.biquadDb("PK", 180.0, 1.2, 1.15, f) +
+                        AutoEq.biquadDb("PK", 1800.0, 1.8, 1.15, f) +
+                        AutoEq.biquadDb("PK", 4500.0, 3.2, 1.15, f) +
+                        AutoEq.biquadDb("HSC", 9500.0, 3.4, 0.70, f)
                 }
             }
             AudioProfile.LIVE_MUSIC -> {
                 for (k in out.indices) {
                     val f = Dsp.F_DP[k]
                     out[k] = AutoEq.biquadDb("LSC", 85.0, 2.8, 0.75, f) +
-                        AutoEq.biquadDb("PK", 220.0, 1.5, 1.15, f) +
-                        AutoEq.biquadDb("PK", 1250.0, 2.2, 1.10, f) +
-                        AutoEq.biquadDb("PK", 3600.0, 2.6, 1.25, f) +
-                        AutoEq.biquadDb("HSC", 9500.0, 2.4, 0.72, f)
+                        AutoEq.biquadDb("PK", 220.0, 1.6, 1.10, f) +
+                        AutoEq.biquadDb("PK", 1250.0, 2.2, 1.05, f) +
+                        AutoEq.biquadDb("PK", 3500.0, 2.5, 1.20, f) +
+                        AutoEq.biquadDb("HSC", 9000.0, 2.4, 0.72, f)
                 }
             }
             AudioProfile.MOVIE -> {
                 for (k in out.indices) {
                     val f = Dsp.F_DP[k]
+                    val subCinema = AutoEq.biquadDb("LSC", 72.0, 3.6, 0.72, f)
+                    val lowPunch = AutoEq.biquadDb("PK", 115.0, 1.8, 1.05, f)
                     val speechBand = AutoEq.biquadDb("PK", 1850.0, MOVIE_DIALOGUE_BOOST_DB, 0.92, f)
-                    val articulationBand = AutoEq.biquadDb("PK", 3150.0, 2.15, 1.20, f)
-                    val hrtfShadowComp = AutoEq.biquadDb("PK", 850.0, 0.85, 1.10, f)
-                    val surroundAir = AutoEq.biquadDb("HSC", 7200.0, 1.65, 0.74, f)
-                    val deReverbLowMid = AutoEq.biquadDb("PK", 290.0, -1.35, 1.25, f)
-                    val subCinema = AutoEq.biquadDb("LSC", 72.0, 1.80, 0.72, f)
-                    out[k] = speechBand + articulationBand + hrtfShadowComp + surroundAir + deReverbLowMid + subCinema
+                    val articulationBand = AutoEq.biquadDb("PK", 3150.0, 2.2, 1.15, f)
+                    val surroundAir = AutoEq.biquadDb("HSC", 7800.0, 2.0, 0.72, f)
+                    out[k] = subCinema + lowPunch + speechBand + articulationBand + surroundAir
                 }
             }
         }

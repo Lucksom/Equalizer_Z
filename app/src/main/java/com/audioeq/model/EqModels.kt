@@ -98,32 +98,32 @@ enum class OutputRoute(
         id = "speaker",
         label = "Phone Speaker",
         shortBadge = "Speaker",
-        defaultSafeCutDb = -4.5f,
-        defaultLimiterCeilingDb = -1.5f,
-        defaultHighPassHz = 85f
+        defaultSafeCutDb = 0.0f,
+        defaultLimiterCeilingDb = -0.3f,
+        defaultHighPassHz = 0f
     ),
     HEADPHONES(
         id = "headphones",
         label = "Wired Headphones",
         shortBadge = "Wired HP",
-        defaultSafeCutDb = -3.0f,
-        defaultLimiterCeilingDb = -1.0f,
+        defaultSafeCutDb = 0.0f,
+        defaultLimiterCeilingDb = -0.3f,
         defaultHighPassHz = 0f
     ),
     BLUETOOTH(
         id = "bluetooth",
         label = "Bluetooth Audio",
         shortBadge = "Bluetooth",
-        defaultSafeCutDb = -3.5f,
-        defaultLimiterCeilingDb = -1.0f,
-        defaultHighPassHz = 20f
+        defaultSafeCutDb = 0.0f,
+        defaultLimiterCeilingDb = -0.3f,
+        defaultHighPassHz = 0f
     ),
     USB_DAC(
         id = "usb_dac",
         label = "USB DAC",
         shortBadge = "USB DAC",
-        defaultSafeCutDb = -2.0f,
-        defaultLimiterCeilingDb = -0.5f,
+        defaultSafeCutDb = 0.0f,
+        defaultLimiterCeilingDb = -0.3f,
         defaultHighPassHz = 0f
     );
 
@@ -176,7 +176,7 @@ data class EqPreset(
     val name: String,
     val gainsDb: List<Float>,
     val isCustom: Boolean = false,
-    val recommendedPreampDb: Float = -3.0f,
+    val recommendedPreampDb: Float = 0.0f,
     val recommendedHighPassHz: Float = 0f
 ) {
     val gains10Band: List<Float> get() = gainsDb
@@ -216,11 +216,11 @@ data class RouteMemoryProfile(
     val rightBandGainsDb: List<Float> = List(10) { 0f },
     val splitLREnabled: Boolean = false,
     val balanceDb: Float = 0f,
-    val preampDb: Float = route.defaultSafeCutDb,
-    val autoGainEnabled: Boolean = true,
+    val preampDb: Float = 0f,
+    val autoGainEnabled: Boolean = false,
     val limiterEnabled: Boolean = true,
-    val limiterCeilingDb: Float = route.defaultLimiterCeilingDb,
-    val subBassHighPassHz: Float = route.defaultHighPassHz,
+    val limiterCeilingDb: Float = -0.3f,
+    val subBassHighPassHz: Float = 0f,
     val iso226ContourEnabled: Boolean = false,
     val midSideWidth: Float = 1.0f,
     val vocalPresenceBoost: Float = 0.0f,
@@ -305,71 +305,71 @@ object EqConstants {
             id = "flat",
             name = "Flat",
             gainsDb = listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f),
-            recommendedPreampDb = -1.5f,
+            recommendedPreampDb = 0.0f,
             recommendedHighPassHz = 0f
         ),
         EqPreset(
             id = "classical",
             name = "Classical",
             gainsDb = listOf(4.5f, 3.2f, 2.0f, 0.5f, -1.0f, -1.0f, 0.5f, 2.0f, 3.2f, 4.0f),
-            recommendedPreampDb = -4.5f,
-            recommendedHighPassHz = 20f
+            recommendedPreampDb = 0.0f,
+            recommendedHighPassHz = 0f
         ),
         EqPreset(
             id = "jazz",
             name = "Jazz",
             gainsDb = listOf(3.5f, 2.5f, 1.0f, 1.5f, -1.5f, -1.5f, 0.0f, 1.5f, 2.5f, 3.5f),
-            recommendedPreampDb = -3.5f,
-            recommendedHighPassHz = 20f
+            recommendedPreampDb = 0.0f,
+            recommendedHighPassHz = 0f
         ),
         EqPreset(
             id = "rock",
             name = "Rock",
             gainsDb = listOf(4.8f, 3.5f, 1.8f, -1.0f, -2.0f, -0.5f, 2.0f, 3.2f, 4.0f, 4.2f),
-            recommendedPreampDb = -4.8f,
-            recommendedHighPassHz = 25f
+            recommendedPreampDb = 0.0f,
+            recommendedHighPassHz = 0f
         ),
         EqPreset(
             id = "pop",
             name = "Pop",
             gainsDb = listOf(-1.5f, 1.0f, 3.0f, 4.0f, 3.5f, 1.5f, -0.5f, 1.0f, 2.5f, 3.0f),
-            recommendedPreampDb = -4.0f,
-            recommendedHighPassHz = 30f
+            recommendedPreampDb = 0.0f,
+            recommendedHighPassHz = 0f
         ),
         EqPreset(
             id = "pure_voice",
             name = "Pure Voice",
             gainsDb = listOf(-4.0f, -2.5f, -1.0f, 1.5f, 3.5f, 4.0f, 3.0f, 1.5f, -1.0f, -2.5f),
-            recommendedPreampDb = -4.0f,
-            recommendedHighPassHz = 80f
+            recommendedPreampDb = 0.0f,
+            recommendedHighPassHz = 0f
         ),
         EqPreset(
             id = "power_bass",
             name = "Power Bass",
             gainsDb = listOf(6.0f, 5.0f, 3.5f, 1.5f, 0.0f, -0.5f, -1.0f, 0.0f, 1.0f, 1.5f),
-            recommendedPreampDb = -6.0f,
-            recommendedHighPassHz = 20f
+            recommendedPreampDb = 0.0f,
+            recommendedHighPassHz = 0f
         ),
         EqPreset(
             id = "balanced_deep",
             name = "Balanced Deep",
             gainsDb = listOf(3.8f, 3.0f, 1.5f, 0.0f, -0.5f, 0.5f, 1.5f, 2.2f, 2.8f, 2.5f),
-            recommendedPreampDb = -3.8f,
-            recommendedHighPassHz = 25f
+            recommendedPreampDb = 0.0f,
+            recommendedHighPassHz = 0f
         ),
         EqPreset(
             id = "vocal_clarity",
             name = "Vocal Clarity",
             gainsDb = listOf(-3.5f, -2.0f, 0.0f, 2.0f, 3.8f, 4.2f, 3.2f, 1.8f, 0.5f, -1.0f),
-            recommendedPreampDb = -4.2f,
-            recommendedHighPassHz = 80f
+            recommendedPreampDb = 0.0f,
+            recommendedHighPassHz = 0f
         ),
         EqPreset(
             id = "percussion",
             name = "Percussion",
             gainsDb = listOf(3.0f, 2.0f, -0.5f, -1.5f, 0.0f, 1.0f, 2.5f, 4.2f, 4.8f, 4.5f),
-            recommendedPreampDb = -4.8f,
-            recommendedHighPassHz = 30f
+            recommendedPreampDb = 0.0f,
+            recommendedHighPassHz = 0f
         )
     )
 

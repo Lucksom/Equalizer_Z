@@ -231,4 +231,32 @@ class AudioEqUnitTest {
         assertEquals(10, dlgR.size)
         assertTrue("1-4 kHz speech band should be boosted", dlgL[6] > 1.5f)
     }
+
+    @Test
+    fun verifyProfilesDecoupledFromStereoWideningAndNoVolumeSuppression() {
+        for (profile in listOf(AudioProfile.EFFECT_3D, AudioProfile.LIVE_MUSIC, AudioProfile.MOVIE, AudioProfile.DYNAMIC, AudioProfile.BALANCED)) {
+            assertEquals("Profile $profile must not force hardware virtualizer", 0, profile.virtualizerStrengthPermille)
+            val cfg = EnhancerConfig(
+                profile = profile,
+                stereoWideningMode = StereoWideningMode.NO_EFFECT
+            )
+            val (deltaL, deltaR) = com.audioeq.audio.EnhancerDsp.computeStereoWideningLRDelta31(cfg, 1.0f)
+            assertTrue("Profile $profile with NO_EFFECT widening must have zero L delta", deltaL.all { abs(it) < 1e-6 })
+            assertTrue("Profile $profile with NO_EFFECT widening must have zero R delta", deltaR.all { abs(it) < 1e-6 })
+
+            val curve31 = com.audioeq.audio.EnhancerDsp.computeCombinedEnhancer31(cfg)
+            assertTrue("Profile $profile must not cut any frequency band", curve31.all { it >= -0.01 })
+            assertTrue("Profile $profile must provide audible positive enhancement", curve31.any { it > 1.0 })
+        }
+
+        for (mode in listOf(StereoWideningMode.NEAR, StereoWideningMode.MIDDLE, StereoWideningMode.FAR)) {
+            val cfg = EnhancerConfig(
+                profile = AudioProfile.OFF,
+                stereoWideningMode = mode
+            )
+            val (deltaL, deltaR) = com.audioeq.audio.EnhancerDsp.computeStereoWideningLRDelta31(cfg, 1.0f)
+            assertTrue("Widening mode $mode must produce dichotic L/R differences", deltaL.indices.any { abs(deltaL[it] - deltaR[it]) > 1.0 })
+            assertTrue("Widening mode $mode must have positive average gain compensation", (deltaL.sum() + deltaR.sum()) > 0.0)
+        }
+    }
 }

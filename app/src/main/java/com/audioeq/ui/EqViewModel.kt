@@ -57,10 +57,10 @@ data class EqUiState(
     val effectiveGainsDb: List<Float> = emptyList(),
     val splitLREnabled: Boolean = false,
     val balanceDb: Float = 0f,
-    val preampDb: Float = -3f,
-    val autoGainEnabled: Boolean = true,
+    val preampDb: Float = 0f,
+    val autoGainEnabled: Boolean = false,
     val limiterEnabled: Boolean = true,
-    val limiterCeilingDb: Float = -1f,
+    val limiterCeilingDb: Float = -0.3f,
     val highPassHz: Float = 0f,
     val iso226Enabled: Boolean = false,
     val midSideWidth: Float = 1.0f,
@@ -359,13 +359,11 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         val effectiveGains = if (!p1.masterEnabled || p1.isAbCompare) {
             List(10) { 0f }
         } else {
-            val (curve, _) = EnhancerMath.computeCurveWithAutoHeadroom(
-                freqs = EqConstants.FREQ_10_BAND,
-                baseGains = baseWithTone10,
-                config = p1.enhancerConfig,
-                ceilingDb = 12.0f
-            )
-            curve
+            EqConstants.FREQ_10_BAND.indices.map { i ->
+                val fHz = EqConstants.FREQ_10_BAND[i].toDouble()
+                val enhOffset = EnhancerMath.computeTotalEnhancerOffsetDb(fHz, p1.enhancerConfig)
+                (baseWithTone10.getOrElse(i) { 0f } + enhOffset).coerceIn(-12.0f, 12.0f)
+            }
         }
         val computedCeilingDb = if (!p1.masterEnabled || p1.isAbCompare) {
             0.0f
@@ -718,19 +716,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setAudioProfile(profile: AudioProfile) {
         repository.updateEnhancerConfig { current ->
-            if (profile == AudioProfile.MOVIE) {
-                current.copy(
-                    profile = profile,
-                    reduceReverbAmount = EnhancerDsp.MOVIE_REVERB_SUPPRESSION_AMOUNT,
-                    stereoWideningMode = StereoWideningMode.MIDDLE,
-                    dialogueEnhancerEnabled = true,
-                    dialogueAmount = EnhancerDsp.MOVIE_DIALOGUE_AMOUNT,
-                    bassEnhancerEnabled = false,
-                    ieqPreset = IeqPreset.OFF
-                )
-            } else {
-                current.copy(profile = profile)
-            }
+            current.copy(profile = profile)
         }
     }
 

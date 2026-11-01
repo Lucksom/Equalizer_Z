@@ -21,7 +21,7 @@ class EqualizerDatabaseHelper(context: Context) :
 
     companion object {
         const val DATABASE_NAME = "audio_eq_studio.db"
-        const val DATABASE_VERSION = 6
+        const val DATABASE_VERSION = 7
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -165,6 +165,10 @@ class EqualizerDatabaseHelper(context: Context) :
             }
             db.execSQL("DELETE FROM presets WHERE preset_id IN ('bass_boost', 'cinema') AND is_custom = 0")
             createAndSeedSpecificationTables(db)
+        }
+        if (oldVersion < 7) {
+            db.execSQL("UPDATE route_profiles SET preamp_db = 0.0, auto_gain_enabled = 0, limiter_ceiling_db = -0.3, sub_bass_hp_hz = 0.0")
+            db.execSQL("UPDATE presets SET recommended_preamp_db = 0.0, recommended_hp_hz = 0.0 WHERE is_custom = 0")
         }
     }
 

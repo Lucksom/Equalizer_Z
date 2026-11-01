@@ -141,7 +141,7 @@ class DspReferenceMonitor(
 
             if (applyEq && curve31Db.size == 31) {
                 val (deltaL31, deltaR31) = EnhancerDsp.computeStereoWideningLRDelta31(enhancerConfig, 1.0f)
-                val preLin = 10.0.pow(preampDb.toDouble() / 20.0).toFloat()
+                val preLin = if (preampDb > 0f) 10.0.pow(preampDb.toDouble() / 20.0).toFloat() else 1.0f
                 val anchorIndices = intArrayOf(2, 5, 8, 11, 14, 17, 20, 23, 26, 29)
                 for (idx in anchorIndices) {
                     val fc = Dsp.F_DP[idx]
@@ -160,10 +160,7 @@ class DspReferenceMonitor(
                         }
                     }
                 }
-                if (enhancerConfig.stereoWideningMode != StereoWideningMode.NO_EFFECT ||
-                    enhancerConfig.profile == AudioProfile.MOVIE ||
-                    enhancerConfig.profile == AudioProfile.EFFECT_3D
-                ) {
+                if (enhancerConfig.stereoWideningMode != StereoWideningMode.NO_EFFECT) {
                     val msProc = MidSideProcessor(sampleRate).apply {
                         updateParameters(
                             width = 1.0f,
